@@ -1,0 +1,68 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+/* Keeps focused or scrolled-to elements clear of the sticky header. */
+html {
+  scroll-padding-top: 4rem;
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-200 antialiased;
+  color-scheme: dark;
+}
+
+:focus-visible {
+  @apply outline-2 outline-offset-2 outline-sky-500;
+}
+
+kbd {
+  @apply rounded border border-zinc-600 bg-zinc-800 px-1 font-mono text-[10px] text-zinc-400;
+}
+
+.markdown {
+  @apply text-[15px] leading-relaxed text-zinc-300;
+}
+.markdown > * + * {
+  @apply mt-3;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  @apply mt-5 font-semibold text-zinc-100;
+}
+.markdown h2 {
+  @apply text-lg;
+}
+.markdown ul {
+  @apply list-disc pl-6;
+}
+.markdown ol {
+  @apply list-decimal pl-6;
+}
+.markdown li + li {
+  @apply mt-1;
+}
+.markdown code {
+  @apply rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[13px] text-sky-300;
+}
+.markdown pre {
+  @apply overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-900 p-3;
+}
+.markdown pre code {
+  @apply bg-transparent p-0 text-zinc-200;
+}
+.markdown a {
+  @apply text-sky-400 underline;
+}
+.markdown strong {
+  @apply text-zinc-100;
+}

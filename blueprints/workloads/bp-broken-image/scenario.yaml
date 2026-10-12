@@ -1,0 +1,40 @@
+id: bp-broken-image
+title: Deployment stuck on a broken image
+domain: workloads
+difficulty: 1
+estimatedMinutes: 5
+points: 4
+tags: [deployment, image, rollout, imagepullbackoff]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+variables:
+  NS: { oneOf: [web, shop, team-a] }
+  DEPLOY: { oneOf: [frontend, landing, docs] }
+  BAD_TAG: { oneOf: [1.27-alpinee, 1.27-alpine-build42, "1.99"] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: ready
+    description: Deployment ${DEPLOY} has 2 ready replicas
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${DEPLOY} -o jsonpath='{.status.readyReplicas}'
+    expect: { equals: "2" }
+    weight: 2
+  - id: image
+    description: ${DEPLOY} runs nginx:1.27-alpine
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${DEPLOY} -o jsonpath='{.spec.template.spec.containers[0].image}'
+    expect: { equals: "nginx:1.27-alpine" }
+    weight: 1
+  - id: no-pull-errors
+    description: no Pod of ${DEPLOY} is failing to pull its image
+    type: kubectl
+    run: kubectl -n ${NS} get pods -l app=${DEPLOY} -o jsonpath='{range .items[*]}{.status.containerStatuses[0].state.waiting.reason}{"\n"}{end}' | grep -cE 'ErrImagePull|ImagePullBackOff' || true
+    expect: { equals: "0" }
+    weight: 1
+hints:
+  - "kubectl -n ${NS} get pods and describe one of the new Pods. What does the Events section say?"
+  - "kubectl -n ${NS} rollout history deployment ${DEPLOY} shows the previous revision."
+  - "kubectl -n ${NS} rollout undo deployment ${DEPLOY}, or kubectl set image to nginx:1.27-alpine."

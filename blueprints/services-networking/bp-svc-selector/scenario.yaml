@@ -1,0 +1,41 @@
+id: bp-svc-selector
+title: Service selects no Pods
+domain: services-networking
+difficulty: 1
+estimatedMinutes: 5
+points: 4
+tags: [service, selector, endpoints]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+variables:
+  NS: { oneOf: [shop, blog, wiki] }
+  APP: { oneOf: [catalog, search, comments] }
+  WRONG: { oneOf: ["-v2", "-server", "-app"] }
+  PORT: { oneOf: [80, 8080, 3000] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: reachable
+    description: Service ${APP} answers HTTP 200 on port ${PORT}
+    type: kubectl
+    run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${NS} get svc ${APP} -o jsonpath='{.spec.clusterIP}'):${PORT}/"
+    expect: { equals: "200" }
+    weight: 2
+  - id: endpoints
+    description: Service ${APP} has 2 ready endpoints
+    type: kubectl
+    run: kubectl -n ${NS} get endpointslices -l kubernetes.io/service-name=${APP} -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' | grep -c .
+    expect: { gte: 2 }
+    weight: 1
+  - id: deployment-unchanged
+    description: Deployment ${APP} Pod labels are unchanged
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.metadata.labels.app}'
+    expect: { equals: "${APP}" }
+    weight: 1
+hints:
+  - "kubectl -n ${NS} get endpointslices: does Service ${APP} have any addresses?"
+  - "Compare kubectl -n ${NS} describe svc ${APP} (Selector) with kubectl -n ${NS} get pods --show-labels."
+  - "kubectl -n ${NS} edit svc ${APP} and set the selector to app: ${APP}."

@@ -1,0 +1,9 @@
+name: Pod pending on a missing node label
+description: A Pod with a nodeSelector stays Pending because no node carries the label. The learner labels the right node without touching the Pod.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: POD
+    label: Pod names
+  - variable: DISK
+    label: Values of the disk label

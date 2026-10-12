@@ -1,0 +1,9 @@
+name: PVC asks for the wrong StorageClass
+description: A PersistentVolumeClaim requests a StorageClass that no PV offers, so it and its Pod stay Pending. The learner recreates the claim so it binds to the existing PV.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: CLAIM
+    label: Claim names
+  - variable: WRONG_CLASS
+    label: Wrong StorageClass names

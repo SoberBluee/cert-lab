@@ -1,0 +1,44 @@
+id: net-policy-backend
+title: Allow only the frontend to reach the backend
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 8
+points: 8
+tags: [networkpolicy, labels, ingress, calico]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+setup:
+  - node: controlplane
+    script: setup/create-app.sh
+checks:
+  - id: frontend-allowed
+    description: frontend can fetch http://backend
+    type: kubectl
+    run: kubectl -n app exec frontend -- wget -qO- -T 3 http://backend
+    expect: { contains: "nginx" }
+    weight: 3
+    retrySeconds: 30
+  - id: intruder-blocked
+    description: intruder cannot reach http://backend
+    type: kubectl
+    run: kubectl -n app exec intruder -- wget -qO- -T 3 http://backend >/dev/null 2>&1 && echo reachable || echo blocked
+    expect: { equals: "blocked" }
+    weight: 2
+    retrySeconds: 30
+  - id: deny-kept
+    description: NetworkPolicy default-deny-ingress still selects every Pod in app
+    type: kubectl
+    run: kubectl -n app get networkpolicy default-deny-ingress -o jsonpath='{.spec.podSelector}|{.spec.policyTypes}|{.spec.ingress}'
+    expect: { equals: '{}|["Ingress"]|' }
+    weight: 1
+  - id: policy-shape
+    description: NetworkPolicy allow-frontend selects role=backend and allows TCP port 80
+    type: kubectl
+    run: kubectl -n app get networkpolicy allow-frontend -o jsonpath='{.spec.podSelector.matchLabels.role}|{.spec.ingress[*].ports[*].port}'
+    expect: { equals: "backend|80" }
+    weight: 2
+hints:
+  - "kubectl -n app get networkpolicy and kubectl -n app get pods --show-labels. Which policy blocks everything today?"
+  - "NetworkPolicies are additive: leave the deny-all in place and add a second policy that allows the traffic you want."
+  - "allow-frontend: podSelector role=backend, policyTypes [Ingress], one ingress rule with from.podSelector role=frontend and ports TCP 80."

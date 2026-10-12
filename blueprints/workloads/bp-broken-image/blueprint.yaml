@@ -1,0 +1,10 @@
+name: Broken image rollout
+description: A Deployment is updated to an image tag that does not exist, so its new Pods never start. The learner rolls it back to a working image.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: DEPLOY
+    label: Deployment names
+  - variable: BAD_TAG
+    label: Broken image tags
+    help: Tags of nginx that do not exist, so the pull fails.

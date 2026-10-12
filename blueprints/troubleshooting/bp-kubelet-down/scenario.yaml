@@ -1,0 +1,39 @@
+id: bp-kubelet-down
+title: Worker node NotReady
+domain: troubleshooting
+difficulty: 1
+estimatedMinutes: 6
+points: 4
+tags: [kubelet, systemd, node, notready]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  NODE: { node: workers }
+setup:
+  - node: ${NODE}
+    script: setup/break.sh
+  - node: controlplane
+    script: setup/wait-notready.sh
+solution:
+  - node: ${NODE}
+    run: systemctl enable --now kubelet
+checks:
+  - id: node-ready
+    description: node ${NODE} is Ready
+    type: kubectl
+    run: kubectl get node ${NODE} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+    expect: { equals: "True" }
+    weight: 3
+  - id: kubelet-enabled
+    description: kubelet on ${NODE} starts at boot
+    type: ssh
+    node: ${NODE}
+    run: systemctl is-enabled kubelet
+    expect: { equals: "enabled" }
+    weight: 1
+hints:
+  - "kubectl get nodes. Which node is NotReady? ssh to it."
+  - "systemctl status kubelet on that node."
+  - "sudo systemctl enable --now kubelet makes it start now and after a reboot."

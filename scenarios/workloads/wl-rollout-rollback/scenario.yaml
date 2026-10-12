@@ -1,0 +1,45 @@
+id: wl-rollout-rollback
+title: Roll back a broken rollout
+domain: workloads
+difficulty: 1
+estimatedMinutes: 5
+points: 7
+tags: [deployment, rollout, rollback, imagepullbackoff]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+setup:
+  - node: controlplane
+    script: setup/bad-rollout.sh
+checks:
+  - id: ready-replicas
+    description: Deployment web has 3 up-to-date, ready replicas
+    type: kubectl
+    run: kubectl -n prod get deployment web -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+    expect: { equals: "3/3/3" }
+    weight: 3
+    retrySeconds: 120
+  - id: image
+    description: web runs nginx:1.27-alpine
+    type: kubectl
+    run: kubectl -n prod get deployment web -o jsonpath='{.spec.template.spec.containers[0].image}'
+    expect: { equals: "nginx:1.27-alpine" }
+    weight: 2
+  - id: same-deployment
+    description: web is the original Deployment (not deleted and recreated)
+    type: ssh
+    node: controlplane
+    run: '[ "$(kubectl -n prod get deployment web -o jsonpath={.metadata.uid})" = "$(cat /root/.cka/web-uid)" ] && echo same || echo recreated'
+    expect: { equals: "same" }
+    weight: 1
+  - id: no-pull-errors
+    description: no web Pod is failing to pull its image
+    type: kubectl
+    run: kubectl -n prod get pods -l app=web -o jsonpath='{range .items[*]}{.status.containerStatuses[0].state.waiting.reason}{"\n"}{end}' | grep -cE 'ErrImagePull|ImagePullBackOff' || true
+    expect: { equals: "0" }
+    weight: 1
+    retrySeconds: 120
+hints:
+  - "kubectl -n prod get pods and kubectl -n prod describe pod <new pod>: what does the kubelet fail to do?"
+  - "kubectl -n prod rollout history deployment web shows every revision."
+  - "kubectl -n prod rollout undo deployment web returns to the previous revision without recreating the Deployment."

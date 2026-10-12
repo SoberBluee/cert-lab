@@ -1,0 +1,3 @@
+name: Worker NotReady (kubelet down)
+description: The kubelet on a random worker is stopped and disabled. The learner finds the NotReady node, fixes the service and makes the fix survive a reboot.
+knobs: []

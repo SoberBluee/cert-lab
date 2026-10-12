@@ -1,0 +1,40 @@
+id: ts-static-pod-typo
+title: Pods stuck Pending after a control plane change
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 10
+points: 7
+tags: [static-pod, scheduler, control-plane, manifests]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+setup:
+  - node: controlplane
+    script: setup/break-scheduler.sh
+    timeoutSeconds: 240
+checks:
+  - id: scheduler-ready
+    description: the kube-scheduler static pod on controlplane is Ready
+    type: kubectl
+    run: kubectl -n kube-system get pod kube-scheduler-controlplane -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+    expect: { equals: "True" }
+    weight: 3
+    retrySeconds: 90
+  - id: web-running
+    description: both replicas of Deployment web are Ready
+    type: kubectl
+    run: kubectl get deployment web -o jsonpath='{.status.readyReplicas}'
+    expect: { equals: "2" }
+    weight: 3
+    retrySeconds: 120
+  - id: manifest-command
+    description: the scheduler manifest runs the kube-scheduler binary
+    type: file
+    node: controlplane
+    path: /etc/kubernetes/manifests/kube-scheduler.yaml
+    matches: '^\s*- kube-scheduler\s*$'
+    weight: 1
+hints:
+  - "Which control plane component assigns Pods to nodes? Is it healthy?"
+  - "kubectl -n kube-system get pods, then describe the failing pod. The component runs as a static pod."
+  - "Static pod manifests live in /etc/kubernetes/manifests on the control plane. Compare the command with the binary name."

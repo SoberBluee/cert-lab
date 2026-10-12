@@ -1,0 +1,44 @@
+id: wl-pending-nodeselector
+title: Pending Pods on a dedicated node
+domain: workloads
+difficulty: 2
+estimatedMinutes: 8
+points: 8
+tags: [scheduling, taints, tolerations, nodeSelector, labels]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+setup:
+  - node: controlplane
+    script: setup/create-workload.sh
+checks:
+  - id: ready-replicas
+    description: Deployment reports has 3 ready replicas
+    type: kubectl
+    run: kubectl -n analytics get deployment reports -o jsonpath='{.status.readyReplicas}'
+    expect: { equals: "3" }
+    weight: 3
+    retrySeconds: 120
+  - id: on-worker-2
+    description: every running reports Pod is on worker-2
+    type: kubectl
+    run: kubectl -n analytics get pods -l app=reports --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u
+    expect: { equals: "worker-2" }
+    weight: 3
+    retrySeconds: 120
+  - id: taint-kept
+    description: worker-2 still has the dedicated=analytics:NoSchedule taint
+    type: kubectl
+    run: kubectl get node worker-2 -o jsonpath='{.spec.taints[?(@.key=="dedicated")].value}:{.spec.taints[?(@.key=="dedicated")].effect}'
+    expect: { equals: "analytics:NoSchedule" }
+    weight: 1
+  - id: replicas-unchanged
+    description: Deployment reports still requests 3 replicas
+    type: kubectl
+    run: kubectl -n analytics get deployment reports -o jsonpath='{.spec.replicas}'
+    expect: { equals: "3" }
+    weight: 1
+hints:
+  - "kubectl -n analytics describe pod <pending pod>: the Events section says why the scheduler rejects every node."
+  - "There are two separate reasons. One is about node labels, the other is about node taints."
+  - "Give worker-2 the label the Pods select on, and give the Pod template a toleration that matches the taint."

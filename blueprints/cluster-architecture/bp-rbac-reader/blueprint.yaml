@@ -1,0 +1,9 @@
+name: Read-only ServiceAccount
+description: Create a ServiceAccount that can read one resource type in one namespace, and nothing more. Graded with kubectl auth can-i.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: SA
+    label: ServiceAccount names
+  - variable: RESOURCE
+    label: Resource types (plural, core API group)

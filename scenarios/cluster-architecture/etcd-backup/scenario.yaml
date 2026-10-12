@@ -1,0 +1,42 @@
+id: etcd-backup
+title: Back up etcd
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 6
+points: 7
+tags: [etcd, etcdctl, backup, snapshot, certificates]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 5
+setup:
+  - node: controlplane
+    script: setup/prepare.sh
+checks:
+  - id: file-exists
+    description: /opt/backups/etcd-snapshot.db exists on controlplane and is larger than 1 MB
+    type: ssh
+    node: controlplane
+    run: stat -c %s /opt/backups/etcd-snapshot.db 2>/dev/null || echo 0
+    expect: { gte: 1000000 }
+    weight: 2
+  - id: valid-snapshot
+    description: the file is a valid etcd snapshot (etcdctl snapshot status succeeds)
+    type: ssh
+    node: controlplane
+    run: ETCDCTL_API=3 etcdctl snapshot status /opt/backups/etcd-snapshot.db -w json | jq -r '.totalKey > 0'
+    expect: { equals: "true" }
+    weight: 3
+  - id: fresh-snapshot
+    description: the snapshot was taken after the lab started
+    type: ssh
+    node: controlplane
+    run: |
+      rev=$(ETCDCTL_API=3 etcdctl snapshot status /opt/backups/etcd-snapshot.db -w json | jq -r .revision)
+      [ -n "$rev" ] && [ "$rev" -ge "$(cat /root/.cka/etcd-rev)" ] && echo fresh || echo stale
+    expect: { equals: "fresh" }
+    weight: 2
+hints:
+  - "etcd runs as a static Pod. Its manifest in /etc/kubernetes/manifests shows the client URL and which certificate files it uses."
+  - "etcdctl needs --endpoints, --cacert, --cert and --key to talk to a TLS-secured etcd. Run it with sudo: the keys are readable by root only."
+  - "sudo ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/backups/etcd-snapshot.db"

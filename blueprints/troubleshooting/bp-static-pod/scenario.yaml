@@ -1,0 +1,39 @@
+id: bp-static-pod
+title: Static Pod never starts
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 7
+points: 4
+tags: [static-pod, kubelet, manifests, image]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  NODE: { node: workers }
+  NAME: { oneOf: [edge-proxy, log-shipper, metrics-agent] }
+  BAD_IMAGE: { oneOf: ["ngnix:1.27-alpine", "nginx:1.27-alpien", "nginx:alpine-1.27"] }
+setup:
+  - node: ${NODE}
+    script: setup/break.sh
+solution:
+  - node: ${NODE}
+    script: solution.sh
+checks:
+  - id: running
+    description: static Pod ${NAME}-${NODE} is Running
+    type: kubectl
+    run: kubectl -n kube-system get pod ${NAME}-${NODE} -o jsonpath='{.status.phase}'
+    expect: { equals: "Running" }
+    weight: 3
+  - id: still-static
+    description: the manifest is still in /etc/kubernetes/manifests on ${NODE}
+    type: file
+    node: ${NODE}
+    path: /etc/kubernetes/manifests/${NAME}.yaml
+    contains: "nginx:1.27-alpine"
+    weight: 1
+hints:
+  - "kubectl -n kube-system get pods -o wide | grep ${NAME}, then describe it."
+  - "Static Pods are defined by files on the node: staticPodPath in /var/lib/kubelet/config.yaml."
+  - "ssh ${NODE} and fix the image in /etc/kubernetes/manifests/${NAME}.yaml; the kubelet picks up the change by itself."

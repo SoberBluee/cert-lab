@@ -1,0 +1,79 @@
+id: wl-exam-sampler
+title: "Exam sampler: scale, expose, configure"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 12
+points: 10
+tags: [multi-task, scale, nodeport, configmap, env]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+variables:
+  NS: { oneOf: [exam, team-a, storefront, payments] }
+  DEPLOY: { oneOf: [web, frontend, portal, gateway] }
+  REPLICAS: { range: [3, 5] }
+  NODEPORT: { range: [30100, 30999] }
+  CM: { oneOf: [app-config, web-settings, runtime-config] }
+  MODE: { oneOf: [production, staging, canary] }
+setup:
+  - node: controlplane
+    script: setup/create-app.sh
+    timeoutSeconds: 300
+tasks:
+  - id: q1
+    title: Scale the Deployment
+    points: 3
+    checks:
+      - id: q1-spec-replicas
+        description: Deployment ${DEPLOY} is set to ${REPLICAS} replicas
+        type: kubectl
+        run: kubectl -n ${NS} get deployment ${DEPLOY} -o jsonpath='{.spec.replicas}'
+        expect: { equals: "${REPLICAS}" }
+        weight: 1
+      - id: q1-ready-replicas
+        description: ${REPLICAS} replicas of ${DEPLOY} are ready
+        type: kubectl
+        run: kubectl -n ${NS} get deployment ${DEPLOY} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${REPLICAS}" }
+        weight: 2
+    hints:
+      - "kubectl scale works on Deployments directly."
+      - "kubectl -n ${NS} scale deployment ${DEPLOY} --replicas=${REPLICAS}"
+  - id: q2
+    title: Expose it on a NodePort
+    points: 4
+    checks:
+      - id: q2-service-shape
+        description: Service ${DEPLOY}-np is a NodePort on ${NODEPORT}, port 80
+        type: kubectl
+        run: kubectl -n ${NS} get service ${DEPLOY}-np -o jsonpath='{.spec.type}/{.spec.ports[0].nodePort}/{.spec.ports[0].port}'
+        expect: { equals: "NodePort/${NODEPORT}/80" }
+        weight: 2
+      - id: q2-reachable
+        description: http://<controlplane IP>:${NODEPORT} returns HTTP 200
+        type: kubectl
+        run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl get node controlplane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}'):${NODEPORT}/"
+        expect: { equals: "200" }
+        weight: 2
+    hints:
+      - "kubectl expose creates a Service with the right selector; you can then set the nodePort."
+      - "kubectl -n ${NS} expose deployment ${DEPLOY} --name=${DEPLOY}-np --type=NodePort --port=80 $do > svc.yaml, add nodePort: ${NODEPORT}, apply."
+  - id: q3
+    title: Configure from a ConfigMap
+    points: 3
+    checks:
+      - id: q3-env-ref
+        description: container env APP_MODE comes from ConfigMap ${CM} key mode
+        type: kubectl
+        run: kubectl -n ${NS} get deployment ${DEPLOY} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef}' | jq -r '"\(.name)/\(.key)"'
+        expect: { equals: "${CM}/mode" }
+        weight: 1
+      - id: q3-env-value
+        description: running Pods of ${DEPLOY} see APP_MODE=${MODE}
+        type: kubectl
+        run: kubectl -n ${NS} exec deploy/${DEPLOY} -- printenv APP_MODE
+        expect: { equals: "${MODE}" }
+        weight: 2
+    hints:
+      - "Use env[].valueFrom.configMapKeyRef in the Pod template, not envFrom (the variable name must be APP_MODE)."
+      - "kubectl -n ${NS} edit deployment ${DEPLOY}, then add under the container: env: [{name: APP_MODE, valueFrom: {configMapKeyRef: {name: ${CM}, key: mode}}}]"

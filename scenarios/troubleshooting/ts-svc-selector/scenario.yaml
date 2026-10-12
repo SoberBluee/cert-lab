@@ -1,0 +1,47 @@
+id: ts-svc-selector
+title: Service has no working endpoints
+domain: troubleshooting
+difficulty: 1
+estimatedMinutes: 6
+points: 7
+tags: [service, endpoints, selector, labels]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+variables:
+  NS: { oneOf: [shop, store, checkout, catalog] }
+  APP: { oneOf: [api, orders, payments, inventory] }
+  PORT: { oneOf: [80, 8000, 8888, 9000] }
+setup:
+  - node: controlplane
+    script: setup/create-app.sh
+    timeoutSeconds: 300
+checks:
+  - id: reachable
+    description: http://<clusterIP of ${APP}-svc>:${PORT} returns HTTP 200
+    type: kubectl
+    run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${NS} get svc ${APP}-svc -o jsonpath='{.spec.clusterIP}'):${PORT}/"
+    expect: { equals: "200" }
+    weight: 3
+  - id: endpoints
+    description: ${APP}-svc has 2 ready endpoints
+    type: kubectl
+    run: kubectl -n ${NS} get endpointslices -l kubernetes.io/service-name=${APP}-svc -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' | grep -c .
+    expect: { gte: 2 }
+    weight: 2
+  - id: service-port
+    description: ${APP}-svc still listens on port ${PORT}
+    type: kubectl
+    run: kubectl -n ${NS} get svc ${APP}-svc -o jsonpath='{.spec.ports[0].port}'
+    expect: { equals: "${PORT}" }
+    weight: 1
+  - id: deployment-labels
+    description: the Pod template labels of Deployment ${APP} are unchanged
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.metadata.labels.app}/{.spec.template.metadata.labels.tier}'
+    expect: { equals: "${APP}/backend" }
+    weight: 1
+hints:
+  - "Compare kubectl -n ${NS} get endpointslices (or endpoints) with the number of running Pods."
+  - "kubectl -n ${NS} describe svc ${APP}-svc and kubectl -n ${NS} get pods --show-labels. Does the selector match?"
+  - "Once endpoints appear, check which port the containers actually listen on versus the Service targetPort."

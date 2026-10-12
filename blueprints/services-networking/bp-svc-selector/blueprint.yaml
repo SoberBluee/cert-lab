@@ -1,0 +1,10 @@
+name: Service selector mismatch
+description: A Service selects a label the Pods do not have, so it has no endpoints. The learner fixes the Service without touching the Deployment.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: APP
+    label: App names
+  - variable: WRONG
+    label: Wrong selector suffixes
+    help: Appended to the app name in the broken selector, e.g. "-v2".

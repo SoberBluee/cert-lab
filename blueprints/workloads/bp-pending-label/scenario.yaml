@@ -1,0 +1,41 @@
+id: bp-pending-label
+title: Pod pending on a node label
+domain: workloads
+difficulty: 1
+estimatedMinutes: 5
+points: 4
+tags: [scheduling, nodeselector, labels, pending]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+variables:
+  NS: { oneOf: [batch, analytics, reports] }
+  POD: { oneOf: [indexer, cruncher, exporter] }
+  DISK: { oneOf: [ssd, nvme, fast] }
+  NODE: { node: workers }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: running
+    description: Pod ${POD} is Running
+    type: kubectl
+    run: kubectl -n ${NS} get pod ${POD} -o jsonpath='{.status.phase}'
+    expect: { equals: "Running" }
+    weight: 2
+  - id: on-node
+    description: ${POD} runs on ${NODE}
+    type: kubectl
+    run: kubectl -n ${NS} get pod ${POD} -o jsonpath='{.spec.nodeName}'
+    expect: { equals: "${NODE}" }
+    weight: 1
+  - id: selector-kept
+    description: the Pod still selects disk=${DISK}
+    type: kubectl
+    run: kubectl -n ${NS} get pod ${POD} -o jsonpath='{.spec.nodeSelector.disk}'
+    expect: { equals: "${DISK}" }
+    weight: 1
+hints:
+  - "kubectl -n ${NS} describe pod ${POD}: read the scheduler's message under Events."
+  - "kubectl get nodes --show-labels. Which node is supposed to have disk=${DISK}?"
+  - "kubectl label node ${NODE} disk=${DISK}"

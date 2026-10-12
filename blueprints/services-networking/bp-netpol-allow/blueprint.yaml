@@ -1,0 +1,9 @@
+name: NetworkPolicy allow-list
+description: A default-deny policy blocks all ingress. The learner adds a policy that lets only the client Pods reach the backend on its port.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: BACKEND
+    label: Backend roles
+  - variable: CLIENT
+    label: Client roles

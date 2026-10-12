@@ -1,0 +1,45 @@
+id: ts-kubelet-stopped
+title: Worker node NotReady
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 8
+points: 7
+tags: [kubelet, node, systemd]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+setup:
+  - node: worker-1
+    script: setup/break-kubelet.sh
+  - node: controlplane
+    script: setup/wait-notready.sh
+    timeoutSeconds: 240
+solution:
+  - node: worker-1
+    script: solution.sh
+checks:
+  - id: node-ready
+    description: worker-1 is Ready
+    type: kubectl
+    run: kubectl get node worker-1 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+    expect: { equals: "True" }
+    weight: 4
+    retrySeconds: 60
+  - id: kubelet-active
+    description: kubelet is running on worker-1
+    type: ssh
+    node: worker-1
+    run: systemctl is-active kubelet
+    expect: { equals: "active" }
+    weight: 1
+  - id: kubelet-enabled
+    description: kubelet is enabled so it survives a reboot
+    type: ssh
+    node: worker-1
+    run: systemctl is-enabled kubelet
+    expect: { equals: "enabled" }
+    weight: 2
+hints:
+  - "Which component reports node status to the API server?"
+  - "SSH to worker-1 and check the service status and logs: systemctl status kubelet, journalctl -u kubelet."
+  - "Look at what changed in the kubelet's systemd unit drop-ins (systemctl cat kubelet), then daemon-reload."

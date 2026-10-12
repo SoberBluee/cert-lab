@@ -1,0 +1,47 @@
+id: ts-coredns-crash
+title: Cluster DNS is down
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 10
+points: 8
+tags: [coredns, dns, configmap, crashloopbackoff, kube-system]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+setup:
+  - node: controlplane
+    script: setup/break-coredns.sh
+    timeoutSeconds: 400
+checks:
+  - id: dns-resolves
+    description: Pod dnsutils can resolve kubernetes.default.svc.cluster.local
+    type: kubectl
+    run: kubectl exec dnsutils -- nslookup -timeout=3 kubernetes.default.svc.cluster.local >/dev/null 2>&1 && echo ok || echo failed
+    expect: { equals: "ok" }
+    weight: 4
+    retrySeconds: 90
+  - id: coredns-ready
+    description: both CoreDNS Pods are Ready
+    type: kubectl
+    run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+    expect: { equals: "2" }
+    weight: 2
+    retrySeconds: 90
+  - id: corefile-intact
+    description: the Corefile still serves cluster.local and forwards other names upstream
+    type: kubectl
+    run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}'
+    expect:
+      matches: '^\s*kubernetes cluster\.local'
+      contains: "forward . /etc/resolv.conf"
+    weight: 1
+  - id: replicas
+    description: Deployment coredns still requests 2 replicas
+    type: kubectl
+    run: kubectl -n kube-system get deployment coredns -o jsonpath='{.spec.replicas}'
+    expect: { equals: "2" }
+    weight: 1
+hints:
+  - "kubectl -n kube-system get pods -l k8s-app=kube-dns, then read the logs of one of the CoreDNS Pods."
+  - "CoreDNS reads its configuration (the Corefile) from a ConfigMap in kube-system. The log names the line it cannot parse."
+  - "Fix the typo with kubectl -n kube-system edit configmap coredns, then restart the Pods: kubectl -n kube-system rollout restart deployment coredns."

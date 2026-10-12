@@ -1,0 +1,42 @@
+id: bp-netpol-allow
+title: Allow one client through a default-deny policy
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 8
+points: 5
+tags: [networkpolicy, ingress, labels]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  NS: { oneOf: [app, payments, internal] }
+  BACKEND: { oneOf: [api, ledger, inventory] }
+  CLIENT: { oneOf: [web, checkout, worker] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 400
+checks:
+  - id: client-allowed
+    description: ${CLIENT} can fetch http://${BACKEND}
+    type: kubectl
+    run: kubectl -n ${NS} exec ${CLIENT} -- wget -qO- -T 3 http://${BACKEND}
+    expect: { contains: "nginx" }
+    weight: 2
+  - id: others-blocked
+    description: other Pods still cannot reach ${BACKEND}
+    type: kubectl
+    run: kubectl -n ${NS} exec intruder -- wget -qO- -T 3 http://${BACKEND} >/dev/null 2>&1 && echo reachable || echo blocked
+    expect: { equals: "blocked" }
+    weight: 2
+  - id: deny-kept
+    description: NetworkPolicy default-deny-ingress still exists
+    type: kubectl
+    run: kubectl -n ${NS} get networkpolicy default-deny-ingress -o jsonpath='{.metadata.name}'
+    expect: { equals: "default-deny-ingress" }
+    weight: 1
+hints:
+  - "NetworkPolicies are additive: keep the deny policy and add one that allows the traffic you want."
+  - "Select the backend with podSelector role=${BACKEND} and allow from podSelector role=${CLIENT}."
+  - "ingress: [{from: [{podSelector: {matchLabels: {role: ${CLIENT}}}}], ports: [{protocol: TCP, port: 80}]}]"

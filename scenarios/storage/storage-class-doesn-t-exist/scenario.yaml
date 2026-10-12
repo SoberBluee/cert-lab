@@ -1,0 +1,43 @@
+id: storage-class-doesn-t-exist
+title: Storage class doesn't exist
+domain: storage
+difficulty: 1 # 1-3
+estimatedMinutes: 8
+points: 4 # should equal the sum of check weights
+tags: []
+base: cluster # bare | cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+# Values rolled at every start. Use them as ${NS} in YAML and markdown, and as $NS in scripts.
+variables:
+  NS: { oneOf: [ storage-lab ] }
+  # PORT: { range: [30000, 32767] }
+  # NODE: { node: workers }
+  # SUFFIX: { random: 4 }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+# Optional: how "cka verify" applies the fix. Defaults to solution.sh on controlplane.
+# solution:
+#   - node: worker-1
+#     script: solution.sh
+# For several exam questions in one lab, replace checks/hints with:
+# tasks:
+#   - id: q1
+#     title: First question
+#     points: 4
+#     checks: [...]
+#     hints: [...]
+# and write the question text in tasks/q1.md.
+checks:
+  - id: example
+    description: TODO what must be true when the task is solved
+    type: kubectl
+    run: kubectl get ns ${NS} -o jsonpath='{.status.phase}'
+    expect: { equals: "Active" }
+    weight: 4
+hints:
+  - "TODO first nudge"
+  - "TODO more specific"
+  - "TODO almost the answer"
+draft: true

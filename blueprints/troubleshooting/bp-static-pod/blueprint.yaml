@@ -1,0 +1,8 @@
+name: Broken static Pod
+description: A static Pod on a random worker never starts because of a typo in its image. The learner finds the manifest in the kubelet's staticPodPath and fixes it on the node.
+knobs:
+  - variable: NAME
+    label: Static Pod names
+  - variable: BAD_IMAGE
+    label: Misspelled images
+    help: Image references that cannot be pulled; the fix is nginx:1.27-alpine.

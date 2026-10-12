@@ -1,0 +1,6 @@
+#cloud-config
+# Minimal first-boot config. Everything Kubernetes-related lives in node-prep.sh so it can be
+# re-run and debugged with `multipass exec`.
+package_update: false
+preserve_hostname: true
+timezone: UTC

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Thin wrapper so the CLI can be run as ./cka <command> from anywhere.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node --no-warnings=ExperimentalWarning --import "file://$ROOT/node_modules/tsx/dist/loader.mjs" \
+  "$ROOT/apps/cli/src/index.ts" "$@"

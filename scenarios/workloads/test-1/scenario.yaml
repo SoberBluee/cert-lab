@@ -1,0 +1,173 @@
+id: test-1
+title: Test 1
+domain: workloads
+difficulty: 2
+estimatedMinutes: 25
+points: 23
+tags: [ deployment, probes, strategy, pod, security, command, label, troubleshooting, pods ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ web, shop, team-a ] }
+  Q1_NAME: { oneOf: [ frontend, api, catalog ] }
+  Q1_PROBES_PERIOD: { oneOf: [ 5, 10, 15 ] }
+  Q1_STRATEGY_SURGE: { oneOf: [ "1", "2", 50% ] }
+  Q2_NS: { oneOf: [ apps, jobs, sandbox ] }
+  Q2_NAME: { oneOf: [ worker, logger, toolbox ] }
+  Q2_SEC_USER: { oneOf: [ 1000, 2000, 3000 ] }
+  Q2_LABEL_KEY: { oneOf: [ tier, team, env ] }
+  Q2_LABEL_VALUE: { oneOf: [ backend, blue, prod ] }
+  Q3_NS: { oneOf: [ retail, media, portal ] }
+  Q3_APP: { oneOf: [ storefront, ledger, checkout ] }
+  Q3_FAULT: { oneOf: [ oom-killed, image-pull, bad-command, configmap-key, liveness-port, readiness-path, requests-too-large, node-selector ], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/q1.sh
+  - node: controlplane
+    script: setup/q2.sh
+  - node: controlplane
+    script: setup/q3.sh
+    timeoutSeconds: 400
+tasks:
+  - id: q1
+    title: Deployment ${Q1_NAME}
+    points: 7
+    checks:
+      - id: q1-ready
+        description: Deployment ${Q1_NAME} has 3 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "3" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-image
+        description: ${Q1_NAME} runs nginx:1.26-alpine
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment/${Q1_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: nginx:1.26-alpine }
+        weight: 1
+      - id: q1-probes-readiness
+        description: "readiness probe: HTTP GET / on port 80 every ${Q1_PROBES_PERIOD}s"
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment/${Q1_NAME} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}/{.spec.template.spec.containers[0].readinessProbe.httpGet.port}/{.spec.template.spec.containers[0].readinessProbe.periodSeconds}'
+        expect: { equals: "//80/${Q1_PROBES_PERIOD}" }
+        weight: 1
+      - id: q1-probes-liveness
+        description: "liveness probe: TCP port 80 every ${Q1_PROBES_PERIOD}s"
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment/${Q1_NAME} -o jsonpath='{.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}/{.spec.template.spec.containers[0].livenessProbe.periodSeconds}'
+        expect: { equals: "80/${Q1_PROBES_PERIOD}" }
+        weight: 1
+      - id: q1-strategy
+        description: ${Q1_NAME} rolls out with maxSurge ${Q1_STRATEGY_SURGE} and maxUnavailable 0
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_NAME} -o jsonpath='{.spec.strategy.type}/{.spec.strategy.rollingUpdate.maxSurge}/{.spec.strategy.rollingUpdate.maxUnavailable}'
+        expect: { equals: "RollingUpdate/${Q1_STRATEGY_SURGE}/0" }
+        weight: 2
+    hints:
+      - kubectl -n ${Q1_NS} create deployment ${Q1_NAME} --image=nginx:1.26-alpine --replicas=3 --dry-run=client -o yaml gives you a manifest to start from.
+      - "readinessProbe: {httpGet: {path: /, port: 80}, periodSeconds: N} and livenessProbe: {tcpSocket: {port: 80}, periodSeconds: N}"
+      - "kubectl -n ${Q1_NS} edit deployment ${Q1_NAME}: spec.strategy.rollingUpdate."
+  - id: q2
+    title: Pod ${Q2_NAME}
+    points: 8
+    checks:
+      - id: q2-running
+        description: Pod ${Q2_NAME} is Running and ready
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod ${Q2_NAME} -o jsonpath='{.status.phase}/{.status.conditions[?(@.type=="Ready")].status}'
+        expect: { equals: Running/True }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-image
+        description: main runs busybox:1.37
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod/${Q2_NAME} -o jsonpath='{.spec.containers[0].name}/{.spec.containers[0].image}'
+        expect: { equals: main/busybox:1.37 }
+        weight: 1
+      - id: q2-sec-user
+        description: the container runs as uid ${Q2_SEC_USER}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec pod/${Q2_NAME} -- id -u
+        expect: { equals: "${Q2_SEC_USER}" }
+        weight: 1
+        retrySeconds: 20
+      - id: q2-sec-readonly
+        description: root filesystem is read-only and escalation is off
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod/${Q2_NAME} -o jsonpath='{.spec.containers[0].securityContext.readOnlyRootFilesystem}/{.spec.containers[0].securityContext.allowPrivilegeEscalation}'
+        expect: { equals: true/false }
+        weight: 1
+      - id: q2-cmd-output
+        weight: 2
+        retrySeconds: 30
+        description: /data/out.log holds the Pod's hostname
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec pod/${Q2_NAME} -- cat /data/out.log
+        expect: { equals: "${Q2_NAME}" }
+      - id: q2-label
+        description: ${Q2_NAME} has the label ${Q2_LABEL_KEY}=${Q2_LABEL_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod ${Q2_NAME} -o jsonpath='{.metadata.labels.${Q2_LABEL_KEY}}'
+        expect: { equals: "${Q2_LABEL_VALUE}" }
+        weight: 1
+    hints:
+      - kubectl -n ${Q2_NS} run ${Q2_NAME} --image=busybox:1.37 --dry-run=client -o yaml -- sleep 1d gives you a manifest to start from.
+      - "securityContext on the container: runAsUser, readOnlyRootFilesystem, allowPrivilegeEscalation."
+      - "command: [\"sh\", \"-c\", \"...\"] replaces the image's entrypoint. Try the loop with kubectl exec first."
+      - kubectl label --help
+  - id: q3
+    title: Unhealthy Deployment ${Q3_APP}
+    points: 8
+    checks:
+      - id: q3-ready
+        description: ${Q3_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q3-stable
+        description: ${Q3_APP}'s Pods do not restart over 20 seconds
+        type: kubectl
+        run: r() { kubectl -n ${Q3_NS} get pods -l app=${Q3_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 20; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 1
+        retrySeconds: 60
+      - id: q3-serves
+        description: ${Q3_APP} serves HTTP on port 80
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec deployment/${Q3_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: nginx }
+        weight: 1
+      - id: q3-spec-resources
+        description: image, requests and limits match the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        weight: 1
+      - id: q3-spec-probes
+        description: probes match the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
+        expect: { equals: / 80 80 }
+        weight: 1
+      - id: q3-spec-config
+        description: APP_MODE comes from key mode of ${Q3_APP}-config, set to production
+        type: kubectl
+        run: echo "$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q3_NS} get configmap ${Q3_APP}-config -o jsonpath='{.data.mode}')"
+        expect: { equals: "${Q3_APP}-config mode production" }
+        weight: 1
+      - id: q3-same-deployment
+        description: ${Q3_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q3.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q3_NS} get pods -l app=${Q3_APP} -o wide: what state are the Pods in, and do they restart?"
+      - "kubectl -n ${Q3_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
+      - kubectl -n ${Q3_NS} logs <pod> --previous shows why a crashed container exited.
+      - Compare kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o yaml (and the ConfigMap) against the spec, line by line.

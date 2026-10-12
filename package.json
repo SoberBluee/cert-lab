@@ -1,0 +1,30 @@
+{
+  "name": "cka-lab",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "drivers/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch --clear-screen=false apps/api/src/server.ts",
+    "dev:web": "npm --workspace @cka/web run dev",
+    "build": "npm --workspace @cka/web run build",
+    "start": "npm run build && node --import tsx apps/api/src/server.ts",
+    "api": "node --import tsx apps/api/src/server.ts",
+    "cka": "./cka",
+    "typecheck": "tsc -p tsconfig.json && npm --workspace @cka/web run typecheck",
+    "test": "node --import tsx --test 'packages/*/src/**/*.test.ts'"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.2.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

@@ -1,0 +1,11 @@
+# Versions used by tools/build-base-images. Keep keys flat: build.sh parses this with awk.
+# A two-part version (e.g. "1.36") resolves to the latest patch release at build time.
+kubernetesVersion: "1.37.1"
+kubernetesPreviousVersion: "1.36"
+calicoVersion: "v3.33.0"
+ubuntuRelease: "24.04"
+# Must not overlap the Multipass network on macOS (192.168.64.0/24).
+podCidr: "10.244.0.0/16"
+nodeCpus: "2"
+nodeMemory: "2G"
+nodeDisk: "20G"

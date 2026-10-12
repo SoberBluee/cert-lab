@@ -1,0 +1,15 @@
+{
+  "name": "@cka/schema",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./constants": "./src/constants.ts",
+    "./vars": "./src/vars.ts"
+  },
+  "dependencies": {
+    "zod": "^4.1.0"
+  }
+}

@@ -1,0 +1,64 @@
+id: rbac-sa-role
+title: ServiceAccount with a namespaced Role
+domain: cluster-architecture
+difficulty: 1
+estimatedMinutes: 6
+points: 8
+tags: [rbac, serviceaccount, role, rolebinding, auth-can-i]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 10
+variables:
+  NS: { oneOf: [ci, build, release, delivery, pipeline] }
+  SA: { oneOf: [deployer, shipper, releaser, pusher, rollout-bot] }
+setup:
+  - node: controlplane
+    run: kubectl create namespace ${NS}
+checks:
+  - id: sa-exists
+    description: ServiceAccount ${SA} exists in namespace ${NS}
+    type: kubectl
+    run: kubectl -n ${NS} get serviceaccount ${SA} -o jsonpath='{.metadata.name}'
+    expect: { equals: "${SA}" }
+    weight: 1
+  - id: can-create-deployments
+    description: ${SA} can create Deployments in ${NS}
+    type: kubectl
+    run: kubectl auth can-i create deployments.apps -n ${NS} --as=system:serviceaccount:${NS}:${SA}
+    expect: { equals: "yes" }
+    weight: 2
+  - id: can-update-delete-deployments
+    description: ${SA} can update and delete Deployments in ${NS}
+    type: kubectl
+    run: echo "$(kubectl auth can-i update deployments.apps -n ${NS} --as=system:serviceaccount:${NS}:${SA}) $(kubectl auth can-i delete deployments.apps -n ${NS} --as=system:serviceaccount:${NS}:${SA})"
+    expect: { equals: "yes yes" }
+    weight: 1
+  - id: can-list-pods
+    description: ${SA} can list Pods in ${NS}
+    type: kubectl
+    run: kubectl auth can-i list pods -n ${NS} --as=system:serviceaccount:${NS}:${SA}
+    expect: { equals: "yes" }
+    weight: 1
+  - id: cannot-delete-pods
+    description: ${SA} cannot delete Pods
+    type: kubectl
+    run: kubectl auth can-i delete pods -n ${NS} --as=system:serviceaccount:${NS}:${SA}
+    expect: { equals: "no" }
+    weight: 1
+  - id: namespaced-only
+    description: ${SA} has no permissions outside namespace ${NS}
+    type: kubectl
+    run: kubectl auth can-i create deployments.apps -n default --as=system:serviceaccount:${NS}:${SA}
+    expect: { equals: "no" }
+    weight: 1
+  - id: binding
+    description: RoleBinding ${SA}-binding binds Role ${SA}-role
+    type: kubectl
+    run: kubectl -n ${NS} get rolebinding ${SA}-binding -o jsonpath='{.roleRef.kind}/{.roleRef.name}'
+    expect: { equals: "Role/${SA}-role" }
+    weight: 1
+hints:
+  - "You need three objects: a ServiceAccount, a Role and a RoleBinding, all in namespace ${NS}."
+  - "kubectl create role accepts only one set of verbs. Different verbs for different resources need two rules in YAML (use $do to generate a starting point)."
+  - "Check your work with kubectl auth can-i <verb> <resource> -n ${NS} --as=system:serviceaccount:${NS}:${SA}"

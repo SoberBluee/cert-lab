@@ -1,0 +1,46 @@
+id: st-pvc-pending
+title: PersistentVolumeClaim stuck Pending
+domain: storage
+difficulty: 2
+estimatedMinutes: 8
+points: 8
+tags: [pv, pvc, storageclass, accessmodes, hostpath]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+setup:
+  - node: worker-1
+    script: setup/seed-data.sh
+  - node: controlplane
+    script: setup/create-claim.sh
+checks:
+  - id: pvc-bound
+    description: PVC db-data is Bound to PV data-pv
+    type: kubectl
+    run: kubectl -n data get pvc db-data -o jsonpath='{.status.phase}/{.spec.volumeName}'
+    expect: { equals: "Bound/data-pv" }
+    weight: 3
+    retrySeconds: 90
+  - id: pod-sees-data
+    description: Pod db is running and reads the existing data from the PV at /data
+    type: kubectl
+    run: kubectl -n data exec db -- cat /data/seed.txt
+    expect: { equals: "cka-storage-ok" }
+    weight: 3
+    retrySeconds: 90
+  - id: pv-unchanged
+    description: PV data-pv still has 1Gi, class manual and path /srv/data
+    type: kubectl
+    run: kubectl get pv data-pv -o jsonpath='{.spec.capacity.storage}|{.spec.storageClassName}|{.spec.hostPath.path}'
+    expect: { equals: "1Gi|manual|/srv/data" }
+    weight: 1
+  - id: reclaim-policy
+    description: PV data-pv keeps the Retain reclaim policy
+    type: kubectl
+    run: kubectl get pv data-pv -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'
+    expect: { equals: "Retain" }
+    weight: 1
+hints:
+  - "kubectl -n data describe pvc db-data, then compare it with kubectl get pv data-pv -o yaml."
+  - "A claim only binds to a volume whose storageClassName, access modes and capacity all satisfy it. Most fields of a PVC cannot be edited."
+  - "Recreate the PVC with storageClassName manual, ReadWriteOnce and at most 1Gi. Pods cannot change volumes in place: delete db and apply /opt/cka/db-pod.yaml again if it does not start."

@@ -1,0 +1,34 @@
+id: bp-pvc-class
+title: PVC Pending on a StorageClass mismatch
+domain: storage
+difficulty: 2
+estimatedMinutes: 8
+points: 5
+tags: [pvc, pv, storageclass, pending]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+variables:
+  NS: { oneOf: [data, db, cache] }
+  CLAIM: { oneOf: [pgdata, uploads, reports] }
+  WRONG_CLASS: { oneOf: [fast, premium, ssd] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: bound
+    description: PVC ${CLAIM} is Bound to PV ${CLAIM}-pv
+    type: kubectl
+    run: kubectl -n ${NS} get pvc ${CLAIM} -o jsonpath='{.status.phase}/{.spec.volumeName}'
+    expect: { equals: "Bound/${CLAIM}-pv" }
+    weight: 3
+  - id: pod-running
+    description: Pod ${CLAIM}-app is Running with the claim mounted
+    type: kubectl
+    run: kubectl -n ${NS} get pod ${CLAIM}-app -o jsonpath='{.status.phase}/{.spec.volumes[0].persistentVolumeClaim.claimName}'
+    expect: { equals: "Running/${CLAIM}" }
+    weight: 2
+hints:
+  - "kubectl -n ${NS} describe pvc ${CLAIM}, then compare with kubectl get pv ${CLAIM}-pv."
+  - "Most fields of a bound or pending PVC cannot be edited. Save it with -o yaml, delete it, fix storageClassName and recreate it."
+  - "The Pod manifest is in /opt/cka/${CLAIM}-app.yaml. A Pod's volumes cannot change either, so recreate it after the claim."
