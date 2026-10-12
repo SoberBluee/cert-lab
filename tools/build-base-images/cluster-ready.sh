@@ -15,12 +15,14 @@ SKEW=5
 BOOT=$(( $(date -d "$(uptime -s)" +%s) - SKEW ))
 DEADLINE=$(( $(date +%s) + TIMEOUT ))
 
-# label|expected (node = one per node, deploy:<name> = Deployment spec.replicas)
+# namespace|pod selector|expected (node = one per node, deploy:<name> = Deployment spec.replicas,
+# optional:<name> = the same, but skipped when the Deployment does not exist, as in older images)
 COMPONENTS=(
-  "calico-node|node"
-  "kube-proxy|node"
-  "kube-dns|deploy:coredns"
-  "calico-kube-controllers|deploy:calico-kube-controllers"
+  "kube-system|k8s-app=calico-node|node"
+  "kube-system|k8s-app=kube-proxy|node"
+  "kube-system|k8s-app=kube-dns|deploy:coredns"
+  "kube-system|k8s-app=calico-kube-controllers|deploy:calico-kube-controllers"
+  "traefik|app.kubernetes.io/name=traefik|optional:traefik"
 )
 
 epoch() { date -d "$1" +%s 2>/dev/null || echo 0; }
@@ -48,7 +50,7 @@ count_pods() {
     if [[ "$status" == "True" && -n "${started:-}" && $(epoch "$started") -ge $BOOT ]]; then
       PODS_READY=$((PODS_READY + 1))
     fi
-  done < <(kubectl -n kube-system get pods -l "k8s-app=$1" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status} {.status.containerStatuses[0].state.running.startedAt}{"\n"}{end}' 2>/dev/null)
+  done < <(kubectl -n "$1" get pods -l "$2" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status} {.status.containerStatuses[0].state.running.startedAt}{"\n"}{end}' 2>/dev/null)
 }
 
 # Sets LAGGING to a summary of what is not ready yet (empty when everything is ready).
@@ -60,17 +62,20 @@ check() {
     return
   fi
   (( NODE_READY < NODE_TOTAL )) && LAGGING+="nodes $NODE_READY/$NODE_TOTAL, "
-  local entry label spec expected
+  local entry ns selector spec expected label
   for entry in "${COMPONENTS[@]}"; do
-    label="${entry%%|*}"
-    spec="${entry#*|}"
+    IFS='|' read -r ns selector spec <<< "$entry"
+    label="${selector#*=}"
     if [[ "$spec" == node ]]; then
       expected=$NODE_TOTAL
     else
-      expected=$(kubectl -n kube-system get deployment "${spec#deploy:}" -o jsonpath='{.spec.replicas}' 2>/dev/null)
-      expected=${expected:-1}
+      expected=$(kubectl -n "$ns" get deployment "${spec#*:}" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+      if [[ -z "$expected" ]]; then
+        [[ "$spec" == optional:* ]] && continue
+        expected=1
+      fi
     fi
-    count_pods "$label"
+    count_pods "$ns" "$selector"
     (( PODS_READY < expected )) && LAGGING+="$label $PODS_READY/$expected, "
   done
   LAGGING="${LAGGING%, }"

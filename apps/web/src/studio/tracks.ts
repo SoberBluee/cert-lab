@@ -9,12 +9,11 @@ export const TRACKS: { id: TrackId; name: string; blurb: string; soon?: boolean 
   {
     id: 'troubleshoot',
     name: 'Troubleshoot',
-    blurb: 'Pick a category (Pods, Services, Nodes, Storage). A random fault is injected at every start and kept hidden, even from you.',
+    blurb: 'Pick a category (Pods, Services, Ingress and HTTPRoute, Nodes, Storage). A random fault is injected at every start and kept hidden, even from you.',
   },
   {
     id: 'cluster',
     name: 'Cluster',
-    blurb: 'Install and repair the cluster itself: kubeadm init and join, upgrades, etcd backup and restore, control-plane faults.',
-    soon: true,
+    blurb: 'Repair the control plane: a random fault in the apiserver, etcd, scheduler, controller-manager or kubelet, kept hidden.',
   },
 ];

@@ -5,14 +5,14 @@ import type { FaultCategory } from './types';
 const readyStatus = (node: string) => `kubectl get node "${node}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'`;
 
 /** The node controller marks a node NotReady about 40s after its last heartbeat. */
-const waitNotReady = (node: string) => `for _ in $(seq 1 90); do
+export const waitNotReady = (node: string) => `for _ in $(seq 1 90); do
   [[ "$(${readyStatus(node)})" != True ]] && exit 0
   sleep 2
 done
 echo "the node is still Ready" >&2
 exit 1`;
 
-const waitReady = (node: string) => `for _ in $(seq 1 90); do
+export const waitReady = (node: string) => `for _ in $(seq 1 90); do
   [[ "$(${readyStatus(node)})" == True ]] && break
   sleep 2
 done`;

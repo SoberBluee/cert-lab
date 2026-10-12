@@ -4,10 +4,13 @@ import { Command } from 'commander';
 import {
   createOrchestrator,
   createScenario,
+  dataDir,
   dryRun,
   lintScenarios,
   logFile,
+  readImagesMeta,
   repoRoot,
+  selectDriverName,
   verify,
   type Orchestrator,
 } from '@cka/core';
@@ -105,10 +108,7 @@ function printTask(view: SessionView) {
   console.log(c.dim('\nWhen done: ./cka grade   (hints: ./cka hint, retry: ./cka reset, finish: ./cka end)'));
 }
 
-const program = new Command()
-  .name('cka')
-  .description('CKA practice lab: start scenarios on real VMs, then grade the end state')
-  .showHelpAfterError();
+const program = new Command().name('cka').description('CKA practice lab: start scenarios on real VMs, then grade the end state').showHelpAfterError();
 
 program
   .command('list')
@@ -287,7 +287,13 @@ const authoringCommand = (name: string, fn: AuthoringFn, describe: string, passT
     .option('--each <NAME>', 'run once per possible value of a variable, e.g. every fault of a troubleshooting question')
     .action(
       action(async (id: string | undefined, opts: { all?: boolean; keep?: boolean; var: Vars; each?: string }) => {
-        const ids = opts.all ? o().library.list().map((s) => s.def.id) : id ? [id] : fail('give a scenario id or --all');
+        const ids = opts.all
+          ? o()
+              .library.list()
+              .map((s) => s.def.id)
+          : id
+            ? [id]
+            : fail('give a scenario id or --all');
         if (opts.all && Object.keys(opts.var).length) fail('--var applies to a single scenario, not --all');
         if (opts.all && opts.each) fail('--each applies to a single scenario, not --all');
         if (opts.each && opts.keep) fail('--keep cannot be combined with --each');
@@ -339,23 +345,27 @@ authoringCommand(
 const images = program.command('images').description('manage base images');
 images
   .command('build')
-  .description('build the lab VMs and their bare/cluster snapshots (15-25 minutes)')
+  .description('build the lab VMs and their bare/cluster base images (15-25 minutes)')
   .option('--force', 'delete and rebuild existing lab VMs')
+  .option('--driver <name>', 'VM backend: multipass or tart (default: CKA_DRIVER, then the existing images, then multipass)')
   .action(
-    action(
-      (opts: { force?: boolean }) =>
-        new Promise<number>((resolve) => {
-          const script = join(repoRoot, 'tools', 'build-base-images', 'build.sh');
-          const p = spawn('bash', [script, ...(opts.force ? ['--force'] : [])], { stdio: 'inherit' });
-          p.on('close', (code) => resolve(code ?? 1));
-        }),
-    ),
+    action((opts: { force?: boolean; driver?: string }) => {
+      const driver = opts.driver ?? selectDriverName();
+      if (driver !== 'multipass' && driver !== 'tart') fail(`images can only be built for the multipass or tart driver, not "${driver}"`);
+      return new Promise<number>((resolve) => {
+        const script = join(repoRoot, 'tools', 'build-base-images', 'build.sh');
+        const p = spawn('bash', [script, ...(opts.force ? ['--force'] : [])], { stdio: 'inherit', env: { ...process.env, CKA_DRIVER: driver } });
+        p.on('close', (code) => resolve(code ?? 1));
+      });
+    }),
   );
 images
   .command('list')
-  .description('show which base snapshots exist')
+  .description('show which base images exist')
   .action(
     action(async () => {
+      const active = readImagesMeta(dataDir)?.driver ?? 'multipass';
+      console.log(c.dim(`driver: ${o().driver.name}${active !== o().driver.name ? ` (last images built with ${active})` : ''}`));
       for (const img of await o().driver.listBaseImages()) {
         const state = img.available ? c.green('available') : c.red('missing');
         console.log(`${img.name.padEnd(8)} ${state}  ${c.dim(img.kubernetesVersion ? `k8s ${img.kubernetesVersion}, built ${img.builtAt}` : '')}`);

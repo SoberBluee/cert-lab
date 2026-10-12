@@ -318,6 +318,47 @@ describe('Troubleshoot track', () => {
       hidden: true,
     });
   });
+
+  it('runs control plane setup after node-breaking setup and fixes it first', () => {
+    const dep = BUILDERS.find((b) => b.id === 'deployment')!;
+    const { build: res, issues } = build([troubleQ('controlplane'), troubleQ('nodes'), createQ(dep, [], [])]);
+    assert.deepEqual(issues, []);
+    const def = scenarioOf(res.bundle);
+    assert.deepEqual(
+      def.setup.map((s: { node: string; script: string }) => `${s.node} ${s.script}`),
+      [
+        'controlplane setup/q3.sh',
+        'controlplane setup/q2.sh',
+        'worker-1 setup/q2-2.sh',
+        'worker-2 setup/q2-3.sh',
+        'controlplane setup/q2-4.sh',
+        'controlplane setup/q1.sh',
+      ],
+    );
+    assert.deepEqual(def.solution, [
+      { node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 },
+      { node: 'worker-1', script: 'setup/q2-solution.sh' },
+      { node: 'worker-2', script: 'setup/q2-solution-2.sh' },
+      { node: 'controlplane', script: 'solution.sh' },
+    ]);
+    const solution = res.bundle.files.find((f) => f.path === 'solution.sh')!.content;
+    assert.ok(!solution.includes('# Question 1') && solution.indexOf('# Question 2') < solution.indexOf('# Question 3'));
+  });
+
+  it('a control plane question alone still lists its solution step', () => {
+    const def = scenarioOf(build([troubleQ('controlplane')]).build.bundle);
+    assert.deepEqual(def.solution, [{ node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 }]);
+  });
+
+  it('allows one control plane question per lab', () => {
+    const { build: res, errors } = buildQuickBundle({
+      id: 'bad',
+      title: 'Bad',
+      questions: [troubleQ('controlplane'), troubleQ('controlplane')],
+    });
+    assert.equal(res, undefined);
+    assert.match(errors.join('\n'), /Only one control plane question/);
+  });
 });
 
 describe('Hidden variables', () => {

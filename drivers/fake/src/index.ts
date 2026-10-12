@@ -1,15 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  Base,
-  BaseImage,
-  ConnectionInfo,
-  Driver,
-  DriverSession,
-  ExecOptions,
-  ExecResult,
-  ProgressFn,
-  Topology,
-} from '@cka/schema';
+import type { Base, BaseImage, ConnectionInfo, Driver, DriverSession, ExecOptions, ExecResult, ProgressFn, Topology } from '@cka/schema';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const NODES = ['controlplane', 'worker-1', 'worker-2'];
@@ -30,11 +20,7 @@ export class FakeDriver implements Driver {
     ];
   }
 
-  async createSession(
-    _topology: Topology,
-    base: Base,
-    opts: { sessionId?: string; onProgress?: ProgressFn } = {},
-  ): Promise<DriverSession> {
+  async createSession(_topology: Topology, base: Base, opts: { sessionId?: string; onProgress?: ProgressFn } = {}): Promise<DriverSession> {
     const id = opts.sessionId ?? randomUUID();
     await this.restoreSnapshot(id, base, opts.onProgress);
     return { id, base, nodes: NODES };

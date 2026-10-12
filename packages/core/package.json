@@ -10,6 +10,8 @@
   "dependencies": {
     "@cka/driver-fake": "*",
     "@cka/driver-multipass": "*",
+    "@cka/driver-tart": "*",
+    "@cka/driver-vm-common": "*",
     "@cka/schema": "*",
     "pino": "^10.0.0",
     "yaml": "^2.8.0"

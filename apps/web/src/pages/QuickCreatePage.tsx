@@ -110,7 +110,12 @@ function PoolEditor({ field, pool, onChange }: { field: RecipeField; pool: strin
       {pool.map((p) => (
         <span key={p} className={`${chip} bg-violet-500/15 text-violet-200`}>
           {p}
-          <button type="button" className="text-violet-400 hover:text-violet-100" onClick={() => onChange(pool.filter((x) => x !== p))} aria-label={`remove ${p}`}>
+          <button
+            type="button"
+            className="text-violet-400 hover:text-violet-100"
+            onClick={() => onChange(pool.filter((x) => x !== p))}
+            aria-label={`remove ${p}`}
+          >
             ×
           </button>
         </span>
@@ -205,7 +210,19 @@ function blocked(part: PartSummary, chosen: Part[], all: PartSummary[]): string 
   if (missing) return `needs ${name(missing)} first`;
 }
 
-function PartPicker({ label, parts, chosen, all, onAdd }: { label: string; parts: PartSummary[]; chosen: Part[]; all: PartSummary[]; onAdd: (p: PartSummary) => void }) {
+function PartPicker({
+  label,
+  parts,
+  chosen,
+  all,
+  onAdd,
+}: {
+  label: string;
+  parts: PartSummary[];
+  chosen: Part[];
+  all: PartSummary[];
+  onAdd: (p: PartSummary) => void;
+}) {
   const [open, setOpen] = useState(false);
   if (!parts.length) return null;
   return (
@@ -284,7 +301,13 @@ function CreateBody({ q, onChange }: { q: Extract<Question, { type: 'create' }>;
       ))}
       <div className="flex flex-col gap-2">
         <PartPicker label="Add-on" parts={q.builder.addons} chosen={chosen} all={all} onAdd={(p) => onChange({ ...q, addons: [...q.addons, newPart(p)] })} />
-        <PartPicker label="Then…" parts={q.builder.followUps} chosen={chosen} all={all} onAdd={(p) => onChange({ ...q, followUps: [...q.followUps, newPart(p)] })} />
+        <PartPicker
+          label="Then…"
+          parts={q.builder.followUps}
+          chosen={chosen}
+          all={all}
+          onAdd={(p) => onChange({ ...q, followUps: [...q.followUps, newPart(p)] })}
+        />
       </div>
     </div>
   );
@@ -377,14 +400,27 @@ interface Pickable {
   domain: BuilderSummary['domain'];
 }
 
-function PickGrid({ items, onPick, compact }: { items: Pickable[]; onPick: (id: string) => void; compact: boolean }) {
+function PickGrid({
+  items,
+  onPick,
+  compact,
+  disabled = {},
+}: {
+  items: Pickable[];
+  onPick: (id: string) => void;
+  compact: boolean;
+  /** Reason, by item id, why it cannot be added. */
+  disabled?: Record<string, string>;
+}) {
   return (
     <div className={`grid gap-2 ${compact ? 'sm:grid-cols-2' : 'sm:grid-cols-2 xl:grid-cols-3'}`}>
       {items.map((r) => (
         <button
           key={r.id}
           onClick={() => onPick(r.id)}
-          className="flex flex-col rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 text-left transition hover:border-sky-700"
+          disabled={!!disabled[r.id]}
+          title={disabled[r.id]}
+          className="flex flex-col rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 text-left transition enabled:hover:border-sky-700 disabled:opacity-40"
         >
           <span className="flex items-center gap-2">
             <span className="text-sm font-medium text-zinc-100">{r.name}</span>
@@ -408,6 +444,7 @@ function AddQuestion({
   categories,
   onPick,
   compact,
+  chosen,
 }: {
   track: TrackId;
   onTrack: (t: TrackId) => void;
@@ -415,7 +452,13 @@ function AddQuestion({
   categories: CategorySummary[];
   onPick: (track: TrackId, id: string) => void;
   compact: boolean;
+  /** Ids of the categories already in the lab. */
+  chosen: string[];
 }) {
+  const breaksApi = categories.filter((c) => c.breaksApi && chosen.includes(c.id));
+  const disabled = Object.fromEntries(
+    breaksApi.length ? categories.filter((c) => c.breaksApi).map((c) => [c.id, 'A lab can hold only one control plane question.']) : [],
+  );
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-1">
@@ -424,11 +467,11 @@ function AddQuestion({
             key={t.id}
             disabled={t.soon}
             onClick={() => onTrack(t.id)}
-            title={t.soon ? 'Coming in phase 2' : t.blurb}
+            title={t.soon ? 'Coming later' : t.blurb}
             className={`rounded-md px-3 py-1.5 text-sm ${track === t.id ? 'bg-sky-600/20 text-sky-200' : 'text-zinc-400 enabled:hover:text-zinc-100'} disabled:opacity-40`}
           >
             {t.name}
-            {t.soon && <span className="ml-1.5 text-[10px] text-zinc-500">phase 2</span>}
+            {t.soon && <span className="ml-1.5 text-[10px] text-zinc-500">soon</span>}
           </button>
         ))}
       </div>
@@ -436,7 +479,7 @@ function AddQuestion({
       {track === 'create' ? (
         <PickGrid items={builders} onPick={(id) => onPick('create', id)} compact={compact} />
       ) : (
-        <PickGrid items={categories} onPick={(id) => onPick('troubleshoot', id)} compact={compact} />
+        <PickGrid items={categories.filter((c) => c.track === track)} onPick={(id) => onPick('troubleshoot', id)} compact={compact} disabled={disabled} />
       )}
     </div>
   );
@@ -445,7 +488,14 @@ function AddQuestion({
 function toQuestion(q: Question): QuickQuestion {
   const part = (p: Part) => ({ id: p.part.id, values: p.values, randomize: p.pools });
   return q.type === 'create'
-    ? { type: 'create', builder: q.builder.id, values: q.fields.values, randomize: q.fields.pools, addons: q.addons.map(part), followUps: q.followUps.map(part) }
+    ? {
+        type: 'create',
+        builder: q.builder.id,
+        values: q.fields.values,
+        randomize: q.fields.pools,
+        addons: q.addons.map(part),
+        followUps: q.followUps.map(part),
+      }
     : { type: 'troubleshoot', category: q.category.id, values: q.fields.values, randomize: q.fields.pools, ...(q.faults ? { faults: q.faults } : {}) };
 }
 
@@ -515,7 +565,7 @@ function Created({ id, jobError, onAnother }: { id: string; jobError: string | n
 export function QuickCreatePage() {
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
-  const track: TrackId = params.get('track') === 'troubleshoot' ? 'troubleshoot' : 'create';
+  const track: TrackId = TRACKS.find((t) => t.id === params.get('track') && !t.soon)?.id ?? 'create';
   const setTrack = (t: TrackId) => setParams({ track: t }, { replace: true });
   const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity });
   const scenarios = useQuery({ queryKey: ['scenarios', { drafts: '1' }], queryFn: () => api.scenarios({ drafts: '1' }) });
@@ -591,8 +641,8 @@ export function QuickCreatePage() {
         </Link>
         <h1 className="mt-2 text-xl font-semibold text-zinc-100">Quick Create</h1>
         <p className="mt-1 text-sm text-zinc-400">
-          Build a lab question by question. Create questions combine a resource with add-ons and follow-up steps; troubleshooting questions inject a
-          hidden random fault. Setup, checks, hints and solution are generated for you.
+          Build a lab question by question. Create questions combine a resource with add-ons and follow-up steps; troubleshooting questions inject a hidden
+          random fault. Setup, checks, hints and solution are generated for you.
         </p>
       </div>
 
@@ -633,6 +683,7 @@ export function QuickCreatePage() {
                   categories={catalog.data.categories}
                   onPick={add}
                   compact={questions.length > 0}
+                  chosen={questions.flatMap((q) => (q.type === 'troubleshoot' ? [q.category.id] : []))}
                 />
               ) : (
                 <div className="text-sm text-zinc-500">Loading…</div>
@@ -654,8 +705,8 @@ export function QuickCreatePage() {
                   </label>
                 </div>
                 <p className="mt-3 text-xs text-zinc-500">
-                  Saved as a draft under the topic of question 1 ({questionMeta(questions[0]).domain}), then a dry-run starts on the lab VMs. Publish when
-                  you are happy with it.
+                  Saved as a draft under the topic of question 1 ({questionMeta(questions[0]).domain}), then a dry-run starts on the lab VMs. Publish when you
+                  are happy with it.
                 </p>
                 <ErrorBanner error={create.error} onDismiss={() => create.reset()} />
                 <div className="mt-3 flex justify-end">

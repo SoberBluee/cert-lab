@@ -36,6 +36,8 @@ export interface QuestionOutput {
   settleSeconds?: number;
   /** Breaks nodes: set up after and fixed before every other question. */
   disruptive?: boolean;
+  /** May take the API server down: set up last and fixed first, even among disruptive questions. */
+  breaksApi?: boolean;
   setup: ScriptPart[];
   solution: ScriptPart[];
   /** The body of this question's section in solution.md. */
@@ -94,6 +96,15 @@ export const numberField = (key: string, label: string, pool: string[], min: num
 /** Creates the namespace if needed and waits for its default ServiceAccount, so Pods can be created right away. */
 export const createNs = (ns: string) => `kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 timeout 60 bash -c "until kubectl -n '${ns}' get serviceaccount default >/dev/null 2>&1; do sleep 1; done"`;
+
+/** First setup step of questions that need Traefik and the Gateway API, which older cluster images lack. */
+export const requireIngress = `kubectl get ingressclass traefik >/dev/null 2>&1 && kubectl get gatewayclass traefik >/dev/null 2>&1 || {
+  echo "this cluster image has no Traefik or Gateway API: rebuild images with ./cka images build --force" >&2
+  exit 1
+}`;
+
+/** Where Traefik serves both Ingress and Gateway API traffic: the web entrypoint's NodePort on every node. */
+export const INGRESS_URL = 'http://controlplane:30080';
 
 const RAW = '\u0001';
 

@@ -216,7 +216,7 @@ export function StudioPage() {
             <div key={t.id} className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-5 opacity-60">
               <div className="flex items-center gap-2">
                 <span className="text-lg font-semibold text-zinc-300">{t.name}</span>
-                <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">phase 2</span>
+                <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">soon</span>
               </div>
               <p className="mt-1 flex-1 text-sm text-zinc-400">{t.blurb}</p>
             </div>

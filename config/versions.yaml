@@ -3,8 +3,13 @@
 kubernetesVersion: "1.37.1"
 kubernetesPreviousVersion: "1.36"
 calicoVersion: "v3.33.0"
+# Ingress and Gateway API: Traefik serves both, on NodePort 30080 (HTTP) and 30443 (HTTPS).
+gatewayApiVersion: "v1.6.3"
+traefikChartVersion: "41.7.1"
+helmVersion: "v4.3.0"
 ubuntuRelease: "24.04"
 # Must not overlap the Multipass network on macOS (192.168.64.0/24).
+# tartNetwork: Tart VMs share the same vmnet subnet (192.168.64.0/24 by default), so the same rule applies.
 podCidr: "10.244.0.0/16"
 nodeCpus: "2"
 nodeMemory: "2G"

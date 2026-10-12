@@ -1,4 +1,4 @@
-import { bare, createNs, nameField, nsField, numberField, selectField } from '../types';
+import { bare, createNs, INGRESS_URL, nameField, nsField, numberField, requireIngress, selectField } from '../types';
 import { envAddon, imagePair, kexec, kget, kgetc, replicasField, resourcesAddon } from './shared';
 import { mayCollide, type Addon, type Builder, type CreateCtx, type FollowUp, type Manifest } from './types';
 
@@ -58,6 +58,107 @@ const expose: Addon = {
       },
     );
     ctx.hints.push(`kubectl -n ${ctx.ns} expose deployment ${NAME} --type=${TYPE} --port=${PORT} --target-port=80`);
+    ctx.service = { name: NAME, port: PORT };
+  },
+};
+
+const ingressCode = (host: string) => `curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${host}' ${INGRESS_URL}/`;
+
+const subField = (pool: string[]) => nameField('SUB', 'Host name prefix', pool, 'The host becomes <prefix>.<namespace>.lab.');
+
+const addIngressGuard = (ctx: CreateCtx) => {
+  if (!ctx.setup.includes(requireIngress)) ctx.setup.unshift(requireIngress);
+};
+
+const reachable = (host: string) => ({
+  description: `${host} answers HTTP 200 through Traefik on NodePort 30080`,
+  type: 'kubectl' as const,
+  run: ingressCode(host),
+  expect: { equals: '200' },
+  weight: 2,
+  retrySeconds: 30,
+});
+
+const ingress: Addon = {
+  id: 'ingress',
+  key: 'INGRESS',
+  name: 'Publish with an Ingress',
+  description: 'An Ingress of class traefik that routes a host to the Service.',
+  points: 3,
+  requires: ['expose'],
+  fields: [subField(['www', 'shop', 'app'])],
+  apply(ctx, { SUB }) {
+    const { name, port } = ctx.service!;
+    const host = `${SUB}.${ctx.ns}.lab`;
+    addIngressGuard(ctx);
+    ctx.manifests.push({
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'Ingress',
+      metadata: { name, namespace: ctx.ns },
+      spec: {
+        ingressClassName: 'traefik',
+        rules: [{ host, http: { paths: [{ path: '/', pathType: 'Prefix', backend: { service: { name, port: { number: bare(port) } } } }] } }],
+      },
+    });
+    ctx.bullets.push(
+      `Publish it with an Ingress \`${name}\` of class \`traefik\`: host \`${host}\`, path \`/\` (\`Prefix\`), to Service \`${name}\` on port \`${port}\`. Traefik serves Ingress traffic on NodePort \`30080\` of every node.`,
+    );
+    ctx.checks.push(
+      {
+        id: 'ingress-spec',
+        description: `Ingress ${name} routes ${host} to ${name}:${port} with class traefik`,
+        type: 'kubectl',
+        run: `kubectl -n ${ctx.ns} get ingress ${name} -o jsonpath='{.spec.ingressClassName} {.spec.rules[0].host} {.spec.rules[0].http.paths[0].backend.service.name} {.spec.rules[0].http.paths[0].backend.service.port.number}'`,
+        expect: { equals: `traefik ${host} ${name} ${port}` },
+        weight: 1,
+      },
+      { id: 'ingress-reachable', ...reachable(host) },
+    );
+    ctx.hints.push(`kubectl -n ${ctx.ns} create ingress ${name} --class=traefik --rule="${host}/*=${name}:${port}"`);
+    ctx.solution.push(`for _ in $(seq 1 30); do [[ "$(${ingressCode(host)})" == 200 ]] && break; sleep 2; done`);
+  },
+};
+
+const httpRoute: Addon = {
+  id: 'httproute',
+  key: 'ROUTE',
+  name: 'Publish with an HTTPRoute',
+  description: 'A Gateway API HTTPRoute on the shared traefik-gateway that routes a host to the Service.',
+  points: 3,
+  requires: ['expose'],
+  fields: [subField(['api', 'edge', 'gw'])],
+  apply(ctx, { SUB }) {
+    const { name, port } = ctx.service!;
+    const host = `${SUB}.${ctx.ns}.lab`;
+    addIngressGuard(ctx);
+    ctx.manifests.push({
+      apiVersion: 'gateway.networking.k8s.io/v1',
+      kind: 'HTTPRoute',
+      metadata: { name, namespace: ctx.ns },
+      spec: {
+        parentRefs: [{ name: 'traefik-gateway', namespace: 'traefik' }],
+        hostnames: [host],
+        rules: [{ backendRefs: [{ name, port: bare(port) }] }],
+      },
+    });
+    ctx.bullets.push(
+      `Publish it with an HTTPRoute \`${name}\` attached to Gateway \`traefik-gateway\` in namespace \`traefik\`: host \`${host}\`, to Service \`${name}\` on port \`${port}\`. The Gateway serves on NodePort \`30080\` of every node.`,
+    );
+    ctx.checks.push(
+      {
+        id: 'route-spec',
+        description: `HTTPRoute ${name} attaches to traefik/traefik-gateway and routes ${host} to ${name}:${port}`,
+        type: 'kubectl',
+        run: `kubectl -n ${ctx.ns} get httproute ${name} -o jsonpath='{.spec.parentRefs[0].name} {.spec.parentRefs[0].namespace} {.spec.hostnames[0]} {.spec.rules[0].backendRefs[0].name} {.spec.rules[0].backendRefs[0].port}'`,
+        expect: { equals: `traefik-gateway traefik ${host} ${name} ${port}` },
+        weight: 1,
+      },
+      { id: 'route-reachable', ...reachable(host) },
+    );
+    ctx.hints.push(
+      'kubectl explain httproute.spec shows the fields; the Gateway API docs have an HTTPRoute example with parentRefs, hostnames and backendRefs to start from.',
+    );
+    ctx.solution.push(`for _ in $(seq 1 30); do [[ "$(${ingressCode(host)})" == 200 ]] && break; sleep 2; done`);
   },
 };
 
@@ -763,6 +864,8 @@ export const deploymentBuilder: Builder = {
   ],
   addons: [
     expose,
+    ingress,
+    httpRoute,
     resourcesAddon,
     probes,
     envAddon,

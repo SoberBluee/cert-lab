@@ -12,4 +12,4 @@ export * from './session';
 export * from './store';
 export * from './studio';
 export * from './vars';
-export { readImagesMeta, type ImagesMeta } from '@cka/driver-multipass';
+export { readImagesMeta, type ImagesMeta } from '@cka/driver-vm-common';

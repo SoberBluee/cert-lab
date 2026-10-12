@@ -233,7 +233,11 @@ export interface CategorySummary {
   points: number;
   tags: string[];
   fields: RecipeField[];
+  /** Studio track that offers the category. */
+  track: 'troubleshoot' | 'cluster';
   disruptive: boolean;
+  /** May take the API server down; a lab holds at most one such question. */
+  breaksApi: boolean;
   faultCount: number;
   /** Only sent when spoilers are requested. */
   faults?: FaultSummary[];

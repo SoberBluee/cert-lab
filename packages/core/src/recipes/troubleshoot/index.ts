@@ -1,4 +1,6 @@
 import type { CategorySummary } from '@cka/schema';
+import { controlPlaneCategory } from './controlplane';
+import { ingressCategory } from './ingress';
 import { nodesCategory } from './nodes';
 import { podsCategory } from './pods';
 import { servicesCategory } from './services';
@@ -8,7 +10,7 @@ import type { FaultCategory } from './types';
 export { composeTrouble, WORKERS } from './compose';
 export type { Fault, FaultCategory, Shell } from './types';
 
-export const CATEGORIES: FaultCategory[] = [podsCategory, servicesCategory, nodesCategory, storageCategory];
+export const CATEGORIES: FaultCategory[] = [podsCategory, servicesCategory, ingressCategory, nodesCategory, storageCategory, controlPlaneCategory];
 
 export const getCategory = (id: string): FaultCategory | undefined => CATEGORIES.find((c) => c.id === id);
 
@@ -31,7 +33,9 @@ export const categorySummaries = (spoilers = false): CategorySummary[] =>
       points: c.points,
       tags: c.tags,
       fields: c.fields,
+      track: c.track ?? 'troubleshoot',
       disruptive: !!c.disruptive,
+      breaksApi: !!c.breaksApi,
       faultCount: faults.length,
       ...(spoilers ? { faults } : {}),
     };

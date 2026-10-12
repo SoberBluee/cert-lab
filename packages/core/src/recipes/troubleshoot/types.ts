@@ -49,8 +49,12 @@ export interface FaultCategory {
   points: number;
   tags: string[];
   fields: RecipeField[];
+  /** Studio track that offers the category; troubleshoot when omitted. */
+  track?: 'troubleshoot' | 'cluster';
   /** Breaks a node: set up after and fixed before every other question. */
   disruptive?: boolean;
+  /** May take the API server down: set up after and fixed before even disruptive questions, at most one per lab. */
+  breaksApi?: boolean;
   settleSeconds?: number;
   /** Variables rolled at random and never shown, e.g. which worker breaks. Keys are field-like (NODE). */
   hidden?: Record<string, string[]>;

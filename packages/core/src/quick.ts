@@ -202,13 +202,15 @@ export function buildQuickBundle(req: QuickCreateRequest): {
           : void ctx.errors.push(`Question ${n}: unknown question type`);
     if (out) built.push({ n, out });
   });
+  if (built.filter((b) => b.out.breaksApi).length > 1) ctx.errors.push('Only one control plane question per lab.');
   if (ctx.errors.length) return { errors: ctx.errors };
   const { variables } = ctx;
 
   const domain: Domain = req.domain ?? built[0].out.domain;
   const files: BundleFile[] = [];
-  const setupOrder = [...built.filter((b) => !b.out.disruptive), ...built.filter((b) => b.out.disruptive)];
-  const fixOrder = [...built.filter((b) => b.out.disruptive), ...built.filter((b) => !b.out.disruptive)];
+  const rank = ({ out }: (typeof built)[number]) => (out.breaksApi ? 2 : out.disruptive ? 1 : 0);
+  const setupOrder = [...built].sort((a, b) => rank(a) - rank(b));
+  const fixOrder = [...built].sort((a, b) => rank(b) - rank(a));
 
   const setup = setupOrder.flatMap(({ n, out }) =>
     out.setup.map((part, j) => {
@@ -226,12 +228,20 @@ export function buildQuickBundle(req: QuickCreateRequest): {
   );
 
   const CP = { node: 'controlplane', script: 'solution.sh' };
-  const solution: { node: string; script: string }[] = [];
+  const solution: { node: string; script: string; timeoutSeconds?: number }[] = [];
   const cpSections: string[] = [];
   for (const { n, out } of fixOrder) {
     const nodeParts = out.solution.filter((p) => !isControlplane(p));
     for (const part of out.solution) {
-      if (isControlplane(part)) {
+      // Its own step, so that other questions' controlplane fixes and waits run only once the API is back.
+      if (isControlplane(part) && out.breaksApi) {
+        const path = `setup/q${n}-solution.sh`;
+        files.push({
+          path,
+          content: shell(`Question ${n}: ${out.title}. Solution step on controlplane, applied by "cka verify".`, part.script),
+        });
+        solution.push({ node: 'controlplane', script: path, timeoutSeconds: 900 });
+      } else if (isControlplane(part)) {
         if (!cpSections.length) solution.push(CP);
         cpSections.push(`# Question ${n}: ${out.title}\n${part.script.trim()}`);
       } else {

@@ -23,6 +23,8 @@ export interface CreateCtx {
   /** Later steps, each starting with "Then". */
   steps: string[];
   manifests: Manifest[];
+  /** The Service in front of the main workload, once an add-on created one. */
+  service?: { name: string; port: string };
   /** The Pod spec of the main workload. */
   podSpec: () => Manifest;
   /** The main container of the main workload. */

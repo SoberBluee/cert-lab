@@ -11,7 +11,10 @@ const indent = (text: string) => text.replace(/\n/g, '\n   ');
 /** Builds the manifests, then lets each add-on and then each follow-up edit them, in the order chosen. */
 export function composeCreate(builder: Builder, v: Refs, addons: ChosenPart[], followUps: ChosenPart[]): QuestionOutput {
   const ctx = builder.build(v);
-  for (const { part, v: pv } of [...addons, ...followUps]) {
+  // Add-ons may be picked in any order, but one that requires another may build on what it added.
+  const isRequired = (c: ChosenPart) => addons.some((a) => a.part.requires?.includes(c.part.id));
+  const ordered = [...addons.filter(isRequired), ...addons.filter((a) => !isRequired(a))];
+  for (const { part, v: pv } of [...ordered, ...followUps]) {
     if (part.replacesChecks?.length) ctx.checks = ctx.checks.filter((c) => !part.replacesChecks!.includes(c.id));
     part.apply(ctx, pv);
   }

@@ -45,8 +45,8 @@ export function registerTerminal(app: FastifyInstance, opts: TerminalOptions): v
         socket.close(code, text.slice(0, 120));
       };
 
-      if (opts.driverName !== 'multipass') {
-        return fail(CLOSE_UNAVAILABLE, 'The browser terminal needs the Multipass driver.');
+      if (opts.driverName === 'fake') {
+        return fail(CLOSE_UNAVAILABLE, 'The browser terminal needs real lab VMs (Multipass or Tart driver).');
       }
       const session = sessions.current();
       if (!session || !LIVE_STATES.has(session.state) || !session.connection) {

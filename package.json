@@ -16,7 +16,7 @@
     "api": "node --import tsx apps/api/src/server.ts",
     "cka": "./cka",
     "typecheck": "tsc -p tsconfig.json && npm --workspace @cka/web run typecheck",
-    "test": "node --import tsx --test 'packages/*/src/**/*.test.ts'"
+    "test": "node --import tsx --test 'packages/*/src/**/*.test.ts' 'drivers/*/src/**/*.test.ts'"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

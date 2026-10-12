@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, sep } from 'node:path';
-import { readImagesMeta, type ImagesMeta } from '@cka/driver-multipass';
+import { readImagesMeta, type ImagesMeta } from '@cka/driver-vm-common';
 import { hiddenVarNames, varRefs, type Step } from '@cka/schema';
 import { blueprintsDir, dataDir, scenariosDir } from './paths';
 import { ScenarioLibrary, taskFile, type LoadedScenario } from './scenarios';
