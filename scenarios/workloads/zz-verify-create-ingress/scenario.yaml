@@ -1,0 +1,86 @@
+id: zz-verify-create-ingress
+title: zz-verify-create-ingress
+domain: workloads
+difficulty: 1
+estimatedMinutes: 10
+points: 12
+tags: [ deployment, httproute, ingress, expose ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ web, shop, team-a ] }
+  Q1_NAME: { oneOf: [ frontend, api, catalog ] }
+  Q1_IMAGE: { oneOf: [ nginx:1.26-alpine, nginx:1.27-alpine ] }
+  Q1_REPLICAS: { oneOf: [ 2, 3, 4 ] }
+  Q1_ROUTE_SUB: { oneOf: [ api, edge, gw ] }
+  Q1_INGRESS_SUB: { oneOf: [ www, shop, app ] }
+  Q1_EXPOSE_PORT: { oneOf: [ 80, 8080, 3000 ] }
+  Q1_EXPOSE_TYPE: { oneOf: [ ClusterIP, NodePort ] }
+setup:
+  - node: controlplane
+    script: setup/q1.sh
+tasks:
+  - id: q1
+    title: Deployment ${Q1_NAME}
+    points: 12
+    checks:
+      - id: q1-ready
+        description: Deployment ${Q1_NAME} has ${Q1_REPLICAS} ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${Q1_REPLICAS}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-image
+        description: ${Q1_NAME} runs ${Q1_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment/${Q1_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q1_IMAGE}" }
+        weight: 1
+      - id: q1-expose-service
+        description: Service ${Q1_NAME} is a ${Q1_EXPOSE_TYPE} mapping port ${Q1_EXPOSE_PORT} to 80
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get svc ${Q1_NAME} -o jsonpath='{.spec.type}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+        expect: { equals: "${Q1_EXPOSE_TYPE}/${Q1_EXPOSE_PORT}/80" }
+        weight: 1
+      - id: q1-expose-reachable
+        description: Service ${Q1_NAME} answers HTTP 200 on port ${Q1_EXPOSE_PORT}
+        type: kubectl
+        run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q1_NS} get svc ${Q1_NAME} -o jsonpath='{.spec.clusterIP}'):${Q1_EXPOSE_PORT}/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-route-spec
+        description: HTTPRoute ${Q1_NAME} attaches to traefik/traefik-gateway and routes ${Q1_ROUTE_SUB}.${Q1_NS}.lab to ${Q1_NAME}:${Q1_EXPOSE_PORT}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get httproute ${Q1_NAME} -o jsonpath='{.spec.parentRefs[0].name} {.spec.parentRefs[0].namespace} {.spec.hostnames[0]} {.spec.rules[0].backendRefs[0].name} {.spec.rules[0].backendRefs[0].port}'
+        expect: { equals: "traefik-gateway traefik ${Q1_ROUTE_SUB}.${Q1_NS}.lab ${Q1_NAME} ${Q1_EXPOSE_PORT}" }
+        weight: 1
+      - id: q1-route-reachable
+        description: ${Q1_ROUTE_SUB}.${Q1_NS}.lab answers HTTP 200 through Traefik on NodePort 30080
+        type: kubectl
+        run: "curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q1_ROUTE_SUB}.${Q1_NS}.lab' http://controlplane:30080/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-ingress-spec
+        description: Ingress ${Q1_NAME} routes ${Q1_INGRESS_SUB}.${Q1_NS}.lab to ${Q1_NAME}:${Q1_EXPOSE_PORT} with class traefik
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get ingress ${Q1_NAME} -o jsonpath='{.spec.ingressClassName} {.spec.rules[0].host} {.spec.rules[0].http.paths[0].backend.service.name} {.spec.rules[0].http.paths[0].backend.service.port.number}'
+        expect: { equals: "traefik ${Q1_INGRESS_SUB}.${Q1_NS}.lab ${Q1_NAME} ${Q1_EXPOSE_PORT}" }
+        weight: 1
+      - id: q1-ingress-reachable
+        description: ${Q1_INGRESS_SUB}.${Q1_NS}.lab answers HTTP 200 through Traefik on NodePort 30080
+        type: kubectl
+        run: "curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q1_INGRESS_SUB}.${Q1_NS}.lab' http://controlplane:30080/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl -n ${Q1_NS} create deployment ${Q1_NAME} --image=${Q1_IMAGE} --replicas=${Q1_REPLICAS} --dry-run=client -o yaml gives you a manifest to start from.
+      - kubectl -n ${Q1_NS} expose deployment ${Q1_NAME} --type=${Q1_EXPOSE_TYPE} --port=${Q1_EXPOSE_PORT} --target-port=80
+      - kubectl explain httproute.spec shows the fields; the Gateway API docs have an HTTPRoute example with parentRefs, hostnames and backendRefs to start from.
+      - kubectl -n ${Q1_NS} create ingress ${Q1_NAME} --class=traefik --rule="${Q1_INGRESS_SUB}.${Q1_NS}.lab/*=${Q1_NAME}:${Q1_EXPOSE_PORT}"

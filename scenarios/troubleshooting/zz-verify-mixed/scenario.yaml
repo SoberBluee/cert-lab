@@ -1,0 +1,186 @@
+id: zz-verify-mixed
+title: zz-verify-mixed
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 30
+points: 23
+tags: [ troubleshooting, control-plane, static-pod, etcd, kubelet, node, containerd, deployment, expose, ingress ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_NS: { oneOf: [ ops, core, platform ] }
+  Q1_FAULT: { oneOf: [ apiserver-etcd-port, apiserver-etcd-certfile, etcd-cert-path, scheduler-command, controller-manager-kubeconfig, kubelet-client-cert ], hidden: true }
+  Q2_NS: { oneOf: [ ops, infra, platform ] }
+  Q2_FAULT: { oneOf: [ kubelet-stopped, containerd-stopped, kubelet-binary-path, cordoned, stray-taint ], hidden: true }
+  Q2_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+  Q3_NS: { oneOf: [ web, shop, team-a ] }
+  Q3_NAME: { oneOf: [ frontend, api, catalog ] }
+  Q3_IMAGE: { oneOf: [ nginx:1.26-alpine, nginx:1.27-alpine ] }
+  Q3_REPLICAS: { oneOf: [ 2, 3, 4 ] }
+  Q3_EXPOSE_PORT: { oneOf: [ 80, 8080, 3000 ] }
+  Q3_EXPOSE_TYPE: { oneOf: [ ClusterIP, NodePort ] }
+  Q3_INGRESS_SUB: { oneOf: [ www, shop, app ] }
+setup:
+  - node: controlplane
+    script: setup/q3.sh
+  - node: controlplane
+    script: setup/q2.sh
+  - node: worker-1
+    script: setup/q2-2.sh
+  - node: worker-2
+    script: setup/q2-3.sh
+  - node: controlplane
+    script: setup/q2-4.sh
+    timeoutSeconds: 300
+  - node: controlplane
+    script: setup/q1.sh
+    timeoutSeconds: 400
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+  - node: worker-1
+    script: setup/q2-solution.sh
+  - node: worker-2
+    script: setup/q2-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: Control plane after maintenance
+    points: 8
+    checks:
+      - id: q1-api-ready
+        description: the API server reports ready
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-components
+        description: etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        type: kubectl
+        run: kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort | xargs
+        expect: { equals: etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-nodes-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 90
+      - id: q1-web-ready
+        description: web runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 2/2 }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-manifests
+        description: /etc/kubernetes/manifests holds only the four control plane manifests
+        type: ssh
+        node: controlplane
+        run: ls /etc/kubernetes/manifests | sort | xargs
+        expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
+        weight: 1
+    hints:
+      - "kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down."
+      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting."
+      - Static pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).
+      - "If controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf."
+  - id: q2
+    title: Unhealthy worker
+    points: 6
+    checks:
+      - id: q2-all-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | tr '\n' ' '
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 90
+      - id: q2-schedulable
+        description: no worker is cordoned or carries a NoSchedule taint
+        type: kubectl
+        run: kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.spec.unschedulable} {range .spec.taints[*]}{.key}={.effect} {end}{"\n"}{end}' | tr ' ' '\n' | grep -vE '^$|^dedicated=' | grep -cE 'true|NoSchedule|NoExecute' || true
+        expect: { equals: "0" }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-services-worker-1
+        description: kubelet and containerd are running and enabled on worker-1
+        type: ssh
+        node: worker-1
+        run: echo $(systemctl is-active kubelet containerd) $(systemctl is-enabled kubelet containerd) | tr ' ' '\n' | sort -u | tr '\n' ' '
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q2-services-worker-2
+        description: kubelet and containerd are running and enabled on worker-2
+        type: ssh
+        node: worker-2
+        run: echo $(systemctl is-active kubelet containerd) $(systemctl is-enabled kubelet containerd) | tr ' ' '\n' | sort -u | tr '\n' ' '
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q2-probe
+        description: node-probe has a ready Pod on every worker
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get daemonset node-probe -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}/{.status.updatedNumberScheduled}'
+        expect: { equals: 2/2/2 }
+        weight: 1
+        retrySeconds: 90
+    hints:
+      - "kubectl get nodes, then kubectl describe node <node>: look at Conditions, Taints and Unschedulable."
+      - kubectl -n ${Q2_NS} get pods -o wide shows which worker is missing its probe Pod.
+      - "On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50."
+      - systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.
+  - id: q3
+    title: Deployment ${Q3_NAME}
+    points: 9
+    checks:
+      - id: q3-ready
+        description: Deployment ${Q3_NAME} has ${Q3_REPLICAS} ready replicas
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${Q3_REPLICAS}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q3-image
+        description: ${Q3_NAME} runs ${Q3_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment/${Q3_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q3_IMAGE}" }
+        weight: 1
+      - id: q3-expose-service
+        description: Service ${Q3_NAME} is a ${Q3_EXPOSE_TYPE} mapping port ${Q3_EXPOSE_PORT} to 80
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get svc ${Q3_NAME} -o jsonpath='{.spec.type}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+        expect: { equals: "${Q3_EXPOSE_TYPE}/${Q3_EXPOSE_PORT}/80" }
+        weight: 1
+      - id: q3-expose-reachable
+        description: Service ${Q3_NAME} answers HTTP 200 on port ${Q3_EXPOSE_PORT}
+        type: kubectl
+        run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q3_NS} get svc ${Q3_NAME} -o jsonpath='{.spec.clusterIP}'):${Q3_EXPOSE_PORT}/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q3-ingress-spec
+        description: Ingress ${Q3_NAME} routes ${Q3_INGRESS_SUB}.${Q3_NS}.lab to ${Q3_NAME}:${Q3_EXPOSE_PORT} with class traefik
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get ingress ${Q3_NAME} -o jsonpath='{.spec.ingressClassName} {.spec.rules[0].host} {.spec.rules[0].http.paths[0].backend.service.name} {.spec.rules[0].http.paths[0].backend.service.port.number}'
+        expect: { equals: "traefik ${Q3_INGRESS_SUB}.${Q3_NS}.lab ${Q3_NAME} ${Q3_EXPOSE_PORT}" }
+        weight: 1
+      - id: q3-ingress-reachable
+        description: ${Q3_INGRESS_SUB}.${Q3_NS}.lab answers HTTP 200 through Traefik on NodePort 30080
+        type: kubectl
+        run: "curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q3_INGRESS_SUB}.${Q3_NS}.lab' http://controlplane:30080/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl -n ${Q3_NS} create deployment ${Q3_NAME} --image=${Q3_IMAGE} --replicas=${Q3_REPLICAS} --dry-run=client -o yaml gives you a manifest to start from.
+      - kubectl -n ${Q3_NS} expose deployment ${Q3_NAME} --type=${Q3_EXPOSE_TYPE} --port=${Q3_EXPOSE_PORT} --target-port=80
+      - kubectl -n ${Q3_NS} create ingress ${Q3_NAME} --class=traefik --rule="${Q3_INGRESS_SUB}.${Q3_NS}.lab/*=${Q3_NAME}:${Q3_EXPOSE_PORT}"
