@@ -97,8 +97,11 @@ export const numberField = (key: string, label: string, pool: string[], min: num
   ...opts,
 });
 
-/** Creates the namespace if needed and waits for its default ServiceAccount, so Pods can be created right away. */
-export const createNs = (ns: string) => `kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+/**
+ * Creates the namespace if needed and waits for its default ServiceAccount, so Pods can be created right away.
+ * Safe when parallel setup lanes create the same namespace.
+ */
+export const createNs = (ns: string) => `kubectl create namespace "${ns}" >/dev/null 2>&1 || kubectl get namespace "${ns}" >/dev/null
 timeout 60 bash -c "until kubectl -n '${ns}' get serviceaccount default >/dev/null 2>&1; do sleep 1; done"`;
 
 /** Single-quotes a shell argument, e.g. a JSON patch, while keeping `${VAR}` references expandable. */

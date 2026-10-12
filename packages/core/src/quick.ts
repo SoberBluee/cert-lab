@@ -216,8 +216,9 @@ export function buildQuickBundle(req: QuickCreateRequest): {
   const setupOrder = [...built].sort((a, b) => rank(a) - rank(b));
   const fixOrder = [...built].sort((a, b) => rank(b) - rank(a));
 
-  const setup = setupOrder.flatMap(({ n, out }) =>
-    out.setup.map((part, j) => {
+  const setup = setupOrder.flatMap((b) =>
+    b.out.setup.map((part, j) => {
+      const { n, out } = b;
       const path = `setup/q${n}${j ? `-${j + 1}` : ''}.sh`;
       files.push({
         path,
@@ -227,6 +228,7 @@ export function buildQuickBundle(req: QuickCreateRequest): {
         node: part.node ?? 'controlplane',
         script: path,
         ...(part.timeoutSeconds ? { timeoutSeconds: part.timeoutSeconds } : {}),
+        ...(rank(b) === 0 ? { lane: `q${n}` } : {}),
       };
     }),
   );

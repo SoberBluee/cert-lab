@@ -51,6 +51,7 @@ setup:                         # runs in order after the snapshot is restored
   - node: controlplane
     run: kubectl create namespace shop     # inline command instead of a script
     timeoutSeconds: 120                    # default 300
+    lane: shop                             # optional; see below
 
 solution:                      # optional; default is solution.sh on controlplane
   - node: worker-1
@@ -59,6 +60,8 @@ solution:                      # optional; default is solution.sh on controlplan
 checks: [...]
 hints: ["vague", "more specific", "almost the answer"]
 ```
+
+Steps run one after another unless they carry a `lane`. Consecutive steps with a `lane` run as one batch: each lane runs its own steps in order, and the lanes run at the same time. A step without a lane waits for everything before it. Quick Create puts each question that does not break a node or the API server in its own lane (`q1`, `q2`, ...), so independent questions are set up in parallel.
 
 Every setup step, solution step and check runs as **root** with `KUBECONFIG=/etc/kubernetes/admin.conf` exported. On workers that file does not exist, so run kubectl steps on `controlplane`. Nodes are named `controlplane`, `worker-1` and `worker-2`; `/etc/hosts` resolves these names on every node, and `ubuntu@controlplane` can `ssh worker-1` without a password.
 
@@ -79,7 +82,7 @@ Expectation operators, all of which must hold: `equals`, `contains`, `notContain
 
 - **Assert outcomes, not commands.** Check that the node is Ready, not that `systemctl start` was typed. Any valid fix should pass.
 - **Checks must be read-only.** They are retried and run in parallel. Do not create a test pod inside a check.
-- **Make the break observable before the session starts.** If the symptom takes time to appear (a node goes NotReady after about 40 seconds), add a setup step on `controlplane` that waits for it. Otherwise `dry-run` grades too early and passes for the wrong reason.
+- **Make the break observable before the session starts.** If the symptom takes time to appear (a node goes NotReady about 20 seconds after its kubelet stops), add a setup step on `controlplane` that waits for it. Otherwise `dry-run` grades too early and passes for the wrong reason.
 - **Give eventually-consistent checks a retry window.** Rollouts and node status take time. Use `retrySeconds` on the slow checks rather than raising `settleSeconds` everywhere.
 - **Guard the solution's shortcuts.** If the task says "without removing the taint", add a check that the taint still exists.
 - **Keep setup idempotent and fail loudly.** Start scripts with `set -euo pipefail` and assert that the break actually applied, for example with `grep -q` after `sed`.

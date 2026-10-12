@@ -345,13 +345,14 @@ describe('Troubleshoot track', () => {
 
   it('runs control plane setup after node-breaking setup and fixes it first', () => {
     const dep = BUILDERS.find((b) => b.id === 'deployment')!;
-    const { build: res, issues } = build([troubleQ('controlplane'), troubleQ('nodes'), createQ(dep, [], [])]);
+    const { build: res, issues } = build([troubleQ('controlplane'), troubleQ('nodes'), createQ(dep, [], []), troubleQ('pods')]);
     assert.deepEqual(issues, []);
     const def = scenarioOf(res.bundle);
     assert.deepEqual(
-      def.setup.map((s: { node: string; script: string }) => `${s.node} ${s.script}`),
+      def.setup.map((s: { node: string; script: string; lane?: string }) => `${s.node} ${s.script}${s.lane ? ` lane ${s.lane}` : ''}`),
       [
-        'controlplane setup/q3.sh',
+        'controlplane setup/q3.sh lane q3',
+        'controlplane setup/q4.sh lane q4',
         'controlplane setup/q2.sh',
         'worker-1 setup/q2-2.sh',
         'worker-2 setup/q2-3.sh',

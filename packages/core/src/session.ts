@@ -1,8 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { basename, join } from 'node:path';
-import { visibleVars, type Driver, type GradeResult, type Mode, type SessionState, type SessionTask, type SessionView, type Step, type Vars } from '@cka/schema';
+import {
+  visibleVars,
+  type Driver,
+  type GradeResult,
+  type Mode,
+  type SessionState,
+  type SessionTask,
+  type SessionView,
+  type Step,
+  type Vars,
+} from '@cka/schema';
 import { ADMIN_KUBECONFIG, runChecks, type GradeOptions } from './grader';
+import { runBatched } from './steps';
 import { renderScenario, rollScenarioVars } from './vars';
 import type { Logger } from './logger';
 import type { LoadedScenario, ScenarioLibrary } from './scenarios';
@@ -137,10 +148,7 @@ export class SessionManager extends EventEmitter {
 
     const open = this.store.openSession();
     if (open && ACTIVE.includes(open.state)) {
-      throw new OrchestratorError(
-        `A session for "${open.scenarioId}" is already ${open.state}. End it before starting another one.`,
-        409,
-      );
+      throw new OrchestratorError(`A session for "${open.scenarioId}" is already ${open.state}. End it before starting another one.`, 409);
     }
     if (open) this.close(open);
 
@@ -181,7 +189,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private async runSteps(id: string, s: LoadedScenario, steps: Step[], label: 'setup' | 'solution', vars: Vars) {
-    for (const [i, step] of steps.entries()) {
+    await runBatched(steps, async (step, i) => {
       const what = step.script ?? short(step.run ?? '');
       this.progress(id, `${label} ${i + 1}/${steps.length} on ${step.node}: ${what}`);
       let command = step.run ?? '';
@@ -202,7 +210,7 @@ export class SessionManager extends EventEmitter {
           500,
         );
       }
-    }
+    });
   }
 
   async reset(): Promise<StartResult> {
@@ -284,9 +292,7 @@ export class SessionManager extends EventEmitter {
     if (!ASSIST_MODES.includes(row.mode)) throw new OrchestratorError(`Hints are disabled in ${row.mode} mode.`, 403);
     const s = this.scenarioFor(row);
     const shown = (id: string) => row.hintsRevealed[id] ?? 0;
-    const task = taskId
-      ? s.tasks.find((t) => t.id === taskId)
-      : (s.tasks.find((t) => shown(t.id) < t.hints.length) ?? s.tasks[0]);
+    const task = taskId ? s.tasks.find((t) => t.id === taskId) : (s.tasks.find((t) => shown(t.id) < t.hints.length) ?? s.tasks[0]);
     if (!task) throw new OrchestratorError(`Unknown task "${taskId}".`, 404);
     if (shown(task.id) >= task.hints.length) {
       throw new OrchestratorError(s.tasks.length > 1 ? `No more hints for "${task.title}".` : 'No more hints for this scenario.', 400);
@@ -316,8 +322,7 @@ export class SessionManager extends EventEmitter {
     const row = this.requireOpen();
     if (row.state !== 'running') throw new OrchestratorError(`Cannot apply the solution while ${row.state}.`, 409);
     const s = this.scenarioFor(row);
-    const steps: Step[] | undefined =
-      s.def.solution ?? (s.solutionScript ? [{ node: 'controlplane', script: 'solution.sh', timeoutSeconds: 600 }] : undefined);
+    const steps: Step[] | undefined = s.def.solution ?? (s.solutionScript ? [{ node: 'controlplane', script: 'solution.sh', timeoutSeconds: 600 }] : undefined);
     if (!steps) throw new OrchestratorError(`Scenario "${s.def.id}" has no solution steps or solution.sh.`, 400);
     await this.runSteps(row.id, s, steps, 'solution', row.vars);
   }

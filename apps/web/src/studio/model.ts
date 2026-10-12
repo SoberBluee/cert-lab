@@ -10,6 +10,7 @@ export interface StepDraft {
   script?: string;
   run?: string;
   timeoutSeconds?: number;
+  lane?: string;
 }
 
 export interface CheckDraft {

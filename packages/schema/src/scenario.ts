@@ -14,9 +14,7 @@ export const NodeNameSchema = z.string().regex(/^(controlplane|worker-[1-9]\d*|\
   message: 'node must be "controlplane", "worker-N" or a node variable like ${NODE}',
 });
 
-const SlugSchema = z
-  .string()
-  .regex(/^[a-z0-9][a-z0-9-]*$/, { message: 'use lowercase letters, digits and dashes' });
+const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, { message: 'use lowercase letters, digits and dashes' });
 
 // YAML turns `equals: 3` or `equals: true` into non-strings; command output is always text.
 const Scalar = z.union([z.string(), z.number(), z.boolean()]).transform((v) => String(v));
@@ -94,12 +92,7 @@ export const FileCheckSchema = z.strictObject({
     .optional(),
 });
 
-export const CheckSchema = z.discriminatedUnion('type', [
-  KubectlCheckSchema,
-  SshCheckSchema,
-  ScriptCheckSchema,
-  FileCheckSchema,
-]);
+export const CheckSchema = z.discriminatedUnion('type', [KubectlCheckSchema, SshCheckSchema, ScriptCheckSchema, FileCheckSchema]);
 export type Check = z.infer<typeof CheckSchema>;
 export type CheckType = Check['type'];
 
@@ -109,6 +102,11 @@ export const StepSchema = z
     script: z.string().min(1).optional(),
     run: z.string().min(1).optional(),
     timeoutSeconds: z.number().positive().max(1800).default(300),
+    /** Consecutive steps with a lane run in parallel with other lanes, and in order within their own; see docs/authoring.md. */
+    lane: z
+      .string()
+      .regex(/^[\w-]+$/)
+      .optional(),
   })
   .refine((s) => (s.script === undefined) !== (s.run === undefined), {
     message: 'a step needs exactly one of "script" or "run"',
@@ -229,9 +227,7 @@ export const LEGACY_TASK_ID = 'main';
 /** Every scenario as a task list. A single-task scenario (top-level checks) becomes one task "main". */
 export function scenarioTasks(s: Scenario): Task[] {
   if (s.tasks) return s.tasks;
-  return [
-    { id: LEGACY_TASK_ID, title: s.title, points: s.points, context: s.context, setup: [], checks: s.checks ?? [], hints: s.hints },
-  ];
+  return [{ id: LEGACY_TASK_ID, title: s.title, points: s.points, context: s.context, setup: [], checks: s.checks ?? [], hints: s.hints }];
 }
 
 export function formatZodError(error: z.ZodError): string[] {
