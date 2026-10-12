@@ -27,6 +27,8 @@ The build:
 2. runs `kubeadm init`, installs Calico, joins the workers, waits for everything to be Ready, installs Helm, the Gateway API CRDs and Traefik (see below), then snapshots **`cluster`**;
 3. writes `~/.cka-lab/images.json` (build date, versions, node IPs, `addons`) and leaves the VMs stopped.
 
+The node images also pre-pull every container image the scenarios use, so sessions do not depend on Docker Hub. The controller manager runs with `--node-monitor-grace-period=20s`, so a worker whose kubelet stops turns `NotReady` after about 20 seconds instead of the stock 40-50.
+
 **Ingress and Gateway API.** The `cluster` image ships one Traefik controller that serves both Ingress and Gateway API traffic:
 
 - the IngressClass `traefik`, which is the default class;

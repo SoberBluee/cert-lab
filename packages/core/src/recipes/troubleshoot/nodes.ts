@@ -8,7 +8,8 @@ const noScheduleTaint = (node: string) =>
   `kubectl get node "${node}" -o jsonpath='{range .spec.taints[?(@.effect=="NoSchedule")]}{.key}{"\\n"}{end}' | grep -qE '^node.kubernetes.io/(unreachable|not-ready)$'`;
 
 /**
- * The node controller marks a node NotReady about 40s after its last heartbeat, and taints it a
+ * The node controller marks a node NotReady about 20s after its last heartbeat (the images set
+ * --node-monitor-grace-period=20s; stock clusters take about 40s), and taints it a
  * moment later. Until the taint is there, Pods created by later questions can still land on it.
  */
 export const waitNotReady = (node: string) => `for _ in $(seq 1 90); do

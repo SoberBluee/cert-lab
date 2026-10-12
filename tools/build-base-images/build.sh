@@ -144,6 +144,10 @@ on controlplane "kubeadm init --pod-network-cidr '$POD_CIDR' --node-name control
   || die "kubeadm init failed, see $BUILD_LOG-kubeadm-init.log"
 on controlplane "mkdir -p /home/ubuntu/.kube /root/.kube && cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config && \
   cp /etc/kubernetes/admin.conf /root/.kube/config && chown -R ubuntu:ubuntu /home/ubuntu/.kube"
+# Node questions wait for a broken worker to turn NotReady; the default grace period is about 50s.
+CM=/etc/kubernetes/manifests/kube-controller-manager.yaml
+on controlplane "sed -i -E 's#^( +)- kube-controller-manager\$#&\n\1- --node-monitor-grace-period=20s#' $CM && \
+  grep -q -- '- --node-monitor-grace-period=20s\$' $CM" || die "could not set the node monitor grace period"
 
 log "Installing Calico $CALICO_VERSION"
 # Calico reads this optional ConfigMap to reach the API server directly. Without it, calico-node's
