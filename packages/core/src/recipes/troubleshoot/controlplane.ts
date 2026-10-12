@@ -15,9 +15,13 @@ done
 echo "the API server is still healthy" >&2
 exit 1`;
 
-export const CP_PODS = ['etcd', 'kube-apiserver', 'kube-controller-manager', 'kube-scheduler'].map((c) => `${c}-controlplane=True`).join(' ');
+export const CP_PODS = ['controlplane=True', ...['etcd', 'kube-apiserver', 'kube-controller-manager', 'kube-scheduler'].map((c) => `${c}-controlplane=True`)].join(' ');
 
-export const cpPods = `kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\\n"}{end}' | sort | xargs`;
+/**
+ * Static Pods keep their last reported status when the kubelet stops, so they only count while
+ * node controlplane itself is Ready.
+ */
+export const cpPods = `{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type=="Ready")].status}{"\\n"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\\n"}{end}' | sort; } | xargs`;
 
 /** A restarted API server can sit in CrashLoopBackOff for a few minutes, hence the long waits. */
 const waitHealthy = (ns: string) => `for _ in $(seq 1 240); do
@@ -110,7 +114,7 @@ EOF`,
       },
       {
         id: 'components',
-        description: 'etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready',
+        description: 'node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready',
         type: 'kubectl',
         run: cpPods,
         expect: { equals: CP_PODS },

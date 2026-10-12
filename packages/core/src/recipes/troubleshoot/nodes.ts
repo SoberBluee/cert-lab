@@ -4,12 +4,18 @@ import type { FaultCategory } from './types';
 
 const readyStatus = (node: string) => `kubectl get node "${node}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'`;
 
-/** The node controller marks a node NotReady about 40s after its last heartbeat. */
+const noScheduleTaint = (node: string) =>
+  `kubectl get node "${node}" -o jsonpath='{range .spec.taints[?(@.effect=="NoSchedule")]}{.key}{"\\n"}{end}' | grep -qE '^node.kubernetes.io/(unreachable|not-ready)$'`;
+
+/**
+ * The node controller marks a node NotReady about 40s after its last heartbeat, and taints it a
+ * moment later. Until the taint is there, Pods created by later questions can still land on it.
+ */
 export const waitNotReady = (node: string) => `for _ in $(seq 1 90); do
-  [[ "$(${readyStatus(node)})" != True ]] && exit 0
+  [[ "$(${readyStatus(node)})" != True ]] && ${noScheduleTaint(node)} && exit 0
   sleep 2
 done
-echo "the node is still Ready" >&2
+echo "the node is still Ready, or not yet tainted" >&2
 exit 1`;
 
 export const waitReady = (node: string) => `for _ in $(seq 1 90); do

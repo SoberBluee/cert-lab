@@ -305,13 +305,20 @@ export class TartDriver extends VmLabDriver {
   protected async rawCopy(node: string, localPath: string, remoteTmp: string): Promise<void> {
     this.checkKey();
     const ip = await this.ipOf(node);
-    const r = await runProcess(this.scpBin, ['-q', ...this.sshOpts(), localPath, `ubuntu@${ip}:${remoteTmp}`], {
-      timeoutMs: 60_000,
-      tool: 'scp',
-      label: `scp to ${node}`,
-      notFound: 'The scp client was not found.',
-      log: this.log,
-    });
-    if (r.exitCode !== 0) throw new DriverError(`Copying ${localPath} to ${node} failed: ${tail(r.stderr || r.stdout, 300)}`);
+    // A shared SSH master connection can drop between uses; copying again is harmless.
+    let r: ExecResult | undefined;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      r = await runProcess(this.scpBin, ['-q', ...this.sshOpts(), localPath, `ubuntu@${ip}:${remoteTmp}`], {
+        timeoutMs: 60_000,
+        tool: 'scp',
+        label: `scp to ${node}`,
+        notFound: 'The scp client was not found.',
+        log: this.log,
+      });
+      if (r.exitCode === 0) return;
+      this.log?.('warn', `scp to ${node} failed (attempt ${attempt} of 3)`, { stderr: tail(r.stderr, 300) });
+      await sleep(2000);
+    }
+    throw new DriverError(`Copying ${localPath} to ${node} failed: ${tail(r!.stderr || r!.stdout, 300)}`);
   }
 }

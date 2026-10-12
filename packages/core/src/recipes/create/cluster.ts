@@ -50,7 +50,7 @@ const cpChecks = (): RecipeCheck[] => [
   },
   {
     id: 'control-plane',
-    description: 'etcd, kube-apiserver, kube-controller-manager and kube-scheduler run Ready',
+    description: 'node controlplane is Ready, and etcd, kube-apiserver, kube-controller-manager and kube-scheduler run Ready on it',
     type: 'kubectl',
     run: cpPods,
     expect: { equals: CP_PODS },
