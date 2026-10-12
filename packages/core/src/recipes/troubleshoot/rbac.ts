@@ -114,7 +114,11 @@ spec:
 EOF`,
     after: `kubectl -n "${NS}" scale "deployment/${APP}" --replicas=1
 ${rollout(NS, APP)}
-sleep 10
+for _ in $(seq 1 30); do
+  line="$(${lastLine(NS, APP)})"
+  [[ -n "$line" && "$line" != 200 ]] && break
+  sleep 2
+done
 [[ "$(${lastLine(NS, APP)})" != 200 ]] || { echo "${APP} still lists Pods" >&2; exit 1; }`,
     checks: [
       {

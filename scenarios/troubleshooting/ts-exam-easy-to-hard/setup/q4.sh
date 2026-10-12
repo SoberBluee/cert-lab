@@ -6,7 +6,7 @@ kubectl get ingressclass traefik >/dev/null 2>&1 && kubectl get gatewayclass tra
   echo "this cluster image has no Traefik or Gateway API: rebuild images with ./cka images build --force" >&2
   exit 1
 }
-kubectl create namespace "${Q4_NS}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl create namespace "${Q4_NS}" >/dev/null 2>&1 || kubectl get namespace "${Q4_NS}" >/dev/null
 timeout 60 bash -c "until kubectl -n '${Q4_NS}' get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
 kubectl apply -f - <<EOF
 apiVersion: apps/v1

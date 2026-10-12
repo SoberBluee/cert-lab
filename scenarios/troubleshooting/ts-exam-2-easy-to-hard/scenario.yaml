@@ -32,15 +32,19 @@ setup:
   - node: controlplane
     script: setup/q1.sh
     timeoutSeconds: 400
+    lane: q1
   - node: controlplane
     script: setup/q2.sh
     timeoutSeconds: 400
+    lane: q2
   - node: controlplane
     script: setup/q3.sh
     timeoutSeconds: 400
+    lane: q3
   - node: controlplane
     script: setup/q4.sh
     timeoutSeconds: 400
+    lane: q4
   - node: controlplane
     script: setup/q5.sh
   - node: worker-1

@@ -1,5 +1,6 @@
 import { createNs, nameField, nsField } from '../types';
 import type { FaultCategory } from './types';
+import { waitUnhealthy } from './wait';
 
 const IMAGE = 'nginx:1.27-alpine';
 
@@ -56,7 +57,7 @@ EOF
 kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.metadata.uid}' > "${state}.uid"
 chmod 644 "${state}.uid"`,
     after: `kubectl -n "${NS}" scale "deployment/${APP}" --replicas=2
-sleep 15
+${waitUnhealthy(NS, `app=${APP}`, 15)}
 [[ "$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.status.readyReplicas}')" != 2 ]] || { echo "${APP} still runs 2 replicas" >&2; exit 1; }`,
     checks: [
       {
@@ -105,7 +106,10 @@ ${retry(NS, APP)}`,
     {
       id: 'quota-limits',
       label: 'ResourceQuota requires CPU limits',
-      break: applyObject(NS, '{"apiVersion":"v1","kind":"ResourceQuota","metadata":{"name":"compute-quota"},"spec":{"hard":{"requests.cpu":"2","limits.cpu":"4"}}}'),
+      break: applyObject(
+        NS,
+        '{"apiVersion":"v1","kind":"ResourceQuota","metadata":{"name":"compute-quota"},"spec":{"hard":{"requests.cpu":"2","limits.cpu":"4"}}}',
+      ),
       fix: `kubectl -n "${NS}" delete resourcequota compute-quota
 ${retry(NS, APP)}`,
       wait: waitReady(NS, APP),
@@ -115,7 +119,10 @@ ${retry(NS, APP)}`,
     {
       id: 'limitrange-max',
       label: 'LimitRange maximum below the request',
-      break: applyObject(NS, '{"apiVersion":"v1","kind":"LimitRange","metadata":{"name":"container-limits"},"spec":{"limits":[{"type":"Container","max":{"cpu":"50m"}}]}}'),
+      break: applyObject(
+        NS,
+        '{"apiVersion":"v1","kind":"LimitRange","metadata":{"name":"container-limits"},"spec":{"limits":[{"type":"Container","max":{"cpu":"50m"}}]}}',
+      ),
       fix: `kubectl -n "${NS}" delete limitrange container-limits
 ${retry(NS, APP)}`,
       wait: waitReady(NS, APP),

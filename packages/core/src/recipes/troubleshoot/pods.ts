@@ -1,5 +1,6 @@
 import { createNs, nameField, nsField } from '../types';
 import type { FaultCategory } from './types';
+import { waitUnhealthy } from './wait';
 
 const IMAGE = 'nginx:1.27-alpine';
 
@@ -74,7 +75,7 @@ EOF
 kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.metadata.uid}' > "${state}.uid"
 chmod 644 "${state}.uid"`,
     after: `kubectl -n "${NS}" scale "deployment/${APP}" --replicas=2
-sleep 20`,
+${waitUnhealthy(NS, `app=${APP}`)}`,
     checks: [
       {
         id: 'ready',

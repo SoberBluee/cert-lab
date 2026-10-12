@@ -1,5 +1,6 @@
 import { createNs, nameField, nsField, sq } from '../types';
 import type { FaultCategory } from './types';
+import { waitUnhealthy } from './wait';
 
 const IMAGE = 'nginx:1.27-alpine';
 
@@ -80,7 +81,7 @@ spec:
             items: [{ key: token, path: token }]
 EOF`,
     after: `kubectl -n "${NS}" scale "deployment/${APP}" --replicas=2
-sleep 20
+${waitUnhealthy(NS, `app=${APP}`)}
 [[ "$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.status.readyReplicas}')" != 2 ]] || { echo "${APP} is still healthy" >&2; exit 1; }`,
     checks: [
       {
