@@ -105,6 +105,34 @@ on controlplane "chmod 600 /home/ubuntu/.ssh/id_ed25519 && chown ubuntu:ubuntu /
   printf 'Host *\n  StrictHostKeyChecking accept-new\n' > /home/ubuntu/.ssh/config && chown ubuntu:ubuntu /home/ubuntu/.ssh/config"
 for n in "${NODES[@]}"; do pin_ip "$n"; done
 
+# Installs from scratch on the bare snapshot use this manifest and these images, so they work offline.
+# The pod CIDR stays commented out: the learner sets it.
+log "Staging Calico $CALICO_VERSION in /root/calico.yaml"
+on controlplane "curl -fsSL https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml -o /root/calico.yaml"
+# Backends whose network only forwards TCP/UDP/ICMP between nodes (Tart) need VXLAN instead of IP-in-IP,
+# and Calico's VXLAN-only mode runs without BIRD.
+if [[ "${CALICO_ENCAP:-ipip}" == vxlan ]]; then
+  on controlplane "sed -i -e 's|calico_backend: \"bird\"|calico_backend: \"vxlan\"|' \
+         -e 's|value: \"k8s,bgp\"|value: \"k8s\"|' \
+         -e '/name: CALICO_IPV4POOL_IPIP\$/{n;s|\"Always\"|\"Never\"|}' \
+         -e '/name: CALICO_IPV4POOL_VXLAN\$/{n;s|\"Never\"|\"Always\"|}' \
+         -e '/- --bird-live\$/d' -e '/- --bird-ready\$/d' /root/calico.yaml"
+fi
+CALICO_IMAGES="$(on controlplane "awk '\$1 == \"image:\" { gsub(/\"/, \"\", \$2); print \$2 }' /root/calico.yaml | sort -u | xargs")"
+[[ -n "$CALICO_IMAGES" ]] || die "found no images in the Calico manifest"
+pull_calico() {
+  on "$1" "for img in $CALICO_IMAGES; do
+    for attempt in 1 2 3 4 5; do
+      crictl pull \"\$img\" >/dev/null && break
+      [[ \$attempt == 5 ]] && { echo \"could not pull \$img\" >&2; exit 1; }
+      sleep \$((attempt * 5))
+    done
+  done" || { echo "  pulling Calico images failed on $1" >&2; return 1; }
+  echo "  pulled Calico images on $1"
+}
+log "Pre-pulling Calico images"
+parallel pull_calico
+
 log "Snapshotting 'bare'"
 stop_all
 snapshot_all bare
@@ -123,19 +151,9 @@ log "Installing Calico $CALICO_VERSION"
 # and blocks for a 30s timeout on every lab reset.
 on controlplane "kubectl -n kube-system create configmap kubernetes-services-endpoint \
   --from-literal=KUBERNETES_SERVICE_HOST=$CP_IP --from-literal=KUBERNETES_SERVICE_PORT=6443 >/dev/null"
-on controlplane "curl -fsSL https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml -o /root/calico.yaml && \
-  sed -i -e 's|# - name: CALICO_IPV4POOL_CIDR|- name: CALICO_IPV4POOL_CIDR|' \
-         -e 's|#   value: \"192.168.0.0/16\"|  value: \"$POD_CIDR\"|' /root/calico.yaml"
-# Backends whose network only forwards TCP/UDP/ICMP between nodes (Tart) need VXLAN instead of IP-in-IP,
-# and Calico's VXLAN-only mode runs without BIRD.
-if [[ "${CALICO_ENCAP:-ipip}" == vxlan ]]; then
-  on controlplane "sed -i -e 's|calico_backend: \"bird\"|calico_backend: \"vxlan\"|' \
-         -e 's|value: \"k8s,bgp\"|value: \"k8s\"|' \
-         -e '/name: CALICO_IPV4POOL_IPIP\$/{n;s|\"Always\"|\"Never\"|}' \
-         -e '/name: CALICO_IPV4POOL_VXLAN\$/{n;s|\"Never\"|\"Always\"|}' \
-         -e '/- --bird-live\$/d' -e '/- --bird-ready\$/d' /root/calico.yaml"
-fi
-on controlplane "kubectl apply -f /root/calico.yaml >/dev/null"
+on controlplane "sed -e 's|# - name: CALICO_IPV4POOL_CIDR|- name: CALICO_IPV4POOL_CIDR|' \
+  -e 's|#   value: \"192.168.0.0/16\"|  value: \"$POD_CIDR\"|' /root/calico.yaml > /root/calico-cluster.yaml && \
+  kubectl apply -f /root/calico-cluster.yaml >/dev/null"
 
 log "Joining workers"
 JOIN="$(on controlplane "kubeadm token create --print-join-command")"

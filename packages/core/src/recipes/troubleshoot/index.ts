@@ -1,8 +1,10 @@
 import type { CategorySummary } from '@cka/schema';
 import { controlPlaneCategory } from './controlplane';
+import { dnsCategory } from './dns';
 import { ingressCategory } from './ingress';
 import { nodesCategory } from './nodes';
 import { podsCategory } from './pods';
+import { schedulingCategory } from './scheduling';
 import { servicesCategory } from './services';
 import { storageCategory } from './storage';
 import type { FaultCategory } from './types';
@@ -10,7 +12,16 @@ import type { FaultCategory } from './types';
 export { composeTrouble, WORKERS } from './compose';
 export type { Fault, FaultCategory, Shell } from './types';
 
-export const CATEGORIES: FaultCategory[] = [podsCategory, servicesCategory, ingressCategory, nodesCategory, storageCategory, controlPlaneCategory];
+export const CATEGORIES: FaultCategory[] = [
+  podsCategory,
+  schedulingCategory,
+  servicesCategory,
+  dnsCategory,
+  ingressCategory,
+  nodesCategory,
+  storageCategory,
+  controlPlaneCategory,
+];
 
 export const getCategory = (id: string): FaultCategory | undefined => CATEGORIES.find((c) => c.id === id);
 

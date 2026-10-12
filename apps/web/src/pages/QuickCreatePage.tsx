@@ -452,13 +452,19 @@ function AddQuestion({
   categories: CategorySummary[];
   onPick: (track: TrackId, id: string) => void;
   compact: boolean;
-  /** Ids of the categories already in the lab. */
+  /** Ids of the builders and categories already in the lab. */
   chosen: string[];
 }) {
-  const breaksApi = categories.filter((c) => c.breaksApi && chosen.includes(c.id));
-  const disabled = Object.fromEntries(
-    breaksApi.length ? categories.filter((c) => c.breaksApi).map((c) => [c.id, 'A lab can hold only one control plane question.']) : [],
-  );
+  const all = [...builders, ...categories];
+  const solo = builders.find((b) => b.solo && chosen.includes(b.id));
+  const apiTaken = all.some((x) => x.breaksApi && chosen.includes(x.id));
+  const disabled: Record<string, string> = {};
+  for (const x of all) {
+    if (solo) disabled[x.id] = `${solo.name} must be the only question in its lab.`;
+    else if ('solo' in x && x.solo && chosen.length) disabled[x.id] = `${x.name} must be the only question in its lab; start a new lab for it.`;
+    else if (x.breaksApi && apiTaken) disabled[x.id] = 'A lab can hold only one control plane question.';
+  }
+  const label = 'text-[11px] font-semibold tracking-wide text-zinc-500 uppercase';
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-1">
@@ -477,7 +483,14 @@ function AddQuestion({
       </div>
       <p className="text-xs text-zinc-500">{TRACKS.find((t) => t.id === track)?.blurb}</p>
       {track === 'create' ? (
-        <PickGrid items={builders} onPick={(id) => onPick('create', id)} compact={compact} />
+        <PickGrid items={builders.filter((b) => b.track === 'create')} onPick={(id) => onPick('create', id)} compact={compact} disabled={disabled} />
+      ) : track === 'cluster' ? (
+        <div className="space-y-3">
+          <div className={label}>Tasks</div>
+          <PickGrid items={builders.filter((b) => b.track === 'cluster')} onPick={(id) => onPick('create', id)} compact={compact} disabled={disabled} />
+          <div className={label}>Repair a hidden fault</div>
+          <PickGrid items={categories.filter((c) => c.track === 'cluster')} onPick={(id) => onPick('troubleshoot', id)} compact={compact} disabled={disabled} />
+        </div>
       ) : (
         <PickGrid items={categories.filter((c) => c.track === track)} onPick={(id) => onPick('troubleshoot', id)} compact={compact} disabled={disabled} />
       )}
@@ -683,7 +696,7 @@ export function QuickCreatePage() {
                   categories={catalog.data.categories}
                   onPick={add}
                   compact={questions.length > 0}
-                  chosen={questions.flatMap((q) => (q.type === 'troubleshoot' ? [q.category.id] : []))}
+                  chosen={questions.map((q) => (q.type === 'troubleshoot' ? q.category.id : q.builder.id))}
                 />
               ) : (
                 <div className="text-sm text-zinc-500">Loading…</div>

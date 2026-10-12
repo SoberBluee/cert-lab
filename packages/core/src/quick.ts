@@ -203,8 +203,12 @@ export function buildQuickBundle(req: QuickCreateRequest): {
     if (out) built.push({ n, out });
   });
   if (built.filter((b) => b.out.breaksApi).length > 1) ctx.errors.push('Only one control plane question per lab.');
+  const solo = built.find((b) => b.out.solo);
+  if (solo && req.questions.length > 1) ctx.errors.push(`${solo.out.title} must be the only question in its lab.`);
   if (ctx.errors.length) return { errors: ctx.errors };
   const { variables } = ctx;
+  const base = built[0].out.base ?? 'cluster';
+  const bare = base === 'bare';
 
   const domain: Domain = req.domain ?? built[0].out.domain;
   const files: BundleFile[] = [];
@@ -268,7 +272,7 @@ export function buildQuickBundle(req: QuickCreateRequest): {
   });
 
   const questions: QuickPreviewQuestion[] = built.map(({ n, out }) => {
-    const markdown = `Use context: \`kubectl config use-context ${CONTEXT}\`\n\n${out.text.trim()}\n`;
+    const markdown = bare ? `${out.text.trim()}\n` : `Use context: \`kubectl config use-context ${CONTEXT}\`\n\n${out.text.trim()}\n`;
     files.push({ path: `tasks/q${n}.md`, content: markdown });
     return { title: out.title, points: out.points, markdown };
   });
@@ -283,9 +287,9 @@ export function buildQuickBundle(req: QuickCreateRequest): {
     estimatedMinutes: minutes,
     points,
     tags: [...new Set(built.flatMap((b) => b.out.tags))],
-    base: 'cluster',
+    base,
     nodes: { controlPlane: 1, workers: 2 },
-    context: CONTEXT,
+    ...(bare ? {} : { context: CONTEXT }),
     settleSeconds: Math.max(...built.map((b) => b.out.settleSeconds ?? 30)),
     draft: true,
     ...(Object.keys(variables).length ? { variables } : {}),

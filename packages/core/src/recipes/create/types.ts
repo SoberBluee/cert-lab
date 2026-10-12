@@ -73,6 +73,14 @@ export interface Builder {
   fields: RecipeField[];
   addons: Addon[];
   followUps: FollowUp[];
+  /** Studio track that offers the builder; create when omitted. */
+  track?: 'create' | 'cluster';
+  /** May take the API server down: set up last and fixed first, at most one per lab. */
+  breaksApi?: boolean;
+  /** Snapshot the lab starts from; cluster when omitted. */
+  base?: 'cluster' | 'bare';
+  /** Must be the only question of its lab. */
+  solo?: boolean;
   build(v: Refs): CreateCtx;
 }
 

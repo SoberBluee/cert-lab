@@ -216,6 +216,14 @@ export interface BuilderSummary {
   fields: RecipeField[];
   addons: PartSummary[];
   followUps: PartSummary[];
+  /** Studio track that offers the builder. */
+  track: 'create' | 'cluster';
+  /** May take the API server down; a lab holds at most one such question. */
+  breaksApi: boolean;
+  /** Snapshot the lab starts from. */
+  base: Base;
+  /** Must be the only question of its lab. */
+  solo: boolean;
 }
 
 export interface FaultSummary {

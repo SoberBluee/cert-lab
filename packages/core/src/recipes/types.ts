@@ -38,6 +38,10 @@ export interface QuestionOutput {
   disruptive?: boolean;
   /** May take the API server down: set up last and fixed first, even among disruptive questions. */
   breaksApi?: boolean;
+  /** Snapshot the lab starts from; cluster when omitted. */
+  base?: 'cluster' | 'bare';
+  /** Must be the only question of its lab. */
+  solo?: boolean;
   setup: ScriptPart[];
   solution: ScriptPart[];
   /** The body of this question's section in solution.md. */

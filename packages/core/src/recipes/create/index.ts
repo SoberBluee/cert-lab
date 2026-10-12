@@ -1,4 +1,5 @@
 import type { BuilderSummary, PartSummary } from '@cka/schema';
+import { certificatesBuilder, etcdBackupBuilder, etcdRestoreBuilder, installClusterBuilder } from './cluster';
 import { cronJobBuilder } from './cronjob';
 import { deploymentBuilder } from './deployment';
 import { podBuilder } from './pod';
@@ -11,7 +12,19 @@ import type { Builder, PartBase } from './types';
 export { composeCreate, type ChosenPart } from './compose';
 export type { Addon, Builder, Choices, CreateCtx, FollowUp, PartBase } from './types';
 
-export const BUILDERS: Builder[] = [deploymentBuilder, podBuilder, rbacBuilder, cronJobBuilder, pvcBuilder, pvBuilder, storageClassBuilder];
+export const BUILDERS: Builder[] = [
+  deploymentBuilder,
+  podBuilder,
+  rbacBuilder,
+  cronJobBuilder,
+  pvcBuilder,
+  pvBuilder,
+  storageClassBuilder,
+  etcdBackupBuilder,
+  etcdRestoreBuilder,
+  certificatesBuilder,
+  installClusterBuilder,
+];
 
 export const getBuilder = (id: string): Builder | undefined => BUILDERS.find((b) => b.id === id);
 
@@ -38,4 +51,8 @@ export const builderSummaries = (): BuilderSummary[] =>
     fields: b.fields,
     addons: b.addons.map(partSummary),
     followUps: b.followUps.map(partSummary),
+    track: b.track ?? 'create',
+    breaksApi: !!b.breaksApi,
+    base: b.base ?? 'cluster',
+    solo: !!b.solo,
   }));

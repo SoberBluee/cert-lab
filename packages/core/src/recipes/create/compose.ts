@@ -25,8 +25,10 @@ export function composeCreate(builder: Builder, v: Refs, addons: ChosenPart[], f
     : `${ctx.intro}${bullets ? `\n\n${bullets}` : ''}`;
 
   const tail = ctx.solution.map((s) => s.trim()).join('\n');
-  const script = `${applyScript(ctx.manifests)}${tail ? `\n${tail}` : ''}`;
-  const solutionMd = `\`\`\`bash\nkubectl apply -f - <<'EOF'\n${manifestsYaml(ctx.manifests)}EOF\n${tail ? `${tail}\n` : ''}\`\`\``;
+  const apply = ctx.manifests.length ? applyScript(ctx.manifests) : '';
+  const script = [apply, tail].filter(Boolean).join('\n');
+  const applyMd = ctx.manifests.length ? `kubectl apply -f - <<'EOF'\n${manifestsYaml(ctx.manifests)}EOF\n` : '';
+  const solutionMd = `\`\`\`bash\n${applyMd}${tail ? `${tail}\n` : ''}\`\`\``;
 
   const parts = [...addons, ...followUps].map((p) => p.part);
   return {
@@ -37,6 +39,9 @@ export function composeCreate(builder: Builder, v: Refs, addons: ChosenPart[], f
     minutes: builder.minutes + parts.length * 2,
     points: ctx.checks.reduce((s, c) => s + c.weight, 0),
     tags: [...new Set([...builder.tags, ...parts.map((p) => p.id)])],
+    ...(builder.breaksApi ? { breaksApi: true, settleSeconds: 60 } : {}),
+    ...(builder.base ? { base: builder.base } : {}),
+    ...(builder.solo ? { solo: true } : {}),
     setup: ctx.setup.length ? [{ script: ctx.setup.join('\n') }] : [],
     solution: [{ script }],
     solutionMd,

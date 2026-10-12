@@ -6,7 +6,7 @@ const M = '/etc/kubernetes/manifests';
 const KUBELET_CONF = '/etc/kubernetes/kubelet.conf';
 
 /** Answers without kubectl, so it works while the API server is down. */
-const readyz = `curl -sk --max-time 3 https://127.0.0.1:6443/readyz 2>/dev/null || true`;
+export const readyz = `curl -sk --max-time 3 https://127.0.0.1:6443/readyz 2>/dev/null || true`;
 
 const apiDown = `for _ in $(seq 1 90); do
   [[ "$(${readyz})" != ok ]] && exit 0
@@ -15,9 +15,9 @@ done
 echo "the API server is still healthy" >&2
 exit 1`;
 
-const CP_PODS = ['etcd', 'kube-apiserver', 'kube-controller-manager', 'kube-scheduler'].map((c) => `${c}-controlplane=True`).join(' ');
+export const CP_PODS = ['etcd', 'kube-apiserver', 'kube-controller-manager', 'kube-scheduler'].map((c) => `${c}-controlplane=True`).join(' ');
 
-const cpPods = `kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\\n"}{end}' | sort | xargs`;
+export const cpPods = `kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\\n"}{end}' | sort | xargs`;
 
 /** A restarted API server can sit in CrashLoopBackOff for a few minutes, hence the long waits. */
 const waitHealthy = (ns: string) => `for _ in $(seq 1 240); do

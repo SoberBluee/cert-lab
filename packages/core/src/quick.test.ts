@@ -87,7 +87,28 @@ function bashSyntax(bundle: ScenarioBundle) {
   }
 }
 
-const STUBS = ['kubectl', 'sleep', 'timeout', 'systemctl', 'sed', 'mv', 'crictl', 'curl'];
+const STUBS = [
+  'kubectl',
+  'sleep',
+  'timeout',
+  'systemctl',
+  'sed',
+  'mv',
+  'crictl',
+  'curl',
+  'etcdctl',
+  'kubeadm',
+  'openssl',
+  'jq',
+  'sudo',
+  'ssh',
+  'rm',
+  'cp',
+  'mkdir',
+  'install',
+  'chown',
+  'base64',
+];
 
 /**
  * Runs every script with stub commands and returns what was piped to "kubectl apply -f -". Exit codes
@@ -111,16 +132,16 @@ function runWithStubs(bundle: ScenarioBundle, vars: Record<string, string>): str
     const stderr = r.stderr.toString();
     assert.doesNotMatch(stderr, /unbound variable|syntax error|command not found/, `${f.path}: ${stderr}`);
   }
-  const applied = execFileSync('bash', ['-c', `for f in ${dir}/applied/*; do [ -e "$f" ] && cat "$f" && printf '\\0'; done`]).toString();
+  const applied = execFileSync('bash', ['-c', `for f in ${dir}/applied/*; do [ -e "$f" ] || continue; cat "$f"; printf '\\0'; done`]).toString();
   return applied.split('\0').filter((s) => s.trim());
 }
 
 /** Runs the bundle's scripts with the first value of every variable and parses everything they apply. */
-function assertAppliesCleanly(bundle: ScenarioBundle) {
+function assertAppliesCleanly(bundle: ScenarioBundle, appliesSomething = true) {
   const def = scenarioOf(bundle);
   const vars = Object.fromEntries(Object.entries(def.variables ?? {}).map(([k, v]) => [k, String((v as { oneOf: unknown[] }).oneOf[0])]));
   const applied = runWithStubs(bundle, vars);
-  assert.ok(applied.length > 0);
+  if (appliesSomething) assert.ok(applied.length > 0);
   for (const doc of applied) {
     assert.ok(!doc.includes('${') && !doc.includes('$sc'), `unexpanded variable in:\n${doc}`);
     if (doc.trim().startsWith('{')) assert.doesNotThrow(() => JSON.parse(doc), `invalid JSON:\n${doc}`);
@@ -165,7 +186,7 @@ describe('Create track', () => {
           const { build: res, issues } = build([createQ(b, addons, followUps, randomize)]);
           assert.deepEqual(issues, []);
           bashSyntax(res.bundle);
-          assertAppliesCleanly(res.bundle);
+          assertAppliesCleanly(res.bundle, b.track !== 'cluster');
           const ids = scenarioOf(res.bundle).tasks[0].checks.map((c: { id: string }) => c.id);
           assert.equal(new Set(ids).size, ids.length);
         }
@@ -411,12 +432,56 @@ describe('Hidden variables', () => {
 
 describe('Quick Create', () => {
   it('combines both tracks into one lab', () => {
-    const qs = [...BUILDERS.map((b, i) => createQ(b, [], [], i % 2 === 1)), ...CATEGORIES.map((c) => troubleQ(c.id))];
+    // The control plane category is the lab's one API-breaking question.
+    const combinable = BUILDERS.filter((b) => !b.solo && !b.breaksApi);
+    const qs = [...combinable.map((b, i) => createQ(b, [], [], i % 2 === 1)), ...CATEGORIES.map((c) => troubleQ(c.id))];
     const { build: res, issues } = build(qs);
     assert.deepEqual(issues, []);
     const def = scenarioOf(res.bundle);
     assert.equal(def.tasks.length, qs.length);
     assert.equal(def.draft, true);
+  });
+
+  it('a solo question gets its own lab on its own base, without a context', () => {
+    const install = BUILDERS.find((b) => b.id === 'install-cluster')!;
+    const { build: res, issues } = build([createQ(install, [], [], true)]);
+    assert.deepEqual(issues, []);
+    const def = scenarioOf(res.bundle);
+    assert.equal(def.base, 'bare');
+    assert.equal(def.context, undefined);
+    assert.doesNotMatch(res.questions[0].markdown, /use-context/);
+
+    const dep = BUILDERS.find((b) => b.id === 'deployment')!;
+    for (const questions of [
+      [createQ(install, [], []), createQ(dep, [], [])],
+      [createQ(dep, [], []), createQ(install, [], [])],
+    ]) {
+      const { build: bad, errors } = buildQuickBundle({ id: 'bad', title: 'Bad', questions });
+      assert.equal(bad, undefined);
+      assert.match(errors.join('\n'), /must be the only question/);
+    }
+  });
+
+  it('allows one API-breaking question per lab, across tracks', () => {
+    const restore = BUILDERS.find((b) => b.id === 'etcd-restore')!;
+    const { build: res, errors } = buildQuickBundle({
+      id: 'bad',
+      title: 'Bad',
+      questions: [createQ(restore, [], []), troubleQ('controlplane')],
+    });
+    assert.equal(res, undefined);
+    assert.match(errors.join('\n'), /Only one control plane question/);
+
+    const def = scenarioOf(build([createQ(restore, [], [])]).build.bundle);
+    assert.deepEqual(def.solution, [{ node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 }]);
+  });
+
+  it('a builder without manifests applies nothing', () => {
+    const backup = BUILDERS.find((b) => b.id === 'etcd-backup')!;
+    const out = composeCreate(backup, defaults(backup.fields), [], []);
+    assert.doesNotMatch(out.solution[0].script, /kubectl apply -f - <<EOF/);
+    assert.doesNotMatch(out.solutionMd, /kubectl apply/);
+    assert.match(out.solution[0].script, /snapshot save/);
   });
 
   it('catalog hides fault ids unless spoilers are asked for', () => {
