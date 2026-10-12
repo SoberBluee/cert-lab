@@ -71,7 +71,10 @@ spec:
       image: busybox:1.36
       command: ["sleep", "infinity"]
 EOF
-kubectl -n "${NS}" wait --for=condition=Ready pod/client --timeout=180s`,
+if ! kubectl -n "${NS}" wait --for=condition=Ready pod/client --timeout=180s; then
+  kubectl -n "${NS}" describe pod/client >&2 || true
+  exit 1
+fi`,
     after: `kubectl -n "${NS}" scale "deployment/${APP}" --replicas=2
 # The question only makes sense if the client really is cut off.
 for _ in $(seq 1 30); do

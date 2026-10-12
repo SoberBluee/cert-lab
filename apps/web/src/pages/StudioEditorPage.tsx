@@ -7,7 +7,7 @@ import { BASES, DOMAINS } from '@cka/schema/constants';
 import { render, rollVariable, rollVars, visibleVars } from '@cka/schema/vars';
 import { studioApi, type StudioJob } from '../api';
 import { JobPanel } from '../components/JobPanel';
-import { Button, Card, DomainBadge, ErrorBanner, Markdown } from '../components/ui';
+import { Button, buttonClass, Card, DomainBadge, ErrorBanner, Markdown } from '../components/ui';
 import { useSession } from '../hooks';
 import {
   CheckEditor,
@@ -245,6 +245,9 @@ export function StudioEditorPage() {
         {isDraft && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300">draft</span>}
         {dirty && <span className="text-xs text-amber-400">unsaved changes</span>}
         <div className="ml-auto flex flex-wrap gap-2">
+          <Link to="/studio/new" className={buttonClass()} title="Build a lab with the guided form">
+            Quick Create
+          </Link>
           <Button disabled={!dirty || save.isPending} onClick={() => save.mutate(bundle)}>
             {save.isPending ? 'Saving…' : 'Save'}
           </Button>

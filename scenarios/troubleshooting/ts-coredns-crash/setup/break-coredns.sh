@@ -2,7 +2,10 @@
 set -euo pipefail
 
 kubectl run dnsutils --image=busybox:1.36 --restart=Never -- sleep infinity
-kubectl wait --for=condition=Ready pod/dnsutils --timeout=180s
+if ! kubectl wait --for=condition=Ready pod/dnsutils --timeout=180s; then
+  kubectl describe pod/dnsutils >&2 || true
+  exit 1
+fi
 
 for _ in $(seq 1 15); do
   kubectl exec dnsutils -- nslookup -timeout=3 kubernetes.default.svc.cluster.local >/dev/null 2>&1 && break

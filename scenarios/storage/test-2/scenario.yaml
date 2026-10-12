@@ -1,0 +1,258 @@
+id: test-2
+title: Test 2
+domain: storage
+difficulty: 2
+estimatedMinutes: 40
+points: 32
+tags: [ storageclass, allow-expansion, change-binding, pod, security, capabilities, troubleshooting, service, endpoints, networkpolicy, node, kubelet, containerd, pods, deployment ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q1_NAME: { oneOf: [ gold, silver, bronze ] }
+  Q1_RECLAIM: { oneOf: [ Retain, Delete ] }
+  Q1_BINDING: { oneOf: [ Immediate, WaitForFirstConsumer ] }
+  Q2_NS: { oneOf: [ apps, jobs, sandbox ] }
+  Q2_NAME: { oneOf: [ worker, logger, toolbox, frontend, backend, database, cache, queue, scheduler, monitor, gateway ] }
+  Q2_SEC_USER: { oneOf: [ 1000, 2000, 3000 ] }
+  Q2_CAPS_CAP: { oneOf: [ NET_BIND_SERVICE, NET_ADMIN, SYS_TIME ] }
+  Q3_NS: { oneOf: [ store, edge, api ] }
+  Q3_APP: { oneOf: [ web, backend, gateway ] }
+  Q3_FAULT: { oneOf: [ selector-mismatch, target-port, named-port, network-policy, not-ready ], hidden: true }
+  Q4_NS: { oneOf: [ ops, infra, platform ] }
+  Q4_FAULT: { oneOf: [ kubelet-stopped, containerd-stopped, kubelet-binary-path, cordoned, stray-taint ], hidden: true }
+  Q4_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+  Q5_NS: { oneOf: [ retail, media, portal ] }
+  Q5_APP: { oneOf: [ storefront, ledger, checkout ] }
+  Q5_FAULT: { oneOf: [ oom-killed, image-pull, bad-command, configmap-key, liveness-port, readiness-path, requests-too-large, node-selector ], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/q2.sh
+  - node: controlplane
+    script: setup/q3.sh
+    timeoutSeconds: 500
+  - node: controlplane
+    script: setup/q5.sh
+    timeoutSeconds: 400
+  - node: controlplane
+    script: setup/q4.sh
+  - node: worker-1
+    script: setup/q4-2.sh
+  - node: worker-2
+    script: setup/q4-3.sh
+  - node: controlplane
+    script: setup/q4-4.sh
+    timeoutSeconds: 300
+solution:
+  - node: worker-1
+    script: setup/q4-solution.sh
+  - node: worker-2
+    script: setup/q4-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: StorageClass ${Q1_NAME}
+    points: 5
+    checks:
+      - id: q1-provisioner
+        description: ${Q1_NAME} uses kubernetes.io/no-provisioner
+        type: kubectl
+        run: kubectl get storageclass ${Q1_NAME} -o jsonpath='{.provisioner}'
+        expect: { equals: kubernetes.io/no-provisioner }
+        weight: 1
+      - id: q1-reclaim
+        description: ${Q1_NAME} has reclaim policy ${Q1_RECLAIM}
+        type: kubectl
+        run: kubectl get storageclass ${Q1_NAME} -o jsonpath='{.reclaimPolicy}'
+        expect: { equals: "${Q1_RECLAIM}" }
+        weight: 1
+      - id: q1-expand
+        description: ${Q1_NAME} allows volume expansion
+        type: kubectl
+        run: kubectl get storageclass ${Q1_NAME} -o jsonpath='{.allowVolumeExpansion}'
+        expect: { equals: "true" }
+        weight: 1
+      - id: q1-change-binding
+        description: ${Q1_NAME} no longer binds with ${Q1_BINDING}
+        type: kubectl
+        run: kubectl get storageclass ${Q1_NAME} -o jsonpath='{.volumeBindingMode}'
+        expect: { matches: ^(Immediate|WaitForFirstConsumer)$, notContains: "${Q1_BINDING}" }
+        weight: 2
+    hints:
+      - kubectl explain storageclass lists the fields; there is no kubectl create storageclass, so write the YAML.
+      - "allowVolumeExpansion: true is a top-level field of the StorageClass."
+      - "The field cannot be edited: kubectl get storageclass ${Q1_NAME} -o yaml > sc.yaml, change it, then kubectl replace --force -f sc.yaml."
+  - id: q2
+    title: Pod ${Q2_NAME}
+    points: 7
+    checks:
+      - id: q2-running
+        description: Pod ${Q2_NAME} is Running and ready
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod ${Q2_NAME} -o jsonpath='{.status.phase}/{.status.conditions[?(@.type=="Ready")].status}'
+        expect: { equals: Running/True }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-image
+        description: main runs nginx:1.28-alpine
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod/${Q2_NAME} -o jsonpath='{.spec.containers[0].name}/{.spec.containers[0].image}'
+        expect: { equals: main/nginx:1.28-alpine }
+        weight: 1
+      - id: q2-sec-user
+        description: the container runs as uid ${Q2_SEC_USER}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec pod/${Q2_NAME} -- id -u
+        expect: { equals: "${Q2_SEC_USER}" }
+        weight: 1
+        retrySeconds: 20
+      - id: q2-sec-readonly
+        description: root filesystem is read-only and escalation is off
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod/${Q2_NAME} -o jsonpath='{.spec.containers[0].securityContext.readOnlyRootFilesystem}/{.spec.containers[0].securityContext.allowPrivilegeEscalation}'
+        expect: { equals: true/false }
+        weight: 1
+      - id: q2-caps
+        description: "capabilities: drop ALL, add ${Q2_CAPS_CAP}"
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod/${Q2_NAME} -o jsonpath='{.spec.containers[0].securityContext.capabilities.drop[*]}/{.spec.containers[0].securityContext.capabilities.add[*]}'
+        expect: { equals: "ALL/${Q2_CAPS_CAP}" }
+        weight: 2
+    hints:
+      - kubectl -n ${Q2_NS} run ${Q2_NAME} --image=nginx:1.28-alpine --dry-run=client -o yaml -- sleep 1d gives you a manifest to start from.
+      - "securityContext on the container: runAsUser, readOnlyRootFilesystem, allowPrivilegeEscalation."
+      - "securityContext.capabilities: {drop: [ALL], add: [...]} on the container (names without the CAP_ prefix)."
+  - id: q3
+    title: Service ${Q3_APP} unreachable
+    points: 6
+    checks:
+      - id: q3-reachable
+        description: client gets the nginx page from http://${Q3_APP}
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://${Q3_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q3-endpoints
+        description: Service ${Q3_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get endpointslices -l kubernetes.io/service-name=${Q3_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q3-spec-service
+        description: Service ${Q3_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get svc ${Q3_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q3_APP} 80 http" }
+        weight: 1
+      - id: q3-spec-deployment
+        description: Deployment ${Q3_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q3_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q3_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q3_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q3_NS} get networkpolicy: anything selecting the ${Q3_APP} Pods?"
+  - id: q4
+    title: Unhealthy worker
+    points: 6
+    checks:
+      - id: q4-all-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | tr '\n' ' '
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 90
+      - id: q4-schedulable
+        description: no worker is cordoned or carries a NoSchedule taint
+        type: kubectl
+        run: kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.spec.unschedulable} {range .spec.taints[*]}{.key}={.effect} {end}{"\n"}{end}' | tr ' ' '\n' | grep -vE '^$|^dedicated=' | grep -cE 'true|NoSchedule|NoExecute' || true
+        expect: { equals: "0" }
+        weight: 1
+        retrySeconds: 30
+      - id: q4-services-worker-1
+        description: kubelet and containerd are running and enabled on worker-1
+        type: ssh
+        node: worker-1
+        run: echo $(systemctl is-active kubelet containerd) $(systemctl is-enabled kubelet containerd) | tr ' ' '\n' | sort -u | tr '\n' ' '
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q4-services-worker-2
+        description: kubelet and containerd are running and enabled on worker-2
+        type: ssh
+        node: worker-2
+        run: echo $(systemctl is-active kubelet containerd) $(systemctl is-enabled kubelet containerd) | tr ' ' '\n' | sort -u | tr '\n' ' '
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q4-probe
+        description: node-probe has a ready Pod on every worker
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get daemonset node-probe -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}/{.status.updatedNumberScheduled}'
+        expect: { equals: 2/2/2 }
+        weight: 1
+        retrySeconds: 90
+    hints:
+      - "kubectl get nodes, then kubectl describe node <node>: look at Conditions, Taints and Unschedulable."
+      - kubectl -n ${Q4_NS} get pods -o wide shows which worker is missing its probe Pod.
+      - "On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50."
+      - systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.
+  - id: q5
+    title: Unhealthy Deployment ${Q5_APP}
+    points: 8
+    checks:
+      - id: q5-ready
+        description: ${Q5_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q5-stable
+        description: ${Q5_APP}'s Pods do not restart over 20 seconds
+        type: kubectl
+        run: r() { kubectl -n ${Q5_NS} get pods -l app=${Q5_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 20; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 1
+        retrySeconds: 60
+      - id: q5-serves
+        description: ${Q5_APP} serves HTTP on port 80
+        type: kubectl
+        run: kubectl -n ${Q5_NS} exec deployment/${Q5_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: nginx }
+        weight: 1
+      - id: q5-spec-resources
+        description: image, requests and limits match the spec
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        weight: 1
+      - id: q5-spec-probes
+        description: probes match the spec
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
+        expect: { equals: / 80 80 }
+        weight: 1
+      - id: q5-spec-config
+        description: APP_MODE comes from key mode of ${Q5_APP}-config, set to production
+        type: kubectl
+        run: echo "$(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q5_NS} get configmap ${Q5_APP}-config -o jsonpath='{.data.mode}')"
+        expect: { equals: "${Q5_APP}-config mode production" }
+        weight: 1
+      - id: q5-same-deployment
+        description: ${Q5_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q5.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q5_NS} get pods -l app=${Q5_APP} -o wide: what state are the Pods in, and do they restart?"
+      - "kubectl -n ${Q5_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
+      - kubectl -n ${Q5_NS} logs <pod> --previous shows why a crashed container exited.
+      - Compare kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o yaml (and the ConfigMap) against the spec, line by line.

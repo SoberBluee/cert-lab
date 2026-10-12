@@ -72,5 +72,20 @@ if [[ "$ROLE" == "controlplane" ]]; then
   kubeadm config images pull --kubernetes-version "$(kubeadm version -o short)"
 fi
 
+# Scenario images, baked into the snapshots so sessions never depend on Docker Hub.
+LAB_IMAGES=(
+  nginx:1.26-alpine nginx:1.27-alpine nginx:1.28-alpine httpd:2.4-alpine
+  busybox:1.36 busybox:1.36.1 busybox:1.37 alpine:3.20 alpine:3.21
+  registry.k8s.io/pause:3.10
+)
+echo "==> [$NODE_NAME] pre-pulling lab images"
+for img in "${LAB_IMAGES[@]}"; do
+  for attempt in 1 2 3 4 5; do
+    crictl pull "$img" >/dev/null && break
+    [[ $attempt == 5 ]] && { echo "could not pull $img" >&2; exit 1; }
+    sleep $((attempt * 5))
+  done
+done
+
 apt-get clean
 echo "==> [$NODE_NAME] node prep done ($(kubeadm version -o short))"
