@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -121,7 +121,7 @@ function runWithStubs(bundle: ScenarioBundle, vars: Record<string, string>): str
   for (const s of STUBS) {
     const body =
       s === 'kubectl'
-        ? `#!/usr/bin/env bash\nif [[ " $* " == *" -f - "* ]]; then cat > "$(mktemp ${dir}/applied/XXXXXX)"; fi\nexit 0\n`
+        ? `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${dir}/kubectl-args\nif [[ " $* " == *" -f - "* ]]; then cat > "$(mktemp ${dir}/applied/XXXXXX)"; fi\nexit 0\n`
         : '#!/usr/bin/env bash\nexit 0\n';
     writeFileSync(join(bin, s), body, { mode: 0o755 });
   }
@@ -132,6 +132,9 @@ function runWithStubs(bundle: ScenarioBundle, vars: Record<string, string>): str
     const stderr = r.stderr.toString();
     assert.doesNotMatch(stderr, /unbound variable|syntax error|command not found/, `${f.path}: ${stderr}`);
   }
+  const args = existsSync(join(dir, 'kubectl-args')) ? readFileSync(join(dir, 'kubectl-args'), 'utf8') : '';
+  const literal = args.split('\n').find((line) => /\$\{\w+\}/.test(line));
+  assert.equal(literal, undefined, `kubectl got an unexpanded variable: ${literal}`);
   const applied = execFileSync('bash', ['-c', `for f in ${dir}/applied/*; do [ -e "$f" ] || continue; cat "$f"; printf '\\0'; done`]).toString();
   return applied.split('\0').filter((s) => s.trim());
 }
@@ -434,7 +437,8 @@ describe('Quick Create', () => {
   it('combines both tracks into one lab', () => {
     // The control plane category is the lab's one API-breaking question.
     const combinable = BUILDERS.filter((b) => !b.solo && !b.breaksApi);
-    const qs = [...combinable.map((b, i) => createQ(b, [], [], i % 2 === 1)), ...CATEGORIES.map((c) => troubleQ(c.id))];
+    const categories = CATEGORIES.filter((c) => !c.breaksApi || c.id === 'controlplane');
+    const qs = [...combinable.map((b, i) => createQ(b, [], [], i % 2 === 1)), ...categories.map((c) => troubleQ(c.id))];
     const { build: res, issues } = build(qs);
     assert.deepEqual(issues, []);
     const def = scenarioOf(res.bundle);

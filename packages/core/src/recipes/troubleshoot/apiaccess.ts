@@ -1,0 +1,176 @@
+import { createNs, nsField } from '../types';
+import { apiDown, CP_PODS, cpPods, edit, M, scaleUp, waitHealthy } from './controlplane';
+import type { FaultCategory } from './types';
+
+const APISERVER = `${M}/kube-apiserver.yaml`;
+const USER_KUBECONFIGS = ['/root/.kube/config', '/home/ubuntu/.kube/config'];
+const PKI = '/etc/kubernetes/pki';
+
+const userReadyz = `for f in ${USER_KUBECONFIGS.join(' ')}; do kubectl --kubeconfig "$f" get --raw /readyz 2>/dev/null || echo fail; echo; done | xargs`;
+
+const userKubectlDown = `for _ in $(seq 1 30); do
+  [[ "$(${userReadyz})" == "fail fail" ]] && exit 0
+  sleep 2
+done
+echo "kubectl still works with the user kubeconfigs" >&2
+exit 1`;
+
+const setCa = (crt: string) => `for f in ${USER_KUBECONFIGS.join(' ')}; do
+  kubectl config --kubeconfig "$f" set clusters.kubernetes.certificate-authority-data "$(base64 -w0 ${PKI}/${crt})" >/dev/null
+done`;
+
+const serverPort = (from: number, to: number) =>
+  USER_KUBECONFIGS.map((f) => edit(f, `s#^([[:space:]]*server: https://[^[:space:]]+):${from}$#\\1:${to}#`, `server: https://[^[:space:]]+:${to}$`)).join('\n');
+
+export const apiAccessCategory: FaultCategory = {
+  id: 'apiaccess',
+  name: 'API access',
+  description: 'kubectl on the controlplane stopped working after a certificate and configuration change: the API server or the client side is broken.',
+  track: 'cluster',
+  domain: 'troubleshooting',
+  difficulty: 3,
+  minutes: 12,
+  points: 8,
+  tags: ['troubleshooting', 'kubeconfig', 'kube-apiserver', 'static-pod', 'certificates'],
+  disruptive: true,
+  breaksApi: true,
+  settleSeconds: 60,
+  fields: [nsField(['ops', 'core', 'mgmt'])],
+  shell: ({ NS }) => ({
+    title: 'kubectl stopped working',
+    text: `After a certificate and configuration change on \`controlplane\`, \`kubectl\` there fails for both \`root\` and \`ubuntu\`. Deployment \`web\` in namespace \`${NS}\` should run \`2\` ready replicas.
+
+Find the problem and fix it so that:
+
+- the API server answers on port \`6443\`, and \`etcd\`, \`kube-apiserver\`, \`kube-controller-manager\` and \`kube-scheduler\` run Ready on \`controlplane\`
+- \`kubectl\` works with \`/root/.kube/config\` and with \`/home/ubuntu/.kube/config\`, as the cluster admin
+- \`web\` runs \`2\` ready replicas
+- \`${M}\` holds only the four control plane manifests
+
+Do not change the Deployment, and do not regenerate any certificate.`,
+    before: `${createNs(NS)}
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: ${NS}
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27-alpine
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+EOF`,
+    checks: [
+      {
+        id: 'api-ready',
+        description: 'the API server reports ready',
+        type: 'kubectl',
+        run: 'kubectl get --raw /readyz',
+        expect: { equals: 'ok' },
+        weight: 2,
+        retrySeconds: 120,
+      },
+      {
+        id: 'user-kubectl',
+        description: 'kubectl works with /root/.kube/config and /home/ubuntu/.kube/config',
+        type: 'kubectl',
+        run: userReadyz,
+        expect: { equals: 'ok ok' },
+        weight: 2,
+        retrySeconds: 60,
+      },
+      {
+        id: 'components',
+        description: 'node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready',
+        type: 'kubectl',
+        run: cpPods,
+        expect: { equals: CP_PODS },
+        weight: 2,
+        retrySeconds: 120,
+      },
+      {
+        id: 'web-ready',
+        description: 'web runs 2 ready replicas',
+        type: 'kubectl',
+        run: `kubectl -n ${NS} get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'`,
+        expect: { equals: '2/2' },
+        weight: 1,
+        retrySeconds: 120,
+      },
+      {
+        id: 'manifests',
+        description: `${M} holds only the four control plane manifests`,
+        type: 'ssh',
+        node: 'controlplane',
+        run: `ls ${M} | sort | xargs`,
+        expect: { equals: 'etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml' },
+        weight: 1,
+      },
+    ],
+    hints: [
+      'Read the exact kubectl error: "connection refused", "x509: certificate signed by unknown authority" and a hang point at different places.',
+      'Is the API server up at all? curl -k https://127.0.0.1:6443/readyz, ss -ltnp | grep 6443, and crictl ps -a | grep kube-apiserver (as root).',
+      `If the kube-apiserver container is missing or keeps exiting: crictl logs <container-id>, journalctl -u kubelet | grep -i apiserver, and compare the flags in ${APISERVER} with the files in ${PKI}.`,
+      `If the API server is healthy, the kubeconfig is wrong: compare the server and certificate-authority-data in ~/.kube/config with /etc/kubernetes/admin.conf (kubectl config view --raw).`,
+    ],
+  }),
+  faults: ({ NS }) => [
+    {
+      id: 'kubeconfig-server-port',
+      label: 'User kubeconfigs point at the wrong port',
+      break: `${scaleUp(NS)}\n${serverPort(6443, 6433)}`,
+      settle: userKubectlDown,
+      fix: serverPort(6433, 6443),
+      wait: waitHealthy(NS),
+      explain: `\`server:\` in \`/root/.kube/config\` and \`/home/ubuntu/.kube/config\` uses port \`6433\` instead of \`6443\`, so kubectl gets \`connection refused\` even though the API server is healthy (\`curl -k https://127.0.0.1:6443/readyz\` answers \`ok\`). Fix the port in both files, or copy \`/etc/kubernetes/admin.conf\` over them.`,
+    },
+    {
+      id: 'kubeconfig-wrong-ca',
+      label: 'User kubeconfigs trust the wrong CA',
+      break: `${scaleUp(NS)}\n${setCa('front-proxy-ca.crt')}`,
+      settle: userKubectlDown,
+      fix: setCa('ca.crt'),
+      wait: waitHealthy(NS),
+      explain: `\`certificate-authority-data\` in both user kubeconfigs holds the front-proxy CA (\`${PKI}/front-proxy-ca.crt\`) instead of the cluster CA, so kubectl rejects the API server's certificate: \`x509: certificate signed by unknown authority\`. Put \`${PKI}/ca.crt\` back (\`kubectl config set clusters.kubernetes.certificate-authority-data $(base64 -w0 ${PKI}/ca.crt)\`), or copy \`/etc/kubernetes/admin.conf\` over them.`,
+    },
+    {
+      id: 'apiserver-client-ca',
+      label: 'API server client CA file path is wrong',
+      break: `${scaleUp(NS)}
+${edit(APISERVER, `s#^([[:space:]]*- --client-ca-file=${PKI}/ca)\\.crt$#\\1.cert#`, `- --client-ca-file=${PKI}/ca.cert$`)}`,
+      settle: apiDown,
+      fix: edit(APISERVER, `s#^([[:space:]]*- --client-ca-file=${PKI}/ca)\\.cert$#\\1.crt#`, `- --client-ca-file=${PKI}/ca.crt$`),
+      wait: waitHealthy(NS),
+      explain: `\`--client-ca-file\` in \`${APISERVER}\` points at \`${PKI}/ca.cert\`, which does not exist, so the API server exits at startup and kubectl gets \`connection refused\`. \`crictl logs\` of the last kube-apiserver container shows the missing file; \`ls ${PKI}\` shows \`ca.crt\`.`,
+    },
+    {
+      id: 'apiserver-secure-port',
+      label: 'API server listens on the wrong port',
+      break: `${scaleUp(NS)}
+${edit(APISERVER, 's#^([[:space:]]*- --secure-port=)6443$#\\16444#', '- --secure-port=6444$')}`,
+      settle: apiDown,
+      fix: edit(APISERVER, 's#^([[:space:]]*- --secure-port=)6444$#\\16443#', '- --secure-port=6443$'),
+      wait: waitHealthy(NS),
+      explain: `\`--secure-port\` in \`${APISERVER}\` is \`6444\`, so nothing answers on \`6443\`: kubectl, the kubelets and the other components get \`connection refused\`, and the API server's own probes (which target the \`probe-port\`, 6443) fail until the kubelet restarts it. \`ss -ltnp\` shows it listening on 6444. Set the port back to \`6443\`.`,
+    },
+    {
+      id: 'apiserver-manifest-yaml',
+      label: 'API server manifest is not valid YAML',
+      break: `${scaleUp(NS)}
+${edit(APISERVER, 's#^    image: (registry\\.k8s\\.io/kube-apiserver:)#   image: \\1#', '^   image: registry.k8s.io/kube-apiserver:')}`,
+      settle: apiDown,
+      fix: edit(APISERVER, 's#^   image: (registry\\.k8s\\.io/kube-apiserver:)#    image: \\1#', '^    image: registry.k8s.io/kube-apiserver:'),
+      wait: waitHealthy(NS),
+      explain: `The \`image:\` line in \`${APISERVER}\` is indented by three spaces instead of four, which makes the file invalid YAML. The kubelet cannot parse the manifest, so it drops the kube-apiserver static pod: no container at all in \`crictl ps -a\`, and \`journalctl -u kubelet\` reports the manifest it could not decode. Fix the indentation.`,
+    },
+  ],
+};

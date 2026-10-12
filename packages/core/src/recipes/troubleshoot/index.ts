@@ -1,9 +1,15 @@
 import type { CategorySummary } from '@cka/schema';
+import { apiAccessCategory } from './apiaccess';
 import { controlPlaneCategory } from './controlplane';
+import { cronJobsCategory } from './cronjobs';
 import { dnsCategory } from './dns';
 import { ingressCategory } from './ingress';
+import { netpolCategory } from './netpol';
+import { nodeConfigCategory } from './nodeconfig';
 import { nodesCategory } from './nodes';
+import { podConfigCategory } from './podconfig';
 import { podsCategory } from './pods';
+import { rbacCategory } from './rbac';
 import { schedulingCategory } from './scheduling';
 import { servicesCategory } from './services';
 import { storageCategory } from './storage';
@@ -14,13 +20,19 @@ export type { Fault, FaultCategory, Shell } from './types';
 
 export const CATEGORIES: FaultCategory[] = [
   podsCategory,
+  podConfigCategory,
   schedulingCategory,
+  cronJobsCategory,
+  rbacCategory,
   servicesCategory,
+  netpolCategory,
   dnsCategory,
   ingressCategory,
   nodesCategory,
   storageCategory,
+  nodeConfigCategory,
   controlPlaneCategory,
+  apiAccessCategory,
 ];
 
 export const getCategory = (id: string): FaultCategory | undefined => CATEGORIES.find((c) => c.id === id);

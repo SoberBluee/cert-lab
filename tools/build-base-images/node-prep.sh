@@ -63,8 +63,8 @@ if [[ -z "$PKG_VERSION" ]]; then
   exit 1
 fi
 apt-get install -y -q --allow-change-held-packages \
-  "kubelet=$PKG_VERSION" "kubeadm=$PKG_VERSION" "kubectl=$PKG_VERSION"
-apt-mark hold kubelet kubeadm kubectl
+  "kubelet=$PKG_VERSION" "kubeadm=$PKG_VERSION" "kubectl=$PKG_VERSION" cri-tools
+apt-mark hold kubelet kubeadm kubectl cri-tools
 systemctl enable kubelet
 
 if [[ "$ROLE" == "controlplane" ]]; then

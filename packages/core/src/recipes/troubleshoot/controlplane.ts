@@ -2,20 +2,23 @@ import { createNs, nsField } from '../types';
 import { waitNotReady, waitReady } from './nodes';
 import type { FaultCategory } from './types';
 
-const M = '/etc/kubernetes/manifests';
+export const M = '/etc/kubernetes/manifests';
 const KUBELET_CONF = '/etc/kubernetes/kubelet.conf';
 
 /** Answers without kubectl, so it works while the API server is down. */
 export const readyz = `curl -sk --max-time 3 https://127.0.0.1:6443/readyz 2>/dev/null || true`;
 
-const apiDown = `for _ in $(seq 1 90); do
+export const apiDown = `for _ in $(seq 1 90); do
   [[ "$(${readyz})" != ok ]] && exit 0
   sleep 2
 done
 echo "the API server is still healthy" >&2
 exit 1`;
 
-export const CP_PODS = ['controlplane=True', ...['etcd', 'kube-apiserver', 'kube-controller-manager', 'kube-scheduler'].map((c) => `${c}-controlplane=True`)].join(' ');
+export const CP_PODS = [
+  'controlplane=True',
+  ...['etcd', 'kube-apiserver', 'kube-controller-manager', 'kube-scheduler'].map((c) => `${c}-controlplane=True`),
+].join(' ');
 
 /**
  * Static Pods keep their last reported status when the kubelet stops, so they only count while
@@ -24,7 +27,7 @@ export const CP_PODS = ['controlplane=True', ...['etcd', 'kube-apiserver', 'kube
 export const cpPods = `{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type=="Ready")].status}{"\\n"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\\n"}{end}' | sort; } | xargs`;
 
 /** A restarted API server can sit in CrashLoopBackOff for a few minutes, hence the long waits. */
-const waitHealthy = (ns: string) => `for _ in $(seq 1 240); do
+export const waitHealthy = (ns: string) => `for _ in $(seq 1 240); do
   [[ "$(${readyz})" == ok ]] && break
   sleep 2
 done
@@ -45,11 +48,11 @@ done
 [[ "$(${podReady(component)})" != True ]] || { echo "${component} is still Ready" >&2; exit 1; }
 sleep 5`;
 
-const scaleUp = (ns: string) => `kubectl -n "${ns}" scale deployment/web --replicas=2
+export const scaleUp = (ns: string) => `kubectl -n "${ns}" scale deployment/web --replicas=2
 kubectl -n "${ns}" rollout status deployment/web --timeout=240s`;
 
 /** `sed -E` over a file, then proof that it changed. */
-const edit = (file: string, expr: string, proof: string) => `sed -i -E '${expr}' ${file}
+export const edit = (file: string, expr: string, proof: string) => `sed -i -E '${expr}' ${file}
 grep -qE -- '${proof}' ${file} || { echo "could not modify ${file}" >&2; exit 1; }`;
 
 const waitPending = (ns: string) => `sleep 15

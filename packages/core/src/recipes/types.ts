@@ -101,6 +101,9 @@ export const numberField = (key: string, label: string, pool: string[], min: num
 export const createNs = (ns: string) => `kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 timeout 60 bash -c "until kubectl -n '${ns}' get serviceaccount default >/dev/null 2>&1; do sleep 1; done"`;
 
+/** Single-quotes a shell argument, e.g. a JSON patch, while keeping `${VAR}` references expandable. */
+export const sq = (s: string) => `'${s.replace(/\$\{[A-Za-z0-9_]+\}/g, (ref) => `'"${ref}"'`)}'`;
+
 /** First setup step of questions that need Traefik and the Gateway API, which older cluster images lack. */
 export const requireIngress = `kubectl get ingressclass traefik >/dev/null 2>&1 && kubectl get gatewayclass traefik >/dev/null 2>&1 || {
   echo "this cluster image has no Traefik or Gateway API: rebuild images with ./cka images build --force" >&2
