@@ -6,10 +6,12 @@ import {
   createScenario,
   dataDir,
   dryRun,
+  lintLessons,
   lintScenarios,
   logFile,
   readImagesMeta,
   repoRoot,
+  runAsLearner,
   selectDriverName,
   verify,
   type Orchestrator,
@@ -281,15 +283,90 @@ program
   .description('validate every scenario against the schema and check referenced scripts')
   .action(
     action(() => {
-      const { issues, scenarioCount } = lintScenarios();
+      const { issues: scenarioIssues, scenarioCount } = lintScenarios();
+      const { issues: lessonIssues, lessonCount } = lintLessons();
+      const issues = [...scenarioIssues, ...lessonIssues];
       for (const i of issues) {
         const tag = i.level === 'error' ? c.red('error  ') : c.yellow('warning');
         console.log(`${tag} ${i.where}: ${i.message}`);
       }
       const errors = issues.filter((i) => i.level === 'error').length;
       const warnings = issues.length - errors;
-      console.log(`\n${scenarioCount} scenarios, ${errors} errors, ${warnings} warnings`);
+      console.log(`\n${scenarioCount} scenarios, ${lessonCount} lessons, ${errors} errors, ${warnings} warnings`);
       return errors ? 1 : 0;
+    }),
+  );
+
+const learn = program.command('learn').description('guided lessons: list, start, or verify that a lesson completes');
+
+learn
+  .command('list')
+  .description('list lessons')
+  .action(
+    action(() => {
+      for (const l of o().lessons.list()) {
+        console.log(
+          `${l.def.topic.padEnd(13)} ${l.def.id.padEnd(16)} ${l.def.title} ${c.dim(`(${l.def.steps.length} steps, ~${l.def.estimatedMinutes} min)`)}`,
+        );
+      }
+      for (const e of o().lessons.errors) console.log(c.red(`invalid: ${e.file} (run ./cka lint)`));
+    }),
+  );
+
+learn
+  .command('start <id>')
+  .description('start a lesson; follow its steps in the web UI (Learn)')
+  .action(
+    action(async (id: string) => {
+      const { ready } = await o().sessions.startLesson(id);
+      const view = await awaitReady(ready);
+      view.lesson?.steps.forEach((s, i) => console.log(`${String(i + 1).padStart(2)}. ${s.title}\n    ${c.cyan(s.command.trim().split('\n').join('\n    '))}`));
+      printConnection(view.connection);
+      console.log(c.dim('\nOpen the web UI to see steps turn green as you run them.'));
+    }),
+  );
+
+learn
+  .command('verify <id>')
+  .description("start a lesson, run each step's reference command as the learner, and check that every step completes")
+  .option('--keep', 'leave the lab running afterwards')
+  .action(
+    action(async (id: string, opts: { keep?: boolean }) => {
+      const lesson = o().lessons.get(id);
+      if (!lesson) fail(`Unknown lesson "${id}".`);
+      const { view: started, ready } = await o().sessions.startLesson(id);
+      await awaitReady(ready);
+      const progress = () => o().store.getSession(started.id)?.learnProgress;
+      let failed = 0;
+      for (const [i, step] of lesson.def.steps.entries()) {
+        const t0 = Date.now();
+        const deadline = t0 + ((step.check?.retrySeconds ?? 0) + 150) * 1000;
+        let r = await runAsLearner(o().driver, started.id, step.node, step.command);
+        let lastRun = Date.now();
+        while (!progress()?.steps[i]?.done && Date.now() < deadline) {
+          await new Promise((res) => setTimeout(res, 1000));
+          if (Date.now() - lastRun > 15_000) {
+            r = await runAsLearner(o().driver, started.id, step.node, step.command);
+            lastRun = Date.now();
+          }
+        }
+        const p = progress()?.steps[i];
+        const secs = `${Math.round((Date.now() - t0) / 1000)}s`;
+        if (p?.done) {
+          console.log(`${c.green('DONE')} ${String(i + 1).padStart(2)}. ${step.title} ${c.dim(secs)}`);
+        } else {
+          failed++;
+          console.log(`${c.red('FAIL')} ${String(i + 1).padStart(2)}. ${step.title} ${c.dim(secs)}`);
+          console.log(c.dim(`       exit ${r.exitCode}: ${(r.stderr || r.stdout).trim().split('\n').slice(-3).join(' | ')}`));
+          if (p?.failure) console.log(c.dim(`       ${p.failure}`));
+          await o().sessions.skipLearnStep();
+        }
+      }
+      console.log(
+        failed ? c.red(`\n${failed} of ${lesson.def.steps.length} steps did not complete`) : c.green(`\nAll ${lesson.def.steps.length} steps completed`),
+      );
+      if (!opts.keep) await o().sessions.end();
+      return failed ? 1 : 0;
     }),
   );
 

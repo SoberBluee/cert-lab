@@ -10,6 +10,7 @@ import { SessionPage } from './pages/SessionPage';
 
 const StudioPage = lazy(() => import('./pages/StudioPage').then((m) => ({ default: m.StudioPage })));
 const QuickCreatePage = lazy(() => import('./pages/QuickCreatePage').then((m) => ({ default: m.QuickCreatePage })));
+const LearnPage = lazy(() => import('./pages/LearnPage').then((m) => ({ default: m.LearnPage })));
 const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage').then((m) => ({ default: m.PlaygroundPage })));
 const StudioEditorPage = lazy(() => import('./pages/StudioEditorPage').then((m) => ({ default: m.StudioEditorPage })));
 
@@ -76,6 +77,9 @@ export function App() {
                 )}
               </span>
             </NavLink>
+            <NavLink to="/learn" className={navClass}>
+              Learn
+            </NavLink>
             <NavLink to="/playground" className={navClass}>
               Playground
             </NavLink>
@@ -101,6 +105,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<BrowserPage />} />
             <Route path="/session" element={<SessionPage />} />
+            <Route path="/learn" element={<LearnPage />} />
             <Route path="/playground" element={<PlaygroundPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/studio" element={<StudioPage />} />

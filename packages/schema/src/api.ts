@@ -1,8 +1,9 @@
 import type { ConnectionInfo } from './driver';
+import type { LessonTopic } from './lesson';
 import type { Base, Domain } from './scenario';
 
 export type SessionState = 'provisioning' | 'running' | 'grading' | 'completed' | 'failed';
-export type Mode = 'practice' | 'drill' | 'mock' | 'dry-run' | 'verify' | 'playground';
+export type Mode = 'practice' | 'drill' | 'mock' | 'dry-run' | 'verify' | 'playground' | 'learn';
 
 export interface ScenarioStats {
   attempts: number;
@@ -109,6 +110,54 @@ export interface SessionView {
   lastGrade?: GradeResult;
   /** Task whose deferred setup is running. */
   preparingTask?: string;
+  /** Learn mode: the lesson's steps. */
+  lesson?: LessonView;
+  /** Learn mode: progress through the lesson's steps. */
+  learn?: LearnProgress;
+}
+
+export interface LessonStepView {
+  id: string;
+  title: string;
+  explain: string;
+  command: string;
+  node: string;
+  hint?: string;
+}
+
+export interface LessonView {
+  id: string;
+  title: string;
+  summary: string;
+  topic: LessonTopic;
+  steps: LessonStepView[];
+}
+
+export interface LessonSummary {
+  id: string;
+  title: string;
+  summary: string;
+  topic: LessonTopic;
+  estimatedMinutes: number;
+  stepCount: number;
+}
+
+export interface LearnStepProgress {
+  id: string;
+  done: boolean;
+  skipped?: boolean;
+  doneAt?: string;
+  /** The learner's command that completed the step, or the last one that matched it. */
+  lastCommand?: string;
+  /** Why the last matching command did not complete the step. */
+  failure?: string;
+}
+
+export interface LearnProgress {
+  /** Index of the step to do next; equals the step count when the lesson is complete. */
+  current: number;
+  steps: LearnStepProgress[];
+  completedAt?: string;
 }
 
 export interface AttemptRecord {

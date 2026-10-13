@@ -15,6 +15,8 @@ import {
 import { ADMIN_KUBECONFIG, runChecks, type GradeOptions } from './grader';
 import { runBatched } from './steps';
 import { renderScenario, rollScenarioVars } from './vars';
+import { initialProgress, LearnWatcher } from './learn';
+import { LEARN_PREFIX, lessonScenario, toLessonView, type LessonLibrary } from './lessons';
 import type { Logger } from './logger';
 import { PLAYGROUND, PLAYGROUND_ID } from './playground';
 import type { LoadedScenario, ScenarioLibrary } from './scenarios';
@@ -62,13 +64,23 @@ export class SessionManager extends EventEmitter {
     private readonly store: Store,
     private readonly library: ScenarioLibrary,
     private readonly log: Logger,
+    private readonly lessons?: LessonLibrary,
   ) {
     super();
     this.setMaxListeners(100);
   }
 
   private lookup(id: string): LoadedScenario | undefined {
-    return id === PLAYGROUND_ID ? PLAYGROUND : this.library.get(id);
+    if (id === PLAYGROUND_ID) return PLAYGROUND;
+    if (id.startsWith(LEARN_PREFIX)) {
+      const lesson = this.lessonFor(id);
+      return lesson && lessonScenario(lesson);
+    }
+    return this.library.get(id);
+  }
+
+  private lessonFor(scenarioId: string) {
+    return scenarioId.startsWith(LEARN_PREFIX) ? this.lessons?.get(scenarioId.slice(LEARN_PREFIX.length)) : undefined;
   }
 
   toView(row: SessionRow): SessionView {
@@ -111,7 +123,13 @@ export class SessionManager extends EventEmitter {
       solution: row.solutionViewed ? s?.solutionMd : undefined,
       lastGrade: row.lastGrade,
       preparingTask: row.preparingTask,
+      ...(row.mode === 'learn' ? this.learnView(row) : {}),
     };
+  }
+
+  private learnView(row: SessionRow): Pick<SessionView, 'lesson' | 'learn'> {
+    const lesson = this.lessonFor(row.scenarioId);
+    return lesson ? { lesson: toLessonView(lesson), learn: row.learnProgress ?? initialProgress(lesson) } : {};
   }
 
   /** The open session (running, provisioning, grading or failed), or null. */
@@ -130,6 +148,7 @@ export class SessionManager extends EventEmitter {
   private requireTasks(): SessionRow {
     const row = this.requireOpen();
     if (row.mode === 'playground') throw new OrchestratorError('The playground has no tasks.', 409);
+    if (row.mode === 'learn') throw new OrchestratorError('A lesson has steps, not tasks.', 409);
     return row;
   }
 
@@ -163,12 +182,21 @@ export class SessionManager extends EventEmitter {
     return this.start(PLAYGROUND_ID, 'playground');
   }
 
+  /** Starts a guided lesson on the cluster image. */
+  startLesson(lessonId: string): Promise<StartResult> {
+    if (!this.lessons?.get(lessonId)) throw new OrchestratorError(`Unknown lesson "${lessonId}".`, 404);
+    return this.start(LEARN_PREFIX + lessonId, 'learn');
+  }
+
   async start(scenarioId: string, mode: Mode = 'practice', opts: { vars?: Vars } = {}): Promise<StartResult> {
     if ((scenarioId === PLAYGROUND_ID) !== (mode === 'playground')) {
       throw new OrchestratorError('The playground can only be started as a playground.', 400);
     }
+    if (scenarioId.startsWith(LEARN_PREFIX) !== (mode === 'learn')) {
+      throw new OrchestratorError('Lessons can only be started in learn mode.', 400);
+    }
     const scenario = this.lookup(scenarioId);
-    if (!scenario) throw new OrchestratorError(`Unknown scenario "${scenarioId}".`, 404);
+    if (!scenario) throw new OrchestratorError(`Unknown ${mode === 'learn' ? 'lesson' : 'scenario'} "${scenarioId.replace(LEARN_PREFIX, '')}".`, 404);
     let vars: Vars;
     try {
       vars = rollScenarioVars(scenario, opts.vars);
@@ -194,7 +222,8 @@ export class SessionManager extends EventEmitter {
   private async provision(id: string, s: LoadedScenario, vars: Vars, mode: Mode): Promise<SessionView> {
     const t0 = Date.now();
     try {
-      this.store.updateSession(id, { tasksReady: [], preparingTask: undefined });
+      const lesson = this.lessonFor(s.def.id);
+      this.store.updateSession(id, { tasksReady: [], preparingTask: undefined, learnProgress: lesson && initialProgress(lesson) });
       this.progress(id, `Preparing "${s.def.title}" on the ${s.def.base} base`);
       await this.driver.createSession(s.def.nodes, s.def.base, {
         sessionId: id,
@@ -208,6 +237,7 @@ export class SessionManager extends EventEmitter {
       if (this.stillProvisioning(id)) {
         this.store.updateSession(id, { state: 'running', readyAt: now(), connection, tasksReady: atStart.map((t) => t.id) });
         this.progress(id, `Lab ready in ${Math.round((Date.now() - t0) / 1000)}s`);
+        if (mode === 'learn') this.watchLesson(id);
       }
     } catch (e) {
       const message = (e as Error).message;
@@ -252,6 +282,7 @@ export class SessionManager extends EventEmitter {
     }
     if (row.mode === 'mock' && row.state !== 'failed') throw new OrchestratorError('An exam cannot be reset.', 409);
     const s = this.scenarioFor(row);
+    this.stopWatching();
     this.finalizeAttempt(row);
     const attemptId = this.store.createAttempt({
       scenarioId: row.scenarioId,
@@ -453,6 +484,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private close(row: SessionRow) {
+    if (this.watcher?.sessionId === row.id) this.stopWatching();
     this.finalizeAttempt(row);
     this.store.updateSession(row.id, { state: 'completed', endedAt: now() });
     this.log.info({ sessionId: row.id }, 'session ended');
@@ -482,7 +514,10 @@ export class SessionManager extends EventEmitter {
         : row.state === 'running' && row.preparingTask
           ? `setting up ${row.preparingTask}`
           : undefined;
-    if (!interrupted) return;
+    if (!interrupted) {
+      if (row.state === 'running' && row.mode === 'learn') this.watchLesson(row.id);
+      return;
+    }
     this.store.updateSession(row.id, {
       state: 'failed',
       preparingTask: undefined,
@@ -494,6 +529,49 @@ export class SessionManager extends EventEmitter {
     } catch (e) {
       this.log.warn({ err: e }, 'failed to stop VMs of leaked session');
     }
+  }
+
+  private watcher?: LearnWatcher;
+
+  /** Follows the learner's commands in a running lesson. One lesson is watched per process. */
+  watchLesson(id: string, intervalMs?: number): LearnWatcher | undefined {
+    const row = this.store.getSession(id);
+    const lesson = row && this.lessonFor(row.scenarioId);
+    if (!lesson) return undefined;
+    this.stopWatching();
+    this.watcher = new LearnWatcher(
+      {
+        driver: this.driver,
+        log: this.log,
+        isRunning: (sid) => this.store.getSession(sid)?.state === 'running',
+        getProgress: (sid) => this.store.getSession(sid)?.learnProgress,
+        saveProgress: (sid, learnProgress) => {
+          this.store.updateSession(sid, { learnProgress });
+          this.emitChange(sid);
+        },
+      },
+      id,
+      lesson,
+      intervalMs,
+    );
+    this.watcher.start();
+    return this.watcher;
+  }
+
+  private stopWatching() {
+    this.watcher?.stop();
+    this.watcher = undefined;
+  }
+
+  /** Learn mode: marks the current step skipped. */
+  async skipLearnStep(): Promise<SessionView> {
+    const row = this.requireOpen();
+    if (row.mode !== 'learn') throw new OrchestratorError('Only a lesson has steps to skip.', 409);
+    if (row.state !== 'running') throw new OrchestratorError(`Cannot skip a step while the lab is ${row.state}.`, 409);
+    const watcher = this.watcher?.sessionId === row.id ? this.watcher : this.watchLesson(row.id);
+    if (!watcher) throw new OrchestratorError(`Lesson "${row.scenarioId.replace(LEARN_PREFIX, '')}" no longer exists on disk.`, 404);
+    await watcher.skip();
+    return this.toView(this.store.getSession(row.id)!);
   }
 
   /** Polls the database so changes made by another process (e.g. the CLI) reach SSE clients. */

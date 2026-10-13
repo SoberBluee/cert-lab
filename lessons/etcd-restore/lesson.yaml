@@ -1,0 +1,86 @@
+id: etcd-restore
+title: Restore etcd from a snapshot
+summary: Take a snapshot, change the cluster, restore the snapshot into a new data directory and point the etcd static Pod at it.
+topic: etcd
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    run: |
+      install -d -m 755 /opt/backups
+      rm -rf /opt/backups/before.db /var/lib/etcd-restore
+      command -v etcdutl >/dev/null || install -m 755 "/proc/$(pgrep -xo etcd)/root/usr/local/bin/etcdutl" /usr/local/bin/etcdutl
+      kubectl delete deployment after-backup --ignore-not-found
+steps:
+  - id: save
+    title: Take a snapshot to /opt/backups/before.db
+    explain: |
+      The endpoint and TLS flags come from `/etc/kubernetes/manifests/etcd.yaml`.
+    command: sudo ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/backups/before.db
+    match: '^etcdctl\b.*snapshot save\s+/opt/backups/before\.db'
+    check:
+      id: snapshot-valid
+      description: /opt/backups/before.db is a valid etcd snapshot
+      type: ssh
+      node: controlplane
+      run: ETCDCTL_API=3 etcdctl snapshot status /opt/backups/before.db -w json 2>/dev/null | jq -r '.totalKey > 0'
+      expect: { equals: 'true' }
+  - id: change
+    title: Change the cluster after the backup
+    explain: |
+      This Deployment is not in the snapshot, so it disappears once the snapshot is restored.
+    command: kubectl create deployment after-backup --image=nginx
+    match: '^kubectl create deploy(ment)?\s+after-backup\b'
+  - id: restore
+    title: Restore the snapshot into a new data directory
+    explain: |
+      `etcdutl snapshot restore` writes a fresh etcd data directory from the file. It never touches the running etcd, and `--data-dir` must not exist yet. It reads the file only, so no endpoint or certificates are needed.
+
+      Use `etcdutl`, not `etcdctl`: restoring with `etcdctl` is deprecated, and on this cluster the node's older etcdctl writes a directory that etcd cannot start from.
+    command: sudo etcdutl snapshot restore /opt/backups/before.db --data-dir /var/lib/etcd-restore
+    match: '^etcdutl\b(?=.*snapshot restore\s+/opt/backups/before\.db)(?=.*--data-dir[= ]/var/lib/etcd-restore/?(\s|$))'
+    check:
+      id: restored
+      description: /var/lib/etcd-restore holds a restored etcd member
+      type: ssh
+      node: controlplane
+      run: test -d /var/lib/etcd-restore/member && echo restored || echo missing
+      expect: { equals: restored }
+  - id: point-manifest
+    title: Point the etcd Pod at the restored directory
+    explain: |
+      In `/etc/kubernetes/manifests/etcd.yaml`, change the `etcd-data` volume's `hostPath.path` from `/var/lib/etcd` to `/var/lib/etcd-restore`. The container still sees it as `/var/lib/etcd`, so `--data-dir` can stay. Editing with vim works as well as sed. The kubelet restarts etcd when the file changes.
+    command: |-
+      sudo sed -i 's#path: /var/lib/etcd$#path: /var/lib/etcd-restore#' /etc/kubernetes/manifests/etcd.yaml
+    check:
+      id: manifest-points
+      description: the etcd manifest mounts /var/lib/etcd-restore
+      type: ssh
+      node: controlplane
+      run: grep -cE 'path:\s*/var/lib/etcd-restore/?\s*$' /etc/kubernetes/manifests/etcd.yaml || true
+      expect: { gte: 1 }
+  - id: wait
+    title: Wait for etcd and the API server to come back
+    explain: |
+      etcd restarts, and the API server reconnects to it. `kubectl` errors for a minute or so; repeat the command until it lists the nodes. `sudo crictl ps` shows the containers meanwhile.
+    command: kubectl get nodes
+    match: '^kubectl get (no|node|nodes)\b'
+    check:
+      id: api-back
+      description: the API server is ready again
+      type: ssh
+      node: controlplane
+      run: curl -sk --max-time 5 https://127.0.0.1:6443/readyz || true
+      expect: { equals: ok }
+  - id: verify
+    title: Confirm the cluster is back to the snapshot
+    explain: |
+      The Deployment created after the backup is gone: this command now fails with **NotFound**, which is what a successful restore looks like.
+    command: kubectl get deployment after-backup
+    match: '^kubectl get (deploy|deployment|deployments)\b.*after-backup'
+    allowFailure: true
+    check:
+      id: deployment-gone
+      description: Deployment after-backup no longer exists
+      type: kubectl
+      run: kubectl get deployment after-backup -o name 2>&1 || true
+      expect: { contains: NotFound }

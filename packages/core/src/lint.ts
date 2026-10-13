@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, sep } from 'node:path';
 import { readImagesMeta, type ImagesMeta } from '@cka/driver-vm-common';
 import { hiddenVarNames, varRefs, type Step } from '@cka/schema';
-import { blueprintsDir, dataDir, scenariosDir } from './paths';
+import { LessonLibrary } from './lessons';
+import { blueprintsDir, dataDir, lessonsDir, scenariosDir } from './paths';
 import { ScenarioLibrary, taskFile, type LoadedScenario } from './scenarios';
 
 export interface LintIssue {
@@ -156,4 +157,32 @@ export function lintScenarios(root = scenariosDir): { issues: LintIssue[]; scena
   }
 
   return { issues, scenarioCount: library.list().length };
+}
+
+export function lintLessons(root = lessonsDir): { issues: LintIssue[]; lessonCount: number } {
+  const issues: LintIssue[] = [];
+  const library = new LessonLibrary(root);
+  for (const e of library.errors) {
+    const where = 'lessons/' + (e.file.startsWith(root) ? e.file.slice(root.length + 1) : e.file);
+    for (const m of e.messages) issues.push({ level: 'error', where, message: m });
+  }
+  for (const l of library.list()) {
+    const where = `lessons/${l.def.id}`;
+    const err = (message: string) => issues.push({ level: 'error', where, message });
+    const read = diskReader(l.dir);
+    l.def.setup.forEach((st, i) => {
+      if (!st.script) return;
+      const content = read(st.script);
+      if (content === undefined) return err(`setup[${i}] references missing file ${st.script}`);
+      const syntax = bashSyntax(content);
+      if (syntax) err(`${st.script}: ${syntax}`);
+    });
+    for (const s of l.def.steps) {
+      const syntax = bashSyntax(s.command);
+      if (syntax) err(`step ${s.id} command: ${syntax}`);
+      if (s.check?.type === 'script') err(`step ${s.id}: script checks are not supported in lessons; use an ssh check`);
+      if (!s.explain.trim()) issues.push({ level: 'warning', where, message: `step ${s.id} has no explanation` });
+    }
+  }
+  return { issues, lessonCount: library.list().length };
 }

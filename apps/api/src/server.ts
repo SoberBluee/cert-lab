@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyError } from 'fastify';
-import { createOrchestrator, OrchestratorError, repoRoot, Studio, toSummary } from '@cka/core';
+import { createOrchestrator, OrchestratorError, repoRoot, Studio, toLessonSummary, toSummary } from '@cka/core';
 import type { AttemptRecord, Mode, ScenarioDetail, ScenarioSummary } from '@cka/schema';
 import { registerStudio } from './studio';
 import { registerTerminal } from './terminal';
@@ -13,7 +13,7 @@ const HOST = process.env.CKA_HOST ?? '127.0.0.1';
 const WEB_DIST = join(repoRoot, 'apps', 'web', 'dist');
 
 const orch = createOrchestrator('api');
-const { sessions, library, store, log } = orch;
+const { sessions, library, lessons, store, log } = orch;
 
 const app = Fastify({ logger: false });
 
@@ -68,6 +68,7 @@ app.get<{
 
 app.post('/api/scenarios/reload', async () => {
   library.reload();
+  lessons.reload();
   return { count: library.list().length, errors: library.errors };
 });
 
@@ -91,6 +92,19 @@ app.post('/api/playground', async (_req, reply) => {
   reply.status(202);
   return view;
 });
+
+app.get('/api/lessons', async () => ({
+  lessons: lessons.list().map(toLessonSummary),
+  errors: lessons.errors.map((e) => ({ file: e.file, messages: e.messages })),
+}));
+
+app.post<{ Params: { id: string } }>('/api/lessons/:id/start', async (req, reply) => {
+  const { view } = await sessions.startLesson(req.params.id);
+  reply.status(202);
+  return view;
+});
+
+app.post('/api/sessions/current/learn/skip', async () => sessions.skipLearnStep());
 
 app.get('/api/sessions/current', async () => ({ session: sessions.current() }));
 

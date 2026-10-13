@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import type { AttemptRecord, Base, GradeResult, Mode, ProgressLine, ScenarioStats, SessionState } from '@cka/schema';
+import type { AttemptRecord, Base, GradeResult, LearnProgress, Mode, ProgressLine, ScenarioStats, SessionState } from '@cka/schema';
 import type { ConnectionInfo } from '@cka/schema';
 import { dataDir } from './paths';
 
@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   vars TEXT NOT NULL DEFAULT '{}',
   tasks_ready TEXT,
   preparing_task TEXT,
+  learn_progress TEXT,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS mock_exams (
@@ -90,6 +91,8 @@ export interface SessionRow {
   tasksReady?: string[];
   /** Task whose deferred setup is running right now. */
   preparingTask?: string;
+  /** Learn mode: progress through the lesson's steps. */
+  learnProgress?: LearnProgress;
   updatedAt: string;
 }
 
@@ -131,6 +134,7 @@ function toSession(r: Row): SessionRow {
     vars: json<Record<string, string>>(r.vars) ?? {},
     tasksReady: json<string[]>(r.tasks_ready),
     preparingTask: opt(r.preparing_task),
+    learnProgress: json<LearnProgress>(r.learn_progress),
     updatedAt: r.updated_at as string,
   };
 }
@@ -148,6 +152,7 @@ const SESSION_COLUMNS: Record<string, string> = {
   attemptId: 'attempt_id',
   tasksReady: 'tasks_ready',
   preparingTask: 'preparing_task',
+  learnProgress: 'learn_progress',
 };
 
 const ATTEMPT_COLUMNS: Record<string, string> = {
@@ -182,6 +187,7 @@ export class Store {
     if (!cols.includes('vars')) this.db.exec(`ALTER TABLE sessions ADD COLUMN vars TEXT NOT NULL DEFAULT '{}'`);
     if (!cols.includes('tasks_ready')) this.db.exec('ALTER TABLE sessions ADD COLUMN tasks_ready TEXT');
     if (!cols.includes('preparing_task')) this.db.exec('ALTER TABLE sessions ADD COLUMN preparing_task TEXT');
+    if (!cols.includes('learn_progress')) this.db.exec('ALTER TABLE sessions ADD COLUMN learn_progress TEXT');
   }
 
   private update(table: string, columns: Record<string, string>, id: string | number, patch: Record<string, unknown>) {

@@ -1,0 +1,81 @@
+id: cert-renew
+title: Renew the API server certificate
+summary: Check expiry with kubeadm, renew the API server certificate, restart the static Pod so it loads the new file, and prove the new certificate is served.
+topic: certificates
+estimatedMinutes: 8
+setup:
+  - node: controlplane
+    run: |
+      install -d -m 700 /root/.cka
+      openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -fingerprint -sha256 > /root/.cka/apiserver-fingerprint
+steps:
+  - id: check-expiration
+    title: See what kubeadm manages
+    explain: |
+      Every certificate in this list can be renewed with `kubeadm certs renew <name>`. Note the expiry of `apiserver`.
+    command: sudo kubeadm certs check-expiration
+    match: '^kubeadm certs check-expiration\b'
+  - id: served-before
+    title: Look at the certificate the API server serves now
+    explain: |
+      `openssl s_client` connects like a client and prints the server's certificate; piping it into `openssl x509` decodes it. `echo |` closes the connection right away.
+    command: echo | openssl s_client -connect 127.0.0.1:6443 2>/dev/null | openssl x509 -noout -enddate
+    match: 'openssl s_client\b.*:6443'
+  - id: renew
+    title: Renew the API server certificate
+    explain: |
+      kubeadm signs a new certificate with the same SANs and writes it over `/etc/kubernetes/pki/apiserver.crt`.
+    command: sudo kubeadm certs renew apiserver
+    match: '^kubeadm certs renew (apiserver|all)\b'
+    check:
+      id: renewed-on-disk
+      description: apiserver.crt on disk was replaced
+      type: ssh
+      node: controlplane
+      run: '[ "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -fingerprint -sha256)" != "$(cat /root/.cka/apiserver-fingerprint)" ] && echo renewed || echo old'
+      expect: { equals: renewed }
+  - id: new-enddate
+    title: Read the new expiry date on disk
+    explain: |
+      The file has a new date, but the running API server still holds the old certificate in memory.
+    command: openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate
+    match: '^openssl x509\b(?=.*-(enddate|dates)\b)(?=.*apiserver\.crt)'
+  - id: move-out
+    title: Stop the API server by moving its manifest out
+    explain: |
+      The kubelet runs whatever is in `/etc/kubernetes/manifests`. Moving the file out stops the Pod; `kubectl` stops answering until it is back.
+    command: sudo mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/
+    match: '^mv\s+\S*/etc/kubernetes/manifests/kube-apiserver\.yaml\s'
+  - id: wait-stopped
+    title: Wait for the container to stop
+    explain: |
+      `crictl` talks to the container runtime directly, so it works without the API server. Repeat until no kube-apiserver container is listed.
+    command: sudo crictl ps --name kube-apiserver
+    match: '^crictl ps\b'
+    check:
+      id: apiserver-stopped
+      description: the kube-apiserver container has stopped
+      type: ssh
+      node: controlplane
+      run: crictl ps -q --name kube-apiserver | wc -l
+      expect: { equals: '0' }
+  - id: move-back
+    title: Move the manifest back
+    explain: |
+      The kubelet starts a fresh API server, which reads the renewed certificate.
+    command: sudo mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/
+    match: '^mv\s+\S*kube-apiserver\.yaml\s+/etc/kubernetes/manifests/?'
+  - id: served-after
+    title: Confirm the new certificate is served
+    explain: |
+      Run the same `s_client` command again once `kubectl get nodes` answers. The date now matches the file on disk. If the step stays open, the API server is still starting: try again in a few seconds.
+    command: echo | openssl s_client -connect 127.0.0.1:6443 2>/dev/null | openssl x509 -noout -enddate
+    match: 'openssl s_client\b.*:6443'
+    check:
+      id: serving-new
+      description: the API server serves the renewed certificate
+      type: ssh
+      node: controlplane
+      run: '[ "$(echo | openssl s_client -connect 127.0.0.1:6443 2>/dev/null | openssl x509 -noout -fingerprint -sha256)" = "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -fingerprint -sha256)" ] && echo serving || echo stale'
+      expect: { equals: serving }
+      retrySeconds: 10

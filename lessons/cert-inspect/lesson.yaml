@@ -1,0 +1,60 @@
+id: cert-inspect
+title: Inspect cluster certificates with openssl
+summary: Find the API server certificate, read its subject, SANs and expiry with openssl x509, verify it against the CA and compare with kubeadm.
+topic: certificates
+estimatedMinutes: 8
+steps:
+  - id: find-cert
+    title: Find the API server's certificate in its manifest
+    explain: |
+      The API server runs as a static Pod. Its manifest names every certificate it uses: `--tls-cert-file` is the serving certificate, `--client-ca-file` the CA. The manifest is readable by root only.
+    command: sudo grep -E 'tls-cert-file|tls-private-key-file|client-ca-file' /etc/kubernetes/manifests/kube-apiserver.yaml
+    match: '^(grep|egrep|cat|less|more|head|vi|vim|view)\b.*kube-apiserver\.yaml'
+  - id: read-text
+    title: Read the whole certificate
+    explain: |
+      `openssl x509 -in <file> -noout -text` decodes a PEM certificate. `-noout` skips the base64 blob. Look for **Issuer**, **Validity**, **Subject** and **X509v3 Subject Alternative Name**.
+    command: openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -text
+    match: '^openssl x509\b(?=.*\s-text\b)(?=.*apiserver\.crt)'
+  - id: subject-issuer
+    title: Print just the subject and issuer
+    explain: |
+      Single fields are quicker to read than `-text`. The issuer of every kubeadm certificate is the cluster CA, `CN = kubernetes`.
+    command: openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -subject -issuer
+    match: '^openssl x509\b(?=.*-subject)(?=.*-issuer)(?=.*apiserver\.crt)'
+  - id: sans
+    title: List the Subject Alternative Names
+    explain: |
+      Clients check the name they connect to against the SANs. A missing IP or DNS name here is the classic "x509: certificate is valid for ..., not ..." error.
+    command: openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -ext subjectAltName
+    match: '^openssl x509\b(?=.*-ext\s+subjectAltName)(?=.*apiserver\.crt)'
+  - id: enddate
+    title: Print the expiry date
+    explain: |
+      `-enddate` prints `notAfter=...`; `-dates` prints both ends of the validity window.
+    command: openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate
+    match: '^openssl x509\b(?=.*-(enddate|dates)\b)(?=.*apiserver\.crt)'
+  - id: verify
+    title: Verify the certificate against the cluster CA
+    explain: |
+      `openssl verify -CAfile <ca> <cert>` prints `OK` when the CA signed the certificate. Useful when a cert was replaced by hand.
+    command: openssl verify -CAfile /etc/kubernetes/pki/ca.crt /etc/kubernetes/pki/apiserver.crt
+    match: '^openssl verify\b(?=.*-CAfile\s+\S*ca\.crt)(?=.*apiserver\.crt)'
+  - id: kubeadm-expiration
+    title: Compare with kubeadm's view
+    explain: |
+      `kubeadm certs check-expiration` lists every certificate kubeadm manages, with its expiry and residual time. The date format differs from openssl's.
+    command: sudo kubeadm certs check-expiration
+    match: '^kubeadm certs check-expiration\b'
+  - id: write-expiry
+    title: Write the expiry date to a file
+    explain: |
+      Exam tasks often ask for the date "exactly as openssl prints it". Cut off the `notAfter=` prefix and write the rest to `~/apiserver-expiry.txt`. Any way of writing the file counts.
+    command: openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2 > ~/apiserver-expiry.txt
+    check:
+      id: expiry-file
+      description: ~/apiserver-expiry.txt holds the API server certificate's expiry date
+      type: ssh
+      node: controlplane
+      run: '[ "$(xargs < /home/ubuntu/apiserver-expiry.txt 2>/dev/null)" = "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2 | xargs)" ] && echo match || echo differs'
+      expect: { equals: match }

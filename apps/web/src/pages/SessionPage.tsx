@@ -5,6 +5,7 @@ import type { SessionView } from '@cka/schema';
 import { api } from '../api';
 import { ConnectionPanel } from '../components/ConnectionPanel';
 import { GradeResultView } from '../components/GradeResultView';
+import { LessonPane } from '../components/LessonPane';
 import { ReferencePanel } from '../components/ReferencePanel';
 import { SPLIT_MIN_PX, SplitHandle, useSplit } from '../components/SplitHandle';
 import { Button, buttonClass, Card, ErrorBanner, Markdown, StateBadge } from '../components/ui';
@@ -237,8 +238,10 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
   const qc = useQueryClient();
   const playground = ended.mode === 'playground';
   const exam = ended.mode === 'mock';
+  const lesson = ended.mode === 'learn' ? ended.lesson : undefined;
   const retry = useMutation({
-    mutationFn: () => (playground ? api.startPlayground() : api.start(ended.scenarioId, exam ? 'mock' : 'practice')),
+    mutationFn: () =>
+      playground ? api.startPlayground() : lesson ? api.startLesson(lesson.id) : api.start(ended.scenarioId, exam ? 'mock' : 'practice'),
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
       onDismiss();
@@ -246,10 +249,14 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
   });
   return (
     <div className="mx-auto max-w-3xl space-y-4">
-      <Card title={playground ? 'Playground ended' : exam ? 'Exam result' : 'Session ended'}>
+      <Card title={playground ? 'Playground ended' : lesson ? 'Lesson ended' : exam ? 'Exam result' : 'Session ended'}>
         <h2 className="mb-4 text-xl font-semibold text-zinc-100">{ended.scenarioTitle}</h2>
         {playground ? (
           <p className="text-sm text-zinc-400">The lab VMs are stopped. A new playground starts from a clean cluster.</p>
+        ) : lesson ? (
+          <p className="text-sm text-zinc-400">
+            {ended.learn?.steps.filter((st) => st.done && !st.skipped).length ?? 0} of {lesson.steps.length} steps done. The lab VMs are stopped.
+          </p>
         ) : (
           <>
             {ended.lastGrade ? (
@@ -272,10 +279,10 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
         <ErrorBanner error={retry.error} />
         <div className="mt-5 flex gap-2">
           <Button variant="primary" onClick={() => retry.mutate()} disabled={retry.isPending}>
-            {retry.isPending ? 'Starting…' : playground ? 'Start a new playground' : exam ? 'Retake exam' : 'Retry scenario'}
+            {retry.isPending ? 'Starting…' : playground ? 'Start a new playground' : lesson ? 'Drill it again' : exam ? 'Retake exam' : 'Retry scenario'}
           </Button>
-          <Link to="/" className={buttonClass()}>
-            Back to scenarios
+          <Link to={lesson ? '/learn' : '/'} className={buttonClass()}>
+            {lesson ? 'Back to lessons' : 'Back to scenarios'}
           </Link>
           <Link to="/history" className={buttonClass('ghost')}>
             History
@@ -291,10 +298,11 @@ export function SessionPage() {
   const { data: session, isLoading } = useSession();
   const [ended, setEnded] = useState<SessionView | null>(null);
   const playground = session?.mode === 'playground';
+  const learn = session?.mode === 'learn';
   const scenario = useQuery({
     queryKey: ['scenario', session?.scenarioId],
     queryFn: () => api.scenario(session!.scenarioId),
-    enabled: !!session && !playground,
+    enabled: !!session && !playground && !learn,
   });
 
   const setSession = (v: SessionView | null) => qc.setQueryData(sessionKey, v);
@@ -317,7 +325,8 @@ export function SessionPage() {
     },
   });
   const openTask = useMutation({ mutationFn: api.openTask, onSuccess: setSession });
-  const mutations = [grade, hint, solution, reset, end, submit, openTask];
+  const skip = useMutation({ mutationFn: api.skipStep, onSuccess: setSession });
+  const mutations = [grade, hint, solution, reset, end, submit, openTask, skip];
   const error = mutations.find((m) => m.error)?.error;
 
   const [activeTask, setActiveTask] = useState(0);
@@ -333,7 +342,7 @@ export function SessionPage() {
     if (t && !t.ready && state === 'running') openTask.mutate(t.id);
   };
   const exam = session?.mode === 'mock';
-  const canGrade = state === 'running' && !grade.isPending && !session?.preparingTask && !playground && !exam;
+  const canGrade = state === 'running' && !grade.isPending && !session?.preparingTask && !playground && !learn && !exam;
   const canHint = (state === 'running' || state === 'grading') && !!task && task.hintsRevealed.length < task.hintsTotal && session?.mode === 'practice';
   const canReset = exam ? state === 'failed' : state === 'running' || state === 'failed';
   const canSolution = !!session && session.mode === 'practice' && !session.solutionViewed && !!scenario.data?.hasSolution && state !== 'provisioning';
@@ -387,7 +396,7 @@ export function SessionPage() {
 
   const [focus, setFocus] = useState(() => localStorage.getItem(FOCUS_KEY) === '1');
   const live = state === 'running' || state === 'grading';
-  const focusActive = focus && live && !!session?.connection;
+  const focusActive = (focus || learn) && live && !!session?.connection;
   const [split, setSplit] = useSplit();
   const focusRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -429,6 +438,8 @@ export function SessionPage() {
           <div className="mt-0.5 font-mono text-xs text-zinc-500">
             {playground ? (
               'free practice · nothing is graded'
+            ) : learn ? (
+              'lesson · follow the steps in the terminal'
             ) : (
               <>
                 {session.scenarioId} · {exam ? 'exam' : session.mode}
@@ -444,7 +455,7 @@ export function SessionPage() {
               {submit.isPending || state === 'grading' ? 'Submitting…' : 'Submit exam'}
             </Button>
           )}
-          {!playground && !exam && (
+          {!playground && !learn && !exam && (
             <>
               <Button variant="primary" shortcut="g" disabled={!canGrade} onClick={() => grade.mutate()}>
                 {state === 'grading' ? 'Grading…' : 'Grade'}
@@ -459,7 +470,7 @@ export function SessionPage() {
               Reset
             </Button>
           )}
-          {!playground && !exam && (
+          {!playground && !learn && !exam && (
             <Button disabled={!canSolution} onClick={doSolution}>
               Solution
             </Button>
@@ -485,7 +496,18 @@ export function SessionPage() {
                   : undefined
               }
             >
-              {focusActive && !playground && (
+              {focusActive && learn && (
+                <LessonPane
+                  key="lesson"
+                  session={session}
+                  onSkip={() => skip.mutate()}
+                  skipping={skip.isPending}
+                  onReset={doReset}
+                  onEnd={doEnd}
+                  error={error}
+                />
+              )}
+              {focusActive && !playground && !learn && (
                 <TaskPane
                   key="task"
                   session={session}
@@ -508,7 +530,7 @@ export function SessionPage() {
                   key={`${session.id}-${session.readyAt}`}
                   session={session}
                   fullscreen={focusActive}
-                  onToggleFullscreen={() => setFocus((f) => !f)}
+                  onToggleFullscreen={learn ? undefined : () => setFocus((f) => !f)}
                 />
               </Suspense>
             </div>
@@ -548,7 +570,7 @@ export function SessionPage() {
             </Card>
           )}
 
-          {!playground && (
+          {!playground && !learn && (
             <Card title={session.tasks.length > 1 ? `Tasks (${session.tasks.length} questions)` : 'Task'}>
               <div className="space-y-4">
                 <QuestionTabs session={session} active={activeTask} onSelect={selectTask} />

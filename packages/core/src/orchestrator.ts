@@ -4,6 +4,7 @@ import { FakeDriver } from '@cka/driver-fake';
 import { MultipassDriver } from '@cka/driver-multipass';
 import { TartDriver } from '@cka/driver-tart';
 import { readImagesMeta, type DriverLog } from '@cka/driver-vm-common';
+import { LessonLibrary } from './lessons';
 import { createLogger, type Logger } from './logger';
 import { dataDir, repoRoot } from './paths';
 import { ScenarioLibrary } from './scenarios';
@@ -14,6 +15,7 @@ export interface Orchestrator {
   driver: Driver;
   store: Store;
   library: ScenarioLibrary;
+  lessons: LessonLibrary;
   sessions: SessionManager;
   log: Logger;
 }
@@ -43,6 +45,8 @@ export function createOrchestrator(component: string): Orchestrator {
   const store = new Store(name === 'fake' ? join(dataDir, 'state-fake.db') : undefined);
   const library = new ScenarioLibrary();
   for (const e of library.errors) log.warn({ file: e.file, errors: e.messages }, 'invalid scenario skipped');
-  const sessions = new SessionManager(driver, store, library, log);
-  return { driver, store, library, sessions, log };
+  const lessons = new LessonLibrary();
+  for (const e of lessons.errors) log.warn({ file: e.file, errors: e.messages }, 'invalid lesson skipped');
+  const sessions = new SessionManager(driver, store, library, log, lessons);
+  return { driver, store, library, lessons, sessions, log };
 }

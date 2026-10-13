@@ -1,5 +1,7 @@
 export * from './authoring';
 export * from './grader';
+export * from './learn';
+export * from './lessons';
 export * from './lint';
 export * from './logger';
 export * from './orchestrator';

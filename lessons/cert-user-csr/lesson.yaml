@@ -1,0 +1,135 @@
+id: cert-user-csr
+title: Create a user with a CertificateSigningRequest
+summary: Generate a key and CSR with openssl, get it signed through the Kubernetes CSR API, build a kubeconfig context and grant the user access with RBAC.
+topic: certificates
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    run: kubectl delete csr jane --ignore-not-found; rm -f /home/ubuntu/jane.key /home/ubuntu/jane.csr /home/ubuntu/jane.crt
+steps:
+  - id: genrsa
+    title: Generate a private key for jane
+    explain: |
+      Work in your home directory (`cd ~`). The user's identity starts with a private key that never leaves your machine.
+    command: openssl genrsa -out jane.key 2048
+    match: '^openssl (genrsa|genpkey)\b.*jane\.key'
+  - id: req
+    title: Create a certificate request with CN=jane
+    explain: |
+      Kubernetes takes the user name from the certificate's **CN** and groups from **O**. `-subj` sets them without prompts.
+    command: openssl req -new -key jane.key -subj "/CN=jane" -out jane.csr
+    match: '^openssl req\b(?=.*-key\s+\S*jane\.key)(?=.*CN\s*=\s*jane)'
+  - id: submit
+    title: Submit the request as a CertificateSigningRequest named jane
+    explain: |
+      `spec.request` is the base64 of the whole CSR file on one line (`base64 -w0`). The signer `kubernetes.io/kube-apiserver-client` issues client certificates, and `usages` must include `client auth`. Writing a file and applying it works too.
+    command: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: certificates.k8s.io/v1
+      kind: CertificateSigningRequest
+      metadata:
+        name: jane
+      spec:
+        request: $(base64 -w0 < jane.csr)
+        signerName: kubernetes.io/kube-apiserver-client
+        usages: [client auth]
+      EOF
+    check:
+      id: csr-submitted
+      description: CSR jane exists for the kube-apiserver-client signer
+      type: kubectl
+      run: kubectl get csr jane -o jsonpath='{.spec.signerName}' 2>/dev/null || true
+      expect: { equals: kubernetes.io/kube-apiserver-client }
+  - id: approve
+    title: Approve it
+    explain: |
+      `kubectl get csr` shows it as Pending first. Approving makes the controller manager sign it.
+    command: kubectl certificate approve jane
+    match: '^kubectl certificate approve\s+jane\b'
+    check:
+      id: csr-approved
+      description: CSR jane is approved and issued
+      type: kubectl
+      run: kubectl get csr jane -o jsonpath='{.status.certificate}' | head -c 10
+      expect: { notEmpty: true }
+      retrySeconds: 10
+  - id: extract
+    title: Save the signed certificate
+    explain: |
+      The certificate is in `.status.certificate`, base64 encoded.
+    command: kubectl get csr jane -o jsonpath='{.status.certificate}' | base64 -d > jane.crt
+    match: '^kubectl get csr\s+jane\b.*status\.certificate'
+    check:
+      id: crt-saved
+      description: ~/jane.crt is a certificate for CN=jane
+      type: ssh
+      node: controlplane
+      run: openssl x509 -in /home/ubuntu/jane.crt -noout -subject 2>&1 || true
+      expect: { matches: 'CN ?= ?jane' }
+  - id: inspect
+    title: Check what you got
+    explain: |
+      The issuer is the cluster CA, and the certificate is valid for a year by default.
+    command: openssl x509 -in jane.crt -noout -subject -issuer -enddate
+    match: '^openssl x509\b.*jane\.crt'
+  - id: credentials
+    title: Add jane's credentials to your kubeconfig
+    explain: |
+      `--embed-certs` copies the files into the kubeconfig, so it keeps working if the files move.
+    command: kubectl config set-credentials jane --client-certificate=jane.crt --client-key=jane.key --embed-certs=true
+    match: '^kubectl config set-credentials\s+jane\b'
+  - id: context
+    title: Create a context for jane
+    explain: |
+      A context pairs a cluster with a user. `kubectl config get-clusters` shows the cluster name.
+    command: kubectl config set-context jane --cluster=kubernetes --user=jane
+    match: '^kubectl config set-context\s+jane\b'
+  - id: whoami
+    title: Confirm who you are as jane
+    explain: |
+      `kubectl auth whoami` asks the API server which user it authenticated.
+    command: kubectl --context jane auth whoami
+    match: '^kubectl\b(?=.*--context[= ]jane\b)(?=.*auth whoami)'
+  - id: forbidden
+    title: See that jane cannot do anything yet
+    explain: |
+      Authentication works, but there is no RBAC for jane, so this fails with **Forbidden**. That is expected.
+    command: kubectl --context jane get pods
+    match: '^kubectl\b(?=.*--context[= ]jane\b)(?=.*get (po|pod|pods)\b)'
+    allowFailure: true
+  - id: role
+    title: Create a Role that can read Pods
+    explain: |
+      A Role holds verbs on resources in one namespace (here `default`).
+    command: kubectl create role pod-reader --verb=get,list,watch --resource=pods
+    match: '^kubectl create role\s+pod-reader\b'
+    check:
+      id: role-created
+      description: Role pod-reader can list pods
+      type: kubectl
+      run: kubectl get role pod-reader -o jsonpath='{.rules[*].resources} {.rules[*].verbs}' 2>/dev/null || true
+      expect: { matches: 'pods.*list' }
+  - id: rolebinding
+    title: Bind the Role to jane
+    explain: |
+      `--user` must match the certificate's CN exactly.
+    command: kubectl create rolebinding jane-pod-reader --role=pod-reader --user=jane
+    match: '^kubectl create rolebinding\b.*--user[= ]jane\b'
+    check:
+      id: jane-can-list
+      description: jane can list pods in default
+      type: kubectl
+      run: kubectl auth can-i list pods --as jane 2>/dev/null || true
+      expect: { equals: 'yes' }
+  - id: can-i
+    title: Check jane's permissions without switching context
+    explain: |
+      `kubectl auth can-i <verb> <resource> --as <user>` impersonates a user. Try `delete` too: it should say no.
+    command: kubectl auth can-i list pods --as jane
+    match: '^kubectl auth can-i\b.*--as[= ]jane\b'
+  - id: works
+    title: List Pods as jane
+    explain: |
+      The same command that was Forbidden now succeeds.
+    command: kubectl --context jane get pods
+    match: '^kubectl\b(?=.*--context[= ]jane\b)(?=.*get (po|pod|pods)\b)'
