@@ -481,7 +481,26 @@ export const installClusterBuilder: Builder = {
         weight: 1,
       }),
     );
-    ctx.solution.push(`kubeadm init --pod-network-cidr "${CIDR}" --node-name controlplane --kubernetes-version "$(kubeadm version -o short)"
+    ctx.solution.push(`# Same as kubeadm init --pod-network-cidr ${CIDR} --node-name controlplane, with more time for a slow first start.
+cat > /root/kubeadm-init.yaml <<EOF
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+nodeRegistration:
+  name: controlplane
+timeouts:
+  controlPlaneComponentHealthCheck: 10m0s
+  kubernetesAPICall: 5m0s
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: $(kubeadm version -o short)
+networking:
+  podSubnet: ${CIDR}
+EOF
+if ! kubeadm init --config /root/kubeadm-init.yaml; then
+  kubeadm reset -f
+  kubeadm init --config /root/kubeadm-init.yaml
+fi
 mkdir -p /home/ubuntu/.kube
 cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
 chown -R ubuntu:ubuntu /home/ubuntu/.kube
