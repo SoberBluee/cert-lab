@@ -6,6 +6,8 @@ import type { Builder, CreateCtx, FollowUp, Addon } from './types';
 const PKI = '/etc/kubernetes/pki';
 const ETCDCTL = `ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=${PKI}/etcd/ca.crt --cert=${PKI}/etcd/server.crt --key=${PKI}/etcd/server.key`;
 const APISERVER_CRT = `${PKI}/apiserver.crt`;
+/** The node's apt etcdctl (3.4) restores snapshots in a format etcd 3.6+ cannot read; the etcd image ships a matching etcdutl. */
+const INSTALL_ETCDUTL = 'command -v etcdutl >/dev/null || install -m 755 "/proc/$(pgrep -xo etcd)/root/usr/local/bin/etcdutl" /usr/local/bin/etcdutl';
 const STATE = '/root/.cka';
 
 const ssh = (c: Omit<Extract<RecipeCheck, { type: 'ssh' }>, 'type' | 'node'>): RecipeCheck => ({ type: 'ssh', node: 'controlplane', ...c });
@@ -180,6 +182,7 @@ export const etcdRestoreBuilder: Builder = {
     ctx.setup.push(`${createNs(NS)}
 kubectl -n "${NS}" create configmap before-backup --from-literal=state=kept --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 rm -rf "${DATADIR}"
+${INSTALL_ETCDUTL}
 mkdir -p ${dirOf(SNAPSHOT)}
 ${ETCDCTL} snapshot save "${SNAPSHOT}" >/dev/null
 kubectl -n "${NS}" create configmap after-backup --from-literal=state=lost --dry-run=client -o yaml | kubectl apply -f - >/dev/null`);
@@ -202,13 +205,13 @@ kubectl -n "${NS}" create configmap after-backup --from-literal=state=lost --dry
         weight: 2,
       }),
     );
-    ctx.solution.push(`ETCDCTL_API=3 etcdctl snapshot restore "${SNAPSHOT}" --data-dir "${DATADIR}"
+    ctx.solution.push(`etcdutl snapshot restore "${SNAPSHOT}" --data-dir "${DATADIR}"
 sed -i -E "s#path: /var/lib/etcd\\$#path: ${DATADIR}#" /etc/kubernetes/manifests/etcd.yaml
 grep -q -- "path: ${DATADIR}" /etc/kubernetes/manifests/etcd.yaml
 ${waitControlPlane}
 [[ "$(${readyz})" == ok ]]`);
     ctx.hints.push(
-      'etcdctl snapshot restore <file> --data-dir <dir> writes a new data directory; it does not need the endpoint or certificates.',
+      'etcdutl snapshot restore <file> --data-dir <dir> writes a new data directory; it does not need the endpoint or certificates.',
       'In /etc/kubernetes/manifests/etcd.yaml, change the hostPath of the etcd-data volume. The kubelet recreates the Pod, and the API server can take a minute or two to answer again.',
     );
     return ctx;

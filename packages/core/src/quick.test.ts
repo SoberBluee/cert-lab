@@ -111,6 +111,7 @@ const STUBS = [
   'crictl',
   'curl',
   'etcdctl',
+  'etcdutl',
   'kubeadm',
   'openssl',
   'jq',
