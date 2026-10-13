@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { parseDocument } from 'yaml';
-import type { BuilderSummary, CategorySummary, PartSummary, QuickCreateRequest, QuickQuestion, RecipeField } from '@cka/schema';
+import type { BuilderSummary, CategorySummary, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
 import { api, studioApi, type StudioJob } from '../api';
 import { JobPanel } from '../components/JobPanel';
 import { Button, Card, Difficulty, DomainBadge, ErrorBanner, Markdown } from '../components/ui';
@@ -514,6 +514,91 @@ function toQuestion(q: Question): QuickQuestion {
 
 const toRequest = (questions: Question[], id: string, title: string): QuickCreateRequest => ({ id, title, questions: questions.map(toQuestion) });
 
+const RANDOM_MAX = 20;
+const RANDOM_TRIES = 5;
+
+function shuffle<T>(xs: T[]): T[] {
+  const out = [...xs];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/** Every field that can be randomized is, with all of its values to pick from; other dropdowns get a random option. */
+const randomFields = (fields: RecipeField[]): Fields => ({
+  values: Object.fromEntries(fields.map((f) => [f.key, !f.pool && f.options?.length ? shuffle(f.options)[0] : f.default])),
+  pools: Object.fromEntries(fields.filter((f) => f.pool).map((f) => [f.key, [...(f.options ?? f.pool!)]])),
+});
+
+/** A random number of parts from `available`, skipping any that `blocked` rules out given what is already chosen. */
+function randomParts(available: PartSummary[], chosen: Part[], all: PartSummary[]): Part[] {
+  const want = Math.floor(Math.random() * (available.length + 1));
+  const out: Part[] = [];
+  for (const p of shuffle(available)) {
+    if (out.length >= want) break;
+    if (blocked(p, [...chosen, ...out], all)) continue;
+    out.push({ ...newPart(p), ...randomFields(p.fields) });
+  }
+  return out;
+}
+
+type Item = { kind: 'create'; builder: BuilderSummary } | { kind: 'troubleshoot'; category: CategorySummary };
+
+function randomQuestion(item: Item, plain = false): Question {
+  const key = nextKey++;
+  if (item.kind === 'troubleshoot') {
+    const { category } = item;
+    return { key, type: 'troubleshoot', category, fields: plain ? initialFields(category.fields) : randomFields(category.fields) };
+  }
+  const { builder } = item;
+  if (plain) return { key, type: 'create', builder, fields: initialFields(builder.fields), addons: [], followUps: [] };
+  const all = [...builder.addons, ...builder.followUps];
+  const addons = randomParts(builder.addons, [], all);
+  const followUps = randomParts(builder.followUps, addons, all);
+  return { key, type: 'create', builder, fields: randomFields(builder.fields), addons, followUps };
+}
+
+/** `n` items from every track: distinct while the catalog lasts, no solo builder unless n is 1, at most one that breaks the API. */
+function pickItems(catalog: RecipeCatalog, n: number): Item[] {
+  const items: Item[] = [
+    ...catalog.builders.map((builder) => ({ kind: 'create' as const, builder })),
+    ...catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category })),
+  ];
+  const info = (i: Item) => (i.kind === 'create' ? i.builder : i.category);
+  const out: Item[] = [];
+  let apiTaken = false;
+  for (let pass = 0; out.length < n && pass < n; pass++) {
+    const before = out.length;
+    for (const item of shuffle(items)) {
+      if (out.length >= n) break;
+      const x = info(item);
+      if ('solo' in x && x.solo && n > 1) continue;
+      if (x.breaksApi && apiTaken) continue;
+      if (pass === 0 && out.some((o) => info(o).id === x.id)) continue;
+      apiTaken ||= x.breaksApi;
+      out.push(item);
+    }
+    if (out.length === before) break;
+  }
+  return out;
+}
+
+/** Rolls a question until the server accepts it; after a few rejected rolls, the plain question. */
+async function validRandomQuestion(item: Item): Promise<Question> {
+  for (let i = 0; i < RANDOM_TRIES; i++) {
+    const q = randomQuestion(item);
+    const preview = await studioApi.quickPreview({ id: 'random-check', title: 'Random check', questions: [toQuestion(q)] });
+    if (!preview.issues.some((x) => x.level === 'error')) return q;
+  }
+  return randomQuestion(item, true);
+}
+
+async function randomLab(catalog: RecipeCatalog, n: number): Promise<Question[]> {
+  return Promise.all(pickItems(catalog, n).map(validRandomQuestion));
+}
+
 function Created({ id, jobError, onAnother }: { id: string; jobError: string | null; onAnother: () => void }) {
   const qc = useQueryClient();
   const session = useSession().data;
@@ -621,6 +706,20 @@ export function QuickCreatePage() {
     },
   });
 
+  const [randomCount, setRandomCount] = useState('5');
+  const randomize = useMutation({
+    mutationFn: (n: number) => randomLab(catalog.data!, n),
+    onSuccess: (qs, n) => {
+      setQuestions(qs);
+      if (!title.trim()) {
+        setTitle(`Random mix ${n}`);
+        setId(`random-mix-${n}-${Math.random().toString(36).slice(2, 6)}`);
+      }
+      if (qs[0]) setScrollTo(qs[0].key);
+    },
+  });
+  const randomN = Math.min(RANDOM_MAX, Math.max(1, Math.floor(Number(randomCount)) || 0));
+
   const add = (t: TrackId, pickId: string) => {
     const key = nextKey++;
     let q: Question | undefined;
@@ -675,6 +774,37 @@ export function QuickCreatePage() {
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
           <div className="space-y-4">
             <ErrorBanner error={catalog.error} />
+            <form
+              className="flex flex-wrap items-center gap-3 rounded-xl border border-violet-900/60 bg-violet-950/20 px-4 py-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (catalog.data && !randomize.isPending) randomize.mutate(randomN);
+              }}
+            >
+              <label className="flex items-center gap-2 text-sm text-zinc-300">
+                Questions
+                <input
+                  className={`${input} w-20 font-mono`}
+                  type="number"
+                  min={1}
+                  max={RANDOM_MAX}
+                  value={randomCount}
+                  onChange={(e) => setRandomCount(e.target.value)}
+                />
+              </label>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={!catalog.data || randomize.isPending}
+                title={questions.length ? 'Replaces the current questions with a random set' : 'Fill the lab with random questions from every track'}
+              >
+                {randomize.isPending ? 'Randomizing…' : 'Randomize'}
+              </Button>
+              <span className="text-xs text-zinc-500">
+                Random questions from every track, with random add-ons and follow-ups, and every value randomized.
+              </span>
+            </form>
+            <ErrorBanner error={randomize.error} onDismiss={() => randomize.reset()} />
             {questions.map((q, i) => (
               <QuestionForm
                 key={q.key}
