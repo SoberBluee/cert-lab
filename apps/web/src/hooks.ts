@@ -15,11 +15,23 @@ export function useSessionStream() {
   useEffect(() => {
     let es: EventSource | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
+    // The dev proxy can keep the browser's side open after the API restarts, so a silent stream is treated as dead.
+    const alive = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        es?.close();
+        connect();
+      }, 25_000);
+    };
     const connect = () => {
       es = new EventSource('/api/sessions/current/events');
+      alive();
+      es.addEventListener('ping', alive);
       es.addEventListener('session', (e) => {
         attempts = 0;
+        alive();
         const { session } = JSON.parse((e as MessageEvent).data) as { session: SessionView | null };
         const prev = qc.getQueryData<SessionView | null>(sessionKey);
         qc.setQueryData(sessionKey, session);
@@ -31,12 +43,14 @@ export function useSessionStream() {
       // EventSource gives up for good when a reconnect gets an error response (e.g. a proxy 502 while the API restarts).
       es.onerror = () => {
         if (es?.readyState !== EventSource.CLOSED) return;
+        clearTimeout(watchdog);
         retry = setTimeout(connect, Math.min(1000 * 2 ** attempts++, 10_000));
       };
     };
     connect();
     return () => {
       clearTimeout(retry);
+      clearTimeout(watchdog);
       es?.close();
     };
   }, [qc]);

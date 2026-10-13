@@ -120,7 +120,7 @@ app.get('/api/sessions/current/events', (req, reply) => {
   const send = () => res.write(`event: session\ndata: ${JSON.stringify({ session: sessions.current() })}\n\n`);
   send();
   sessions.on('change', send);
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15_000);
+  const heartbeat = setInterval(() => res.write('event: ping\ndata: {}\n\n'), 10_000);
   req.raw.on('close', () => {
     clearInterval(heartbeat);
     sessions.off('change', send);
