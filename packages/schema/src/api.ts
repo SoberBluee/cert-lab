@@ -2,7 +2,7 @@ import type { ConnectionInfo } from './driver';
 import type { Base, Domain } from './scenario';
 
 export type SessionState = 'provisioning' | 'running' | 'grading' | 'completed' | 'failed';
-export type Mode = 'practice' | 'drill' | 'mock' | 'dry-run' | 'verify';
+export type Mode = 'practice' | 'drill' | 'mock' | 'dry-run' | 'verify' | 'playground';
 
 export interface ScenarioStats {
   attempts: number;
@@ -91,6 +91,8 @@ export interface SessionView {
   attemptId: number;
   startedAt: string;
   readyAt?: string;
+  /** Exam mode: when the exam is submitted automatically. */
+  deadlineAt?: string;
   endedAt?: string;
   error?: string;
   progress: ProgressLine[];

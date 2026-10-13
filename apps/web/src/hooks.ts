@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { SessionView } from '@cka/schema';
 import { api } from './api';
 
@@ -42,6 +42,27 @@ export function formatDuration(totalSeconds: number) {
   const m = Math.floor((s % 3600) / 60);
   const sec = String(s % 60).padStart(2, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+const EXAM_KEY = 'cka.exam';
+const EXAM_EVENT = 'cka-exam-change';
+const subscribeExam = (cb: () => void) => {
+  window.addEventListener(EXAM_EVENT, cb);
+  window.addEventListener('storage', cb);
+  return () => {
+    window.removeEventListener(EXAM_EVENT, cb);
+    window.removeEventListener('storage', cb);
+  };
+};
+
+/** Whether the next session starts in exam mode; shared by every component and browser tab. */
+export function useExamMode(): [boolean, (on: boolean) => void] {
+  const on = useSyncExternalStore(subscribeExam, () => localStorage.getItem(EXAM_KEY) === '1');
+  const set = (v: boolean) => {
+    localStorage.setItem(EXAM_KEY, v ? '1' : '0');
+    window.dispatchEvent(new Event(EXAM_EVENT));
+  };
+  return [on, set];
 }
 
 export const isActive = (s?: SessionView | null) =>

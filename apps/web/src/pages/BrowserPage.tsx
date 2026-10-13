@@ -5,7 +5,7 @@ import type { ScenarioSummary } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
 import { api, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
-import { isActive, sessionKey, useSession } from '../hooks';
+import { isActive, sessionKey, useExamMode, useSession } from '../hooks';
 
 const select = 'rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-200';
 
@@ -42,8 +42,9 @@ export function BrowserPage() {
   );
   const missingImages = images.data?.filter((i) => !i.available).map((i) => i.name) ?? [];
 
+  const [exam] = useExamMode();
   const start = useMutation({
-    mutationFn: api.start,
+    mutationFn: (id: string) => api.start(id, exam ? 'mock' : 'practice'),
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
       navigate('/session');
@@ -189,7 +190,7 @@ export function BrowserPage() {
                 title={active ? 'End the current session first' : undefined}
                 onClick={() => start.mutate(s.id)}
               >
-                {start.isPending && start.variables === s.id ? 'Starting…' : 'Start'}
+                {start.isPending && start.variables === s.id ? 'Starting…' : exam ? 'Start exam' : 'Start'}
               </Button>
             </div>
           </article>

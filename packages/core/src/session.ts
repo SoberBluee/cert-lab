@@ -16,6 +16,7 @@ import { ADMIN_KUBECONFIG, runChecks, type GradeOptions } from './grader';
 import { runBatched } from './steps';
 import { renderScenario, rollScenarioVars } from './vars';
 import type { Logger } from './logger';
+import { PLAYGROUND, PLAYGROUND_ID } from './playground';
 import type { LoadedScenario, ScenarioLibrary } from './scenarios';
 import type { SessionRow, Store } from './store';
 
@@ -66,8 +67,12 @@ export class SessionManager extends EventEmitter {
     this.setMaxListeners(100);
   }
 
+  private lookup(id: string): LoadedScenario | undefined {
+    return id === PLAYGROUND_ID ? PLAYGROUND : this.library.get(id);
+  }
+
   toView(row: SessionRow): SessionView {
-    const raw = this.library.get(row.scenarioId);
+    const raw = this.lookup(row.scenarioId);
     const s = raw && renderScenario(raw, row.vars);
     const tasks: SessionTask[] =
       s?.tasks.map((t) => ({
@@ -90,6 +95,9 @@ export class SessionManager extends EventEmitter {
       attemptId: row.attemptId,
       startedAt: row.startedAt,
       readyAt: row.readyAt,
+      ...(row.mode === 'mock' && row.readyAt && s
+        ? { deadlineAt: new Date(Date.parse(row.readyAt) + s.def.estimatedMinutes * 60_000).toISOString() }
+        : {}),
       endedAt: row.endedAt,
       error: row.error,
       progress: row.progress,
@@ -118,9 +126,16 @@ export class SessionManager extends EventEmitter {
     return row;
   }
 
+  /** The open session, which must have tasks. */
+  private requireTasks(): SessionRow {
+    const row = this.requireOpen();
+    if (row.mode === 'playground') throw new OrchestratorError('The playground has no tasks.', 409);
+    return row;
+  }
+
   /** The session's scenario, rendered with the variables chosen at start. */
   private scenarioFor(row: SessionRow): LoadedScenario {
-    const s = this.library.get(row.scenarioId);
+    const s = this.lookup(row.scenarioId);
     if (!s) throw new OrchestratorError(`Scenario "${row.scenarioId}" no longer exists on disk.`, 404);
     return renderScenario(s, row.vars);
   }
@@ -143,8 +158,16 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Starts a session. Variables are rolled here (pinned values win) and kept for the session's life. */
+  /** Starts a task-free lab on the cluster image, for free practice. */
+  startPlayground(): Promise<StartResult> {
+    return this.start(PLAYGROUND_ID, 'playground');
+  }
+
   async start(scenarioId: string, mode: Mode = 'practice', opts: { vars?: Vars } = {}): Promise<StartResult> {
-    const scenario = this.library.get(scenarioId);
+    if ((scenarioId === PLAYGROUND_ID) !== (mode === 'playground')) {
+      throw new OrchestratorError('The playground can only be started as a playground.', 400);
+    }
+    const scenario = this.lookup(scenarioId);
     if (!scenario) throw new OrchestratorError(`Unknown scenario "${scenarioId}".`, 404);
     let vars: Vars;
     try {
@@ -227,6 +250,7 @@ export class SessionManager extends EventEmitter {
     if (row.state === 'provisioning' || row.state === 'grading') {
       throw new OrchestratorError(`Cannot reset while the session is ${row.state}.`, 409);
     }
+    if (row.mode === 'mock' && row.state !== 'failed') throw new OrchestratorError('An exam cannot be reset.', 409);
     const s = this.scenarioFor(row);
     this.finalizeAttempt(row);
     const attemptId = this.store.createAttempt({
@@ -253,8 +277,21 @@ export class SessionManager extends EventEmitter {
     return { view: this.toView(this.store.getSession(row.id)!), ready };
   }
 
+  /** Exam mode: grades once, then ends the session and stops the VMs. The ended view carries the result. */
+  async submit(): Promise<SessionView> {
+    const row = this.requireTasks();
+    if (row.mode !== 'mock') throw new OrchestratorError('Only an exam is submitted; use Grade.', 409);
+    await this.runGrade(row, {});
+    return this.end();
+  }
+
   async grade(opts: GradeOptions = {}): Promise<GradeResult> {
-    const row = this.requireOpen();
+    const row = this.requireTasks();
+    if (row.mode === 'mock') throw new OrchestratorError('In exam mode, submit the exam to see your score.', 409);
+    return this.runGrade(row, opts);
+  }
+
+  private async runGrade(row: SessionRow, opts: GradeOptions): Promise<GradeResult> {
     if (row.state !== 'running') {
       throw new OrchestratorError(`Cannot grade while the session is ${row.state}.`, 409);
     }
@@ -298,7 +335,7 @@ export class SessionManager extends EventEmitter {
 
   /** Reveals the next hint of a task (default: the first task that still has hints). */
   hint(taskId?: string): SessionView {
-    const row = this.requireOpen();
+    const row = this.requireTasks();
     if (row.state !== 'running' && row.state !== 'grading') {
       throw new OrchestratorError(`Hints are available once the lab is running (currently ${row.state}).`, 409);
     }
@@ -319,7 +356,7 @@ export class SessionManager extends EventEmitter {
   }
 
   solution(): SessionView {
-    const row = this.requireOpen();
+    const row = this.requireTasks();
     if (!ASSIST_MODES.includes(row.mode)) throw new OrchestratorError(`Solutions are disabled in ${row.mode} mode.`, 403);
     const s = this.scenarioFor(row);
     if (!s.solutionMd) throw new OrchestratorError('This scenario has no solution.md.', 404);
@@ -332,7 +369,7 @@ export class SessionManager extends EventEmitter {
 
   /** Runs the scenario's solution steps (solution: in scenario.yaml, else solution.sh on controlplane). */
   async applySolution(): Promise<void> {
-    const row = this.requireOpen();
+    const row = this.requireTasks();
     if (row.state !== 'running') throw new OrchestratorError(`Cannot apply the solution while ${row.state}.`, 409);
     const s = this.scenarioFor(row);
     const steps: Step[] | undefined = s.def.solution ?? (s.solutionScript ? [{ node: 'controlplane', script: 'solution.sh', timeoutSeconds: 600 }] : undefined);
@@ -351,7 +388,7 @@ export class SessionManager extends EventEmitter {
    * `ready` resolves when the setup is done. Opens are queued, so setup never runs twice.
    */
   openTask(taskId: string): StartResult {
-    const row = this.requireOpen();
+    const row = this.requireTasks();
     const task = this.scenarioFor(row).tasks.find((t) => t.id === taskId);
     if (!task) throw new OrchestratorError(`Unknown task "${taskId}".`, 404);
     if (row.state === 'running' && !isReady(row, taskId)) {

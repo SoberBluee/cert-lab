@@ -4,6 +4,7 @@ export * from './lint';
 export * from './logger';
 export * from './orchestrator';
 export * from './paths';
+export * from './playground';
 export * from './quick';
 export * from './recipes';
 export * from './scaffold';

@@ -11,6 +11,7 @@ import {
   type Task,
 } from '@cka/schema';
 import { scenariosDir } from './paths';
+import { PLAYGROUND_ID } from './playground';
 
 export interface LoadedTask extends Task {
   markdown: string;
@@ -108,6 +109,8 @@ export class ScenarioLibrary {
       const res = loadScenarioFile(file, this.root);
       if (isLoadError(res)) {
         this.errors.push(res);
+      } else if (res.def.id === PLAYGROUND_ID) {
+        this.errors.push({ file, messages: [`scenario id "${PLAYGROUND_ID}" is reserved for the playground`] });
       } else if (this.byId.has(res.def.id)) {
         this.errors.push({ file, messages: [`duplicate scenario id "${res.def.id}" (also in ${this.byId.get(res.def.id)!.relDir})`] });
       } else {

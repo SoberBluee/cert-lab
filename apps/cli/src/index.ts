@@ -130,10 +130,26 @@ program
 program
   .command('start <id>')
   .description('restore the base snapshot, run setup and print the task')
+  .option('--exam', 'exam mode: no hints or solution, a deadline, and one ./cka submit at the end')
   .action(
-    action(async (id: string) => {
-      const { ready } = await o().sessions.start(id, 'practice');
-      printTask(await awaitReady(ready));
+    action(async (id: string, opts: { exam?: boolean }) => {
+      const { ready } = await o().sessions.start(id, opts.exam ? 'mock' : 'practice');
+      const view = await awaitReady(ready);
+      printTask(view);
+      if (view.deadlineAt) console.log(c.yellow(`\nExam mode: submit with ./cka submit before ${new Date(view.deadlineAt).toLocaleTimeString()}`));
+    }),
+  );
+
+program
+  .command('playground')
+  .description('start a 3-node cluster with no tasks, to practise freely')
+  .action(
+    action(async () => {
+      const { ready } = await o().sessions.startPlayground();
+      const view = await awaitReady(ready);
+      console.log(c.bold('\nPlayground ready') + c.dim('  Calico, Traefik (Ingress and Gateway API on :30080), Helm, crictl, etcdctl'));
+      printConnection(view.connection);
+      console.log(c.dim('\nReset to a clean cluster: ./cka reset   finish: ./cka end'));
     }),
   );
 
@@ -179,6 +195,17 @@ program
     action(async () => {
       console.log(c.dim('Grading...'));
       printGrade(await o().sessions.grade());
+    }),
+  );
+
+program
+  .command('submit')
+  .description('exam mode: grade once, then end the session and stop the VMs')
+  .action(
+    action(async () => {
+      console.log(c.dim('Submitting...'));
+      const view = await o().sessions.submit();
+      if (view.lastGrade) printGrade(view.lastGrade);
     }),
   );
 

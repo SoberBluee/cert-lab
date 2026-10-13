@@ -54,9 +54,15 @@ function NodeTerminal({ node, visible, onConnected }: { node: string; visible: b
       const ws = socketRef.current;
       if (ws?.readyState === WebSocket.OPEN) ws.send(encoder.encode(d));
     });
-    const observer = new ResizeObserver(() => fit());
+    // Dragging the split resizes on every pointer move; refit at most once per frame.
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(fit);
+    });
     observer.observe(hostRef.current!);
     return () => {
+      cancelAnimationFrame(frame);
       observer.disconnect();
       input.dispose();
       term.dispose();
@@ -175,7 +181,9 @@ export function TerminalPanel({
         {onToggleFullscreen && (
           <button
             onClick={onToggleFullscreen}
-            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen: task on the left, terminal on the right'}
+            title={
+              fullscreen ? 'Exit fullscreen' : session.mode === 'playground' ? 'Fullscreen terminal' : 'Fullscreen: task on the left, terminal on the right'
+            }
             className="ml-auto shrink-0 rounded-md px-2.5 py-1 text-xs whitespace-nowrap text-zinc-400 transition hover:bg-zinc-800/60 hover:text-zinc-200"
           >
             {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}

@@ -134,6 +134,19 @@ describe('deferred task setup', () => {
     assert.deepEqual(readyIds(view), ['q1', 'q2', 'q3']);
   });
 
+  it('a scenario cannot use the playground id', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cka-reserved-'));
+    mkdirSync(join(root, 'x'));
+    writeFileSync(
+      join(root, 'x', 'scenario.yaml'),
+      `id: playground\ntitle: P\ndomain: troubleshooting\ndifficulty: 1\nestimatedMinutes: 1\npoints: 1\nbase: cluster\nchecks: [{ id: c, description: c, type: kubectl, run: 'true', expect: { equals: '' } }]\n`,
+    );
+    writeFileSync(join(root, 'x', 'task.md'), 'x\n');
+    const library = new ScenarioLibrary(root);
+    assert.equal(library.get('playground'), undefined);
+    assert.match(library.errors[0].messages.join(), /reserved for the playground/);
+  });
+
   it('reset forgets opened tasks', async () => {
     const { driver, sessions, start } = setup();
     await start();
@@ -141,5 +154,72 @@ describe('deferred task setup', () => {
     const view = await (await sessions.reset()).ready;
     assert.deepEqual(readyIds(view), ['q1']);
     assert.deepEqual(driver.scripts, ['q1.sh', 'q2.sh', 'q1.sh']);
+  });
+});
+
+describe('exam mode', () => {
+  it('has a deadline and refuses grade, hints, solution and reset', async () => {
+    const { sessions, start } = setup();
+    const view = await start('mock');
+    assert.equal(view.mode, 'mock');
+    assert.equal(Date.parse(view.deadlineAt!) - Date.parse(view.readyAt!), 5 * 60_000);
+    await assert.rejects(sessions.grade(), /submit the exam/);
+    assert.throws(() => sessions.hint(), /disabled in mock mode/);
+    assert.throws(() => sessions.solution(), /disabled in mock mode/);
+    await assert.rejects(sessions.reset(), /cannot be reset/);
+  });
+
+  it('submit grades once, ends the session and records the attempt', async () => {
+    const { sessions, start } = setup();
+    const store = (sessions as unknown as { store: Store }).store;
+    await start('mock');
+    const ended = await sessions.submit();
+    assert.equal(ended.state, 'completed');
+    assert.equal(ended.lastGrade?.score, 1);
+    assert.equal(ended.lastGrade?.maxScore, 3);
+    assert.equal(sessions.current(), null);
+    const attempts = store.listAttempts();
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].mode, 'mock');
+    assert.equal(attempts[0].score, 1);
+  });
+
+  it('only an exam is submitted, and practice sessions have no deadline', async () => {
+    const { sessions, start } = setup();
+    const view = await start();
+    assert.equal(view.deadlineAt, undefined);
+    await assert.rejects(sessions.submit(), /Only an exam is submitted/);
+  });
+});
+
+describe('playground', () => {
+  it('runs a task-free lab on the cluster image that cannot be graded and leaves no history', async () => {
+    const { driver, sessions } = setup();
+    const store = (sessions as unknown as { store: Store }).store;
+    const view = await (await sessions.startPlayground()).ready;
+    assert.equal(view.state, 'running');
+    assert.equal(view.mode, 'playground');
+    assert.equal(view.scenarioTitle, 'Playground');
+    assert.equal(view.base, 'cluster');
+    assert.deepEqual(view.tasks, []);
+    assert.deepEqual(driver.scripts, []);
+    assert.ok(view.connection);
+
+    await assert.rejects(sessions.grade(), /no tasks/);
+    assert.throws(() => sessions.hint(), /no tasks/);
+    assert.throws(() => sessions.solution(), /no tasks/);
+    assert.throws(() => sessions.openTask('q1'), /no tasks/);
+    await assert.rejects(sessions.start('staged'), /already running/);
+
+    assert.equal((await (await sessions.reset()).ready).state, 'running');
+    await sessions.end();
+    assert.equal(sessions.current(), null);
+    assert.deepEqual(store.listAttempts(), []);
+  });
+
+  it('the playground id only starts in playground mode, and vice versa', async () => {
+    const { sessions } = setup();
+    await assert.rejects(sessions.start('playground', 'practice'), /only be started as a playground/);
+    await assert.rejects(sessions.start('staged', 'playground'), /only be started as a playground/);
   });
 });

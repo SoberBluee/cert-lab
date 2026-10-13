@@ -80,8 +80,14 @@ app.get<{ Params: { id: string } }>('/api/scenarios/:id', async (req): Promise<S
 app.post<{ Body: { scenarioId?: string; mode?: Mode } }>('/api/sessions', async (req, reply) => {
   const { scenarioId, mode } = req.body ?? {};
   if (!scenarioId) throw new OrchestratorError('scenarioId is required.', 400);
-  if (mode && mode !== 'practice') throw new OrchestratorError(`Mode "${mode}" is not available yet; use practice.`, 400);
-  const { view } = await sessions.start(scenarioId, 'practice');
+  if (mode && mode !== 'practice' && mode !== 'mock') throw new OrchestratorError(`Mode "${mode}" is not available; use practice or mock.`, 400);
+  const { view } = await sessions.start(scenarioId, mode ?? 'practice');
+  reply.status(202);
+  return view;
+});
+
+app.post('/api/playground', async (_req, reply) => {
+  const { view } = await sessions.startPlayground();
   reply.status(202);
   return view;
 });
@@ -120,6 +126,7 @@ app.post<{ Params: { id: string } }>('/api/sessions/current/tasks/:id/open', asy
 });
 
 app.post('/api/sessions/current/grade', async () => sessions.grade());
+app.post('/api/sessions/current/submit', async () => sessions.submit());
 app.post<{ Body: { taskId?: string } | null }>('/api/sessions/current/hint', async (req) => sessions.hint(req.body?.taskId));
 app.post('/api/sessions/current/solution', async () => sessions.solution());
 
