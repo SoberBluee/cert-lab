@@ -1,0 +1,210 @@
+id: test-4
+title: test-4
+domain: workloads
+difficulty: 3
+estimatedMinutes: 37
+points: 29
+tags: [ troubleshooting, scheduling, resourcequota, limitrange, affinity, control-plane, static-pod, etcd, kubelet, storageclass, allow-expansion, make-default, deployment, expose, toleration, autoscale ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q1_NS: { oneOf: [ batch, reports, analytics ] }
+  Q1_APP: { oneOf: [ worker, renderer, indexer ] }
+  Q1_FAULT: { oneOf: [ quota-pods, quota-limits, limitrange-max, node-affinity, priority-class ], hidden: true }
+  Q2_NS: { oneOf: [ ops, core, platform ] }
+  Q2_FAULT: { oneOf: [ apiserver-etcd-port, apiserver-etcd-certfile, etcd-cert-path, scheduler-command, controller-manager-kubeconfig, kubelet-client-cert ], hidden: true }
+  Q3_NAME: { oneOf: [ gold, silver, bronze ] }
+  Q3_RECLAIM: { oneOf: [ Retain, Delete ] }
+  Q3_BINDING: { oneOf: [ Immediate, WaitForFirstConsumer ] }
+  Q4_NS: { oneOf: [ web, shop, team-a ] }
+  Q4_NAME: { oneOf: [ frontend, api, catalog ] }
+  Q4_TAINT_TEAM: { oneOf: [ web, payments, search ] }
+  Q4_TAINT_NODE: { oneOf: [ worker-1, worker-2 ] }
+  Q4_HPA_CPU: { oneOf: [ 50, 70, 80 ] }
+setup:
+  - node: controlplane
+    script: setup/q1.sh
+    timeoutSeconds: 400
+  - node: controlplane
+    script: setup/q4.sh
+  - node: controlplane
+    script: setup/q2.sh
+    timeoutSeconds: 400
+solution:
+  - node: controlplane
+    script: setup/q2-solution.sh
+    timeoutSeconds: 900
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: Deployment ${Q1_APP} not running
+    points: 5
+    checks:
+      - id: q1-ready
+        description: ${Q1_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 3
+        retrySeconds: 60
+      - id: q1-spec
+        description: replicas, image and requests match the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory}'
+        expect: { equals: 2 nginx:1.27-alpine 100m 64Mi }
+        weight: 1
+      - id: q1-same-deployment
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get deployment,replicaset,pods -o wide: are there fewer Pods than replicas, or Pods stuck in Pending?"
+      - "Missing Pods: kubectl -n ${Q1_NS} describe replicaset -l app=${Q1_APP} shows why creating them failed (FailedCreate events)."
+      - "Pending Pods: kubectl -n ${Q1_NS} describe pod <pod> shows the scheduler's reason under Events."
+      - "kubectl -n ${Q1_NS} get resourcequota,limitrange: what does the namespace enforce?"
+  - id: q2
+    title: Control plane after maintenance
+    points: 8
+    checks:
+      - id: q2-api-ready
+        description: the API server reports ready
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 120
+      - id: q2-components
+        description: etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        type: kubectl
+        run: kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort | xargs
+        expect: { equals: etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 2
+        retrySeconds: 120
+      - id: q2-nodes-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 90
+      - id: q2-web-ready
+        description: web runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 2/2 }
+        weight: 2
+        retrySeconds: 120
+      - id: q2-manifests
+        description: /etc/kubernetes/manifests holds only the four control plane manifests
+        type: ssh
+        node: controlplane
+        run: ls /etc/kubernetes/manifests | sort | xargs
+        expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
+        weight: 1
+    hints:
+      - "kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down."
+      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting."
+      - Static pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).
+      - "If controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf."
+  - id: q3
+    title: StorageClass ${Q3_NAME}
+    points: 5
+    checks:
+      - id: q3-provisioner
+        description: ${Q3_NAME} uses kubernetes.io/no-provisioner
+        type: kubectl
+        run: kubectl get storageclass ${Q3_NAME} -o jsonpath='{.provisioner}'
+        expect: { equals: kubernetes.io/no-provisioner }
+        weight: 1
+      - id: q3-reclaim
+        description: ${Q3_NAME} has reclaim policy ${Q3_RECLAIM}
+        type: kubectl
+        run: kubectl get storageclass ${Q3_NAME} -o jsonpath='{.reclaimPolicy}'
+        expect: { equals: "${Q3_RECLAIM}" }
+        weight: 1
+      - id: q3-binding
+        description: ${Q3_NAME} binds with ${Q3_BINDING}
+        type: kubectl
+        run: kubectl get storageclass ${Q3_NAME} -o jsonpath='{.volumeBindingMode}'
+        expect: { equals: "${Q3_BINDING}" }
+        weight: 1
+      - id: q3-expand
+        description: ${Q3_NAME} allows volume expansion
+        type: kubectl
+        run: kubectl get storageclass ${Q3_NAME} -o jsonpath='{.allowVolumeExpansion}'
+        expect: { equals: "true" }
+        weight: 1
+      - id: q3-make-default
+        description: ${Q3_NAME} is the default StorageClass
+        type: kubectl
+        run: kubectl get storageclass ${Q3_NAME} -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}'
+        expect: { equals: "true" }
+        weight: 1
+    hints:
+      - kubectl explain storageclass lists the fields; there is no kubectl create storageclass, so write the YAML.
+      - "allowVolumeExpansion: true is a top-level field of the StorageClass."
+      - kubectl annotate storageclass ${Q3_NAME} storageclass.kubernetes.io/is-default-class=true
+  - id: q4
+    title: Deployment ${Q4_NAME}
+    points: 11
+    checks:
+      - id: q4-ready
+        description: Deployment ${Q4_NAME} has 3 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get deployment ${Q4_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "3" }
+        weight: 2
+        retrySeconds: 30
+      - id: q4-image
+        description: ${Q4_NAME} runs nginx:1.26-alpine
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get deployment/${Q4_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: nginx:1.26-alpine }
+        weight: 1
+      - id: q4-expose-service
+        description: Service ${Q4_NAME} is a ClusterIP mapping port 80 to 80
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get svc ${Q4_NAME} -o jsonpath='{.spec.type}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+        expect: { equals: ClusterIP/80/80 }
+        weight: 1
+      - id: q4-expose-reachable
+        description: Service ${Q4_NAME} answers HTTP 200 on port 80
+        type: kubectl
+        run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q4_NS} get svc ${Q4_NAME} -o jsonpath='{.spec.clusterIP}'):80/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q4-taint-toleration
+        description: the Pods tolerate dedicated=${Q4_TAINT_TEAM}:NoSchedule
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get deployment/${Q4_NAME} -o jsonpath='{.spec.template.spec.tolerations[?(@.key=="dedicated")].value}'
+        expect: { contains: "${Q4_TAINT_TEAM}" }
+        weight: 1
+      - id: q4-taint-nodes
+        description: every Pod runs on ${Q4_TAINT_NODE}
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get pods -l app=${Q4_NAME} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | tr '\n' ' '
+        expect: { equals: "${Q4_TAINT_NODE}" }
+        weight: 1
+      - id: q4-taint-kept
+        description: ${Q4_TAINT_NODE} keeps its taint
+        type: kubectl
+        run: kubectl get node ${Q4_TAINT_NODE} -o jsonpath='{.spec.taints[?(@.key=="dedicated")].value}'
+        expect: { equals: "${Q4_TAINT_TEAM}" }
+        weight: 1
+      - id: q4-hpa
+        description: an autoscaler drives ${Q4_NAME} between 1 and 8 replicas at ${Q4_HPA_CPU}% CPU
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get hpa -o jsonpath='{range .items[?(@.spec.scaleTargetRef.name=="${Q4_NAME}")]}{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[0].resource.target.averageUtilization}{end}'
+        expect: { equals: "1/8/${Q4_HPA_CPU}" }
+        weight: 2
+    hints:
+      - kubectl -n ${Q4_NS} create deployment ${Q4_NAME} --image=nginx:1.26-alpine --replicas=3 --dry-run=client -o yaml gives you a manifest to start from.
+      - kubectl -n ${Q4_NS} expose deployment ${Q4_NAME} --type=ClusterIP --port=80 --target-port=80
+      - A toleration lets Pods onto the node; a nodeSelector (or node affinity) on kubernetes.io/hostname keeps them there.
+      - kubectl -n ${Q4_NS} autoscale deployment ${Q4_NAME} --min=1 --max=8 with a CPU target (see kubectl autoscale --help).
