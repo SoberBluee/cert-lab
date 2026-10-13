@@ -8,7 +8,6 @@ tags: [ kubeadm, install, cni ]
 base: bare
 nodes: { controlPlane: 1, workers: 2 }
 settleSeconds: 30
-draft: true
 variables:
   Q1_CIDR: { oneOf: [ 10.244.0.0/16, 192.168.0.0/16 ] }
 tasks:
