@@ -97,11 +97,13 @@ async function awaitReady(ready: Promise<SessionView>): Promise<SessionView> {
   return view;
 }
 
-function printTask(view: SessionView) {
+function printTask(view: SessionView, only?: number) {
   console.log(c.bold(`\n${view.scenarioTitle}`) + c.dim(`  [${view.scenarioId}]`));
   const multi = view.tasks.length > 1;
   view.tasks.forEach((t, i) => {
+    if (only !== undefined && i !== only) return;
     if (multi) console.log(c.bold(`\nQuestion ${i + 1}: ${t.title}`) + c.dim(` (${t.points} pt)`));
+    if (!t.ready) console.log(c.yellow(`\nNot set up yet. Run ./cka task ${i + 1} when you start this question.`));
     console.log('\n' + t.markdown.trim());
   });
   printConnection(view.connection);
@@ -145,19 +147,28 @@ program
       console.log(`${c.bold(v.scenarioTitle)} ${c.dim(v.scenarioId)}  state=${v.state}  mode=${v.mode}`);
       if (v.error) console.log(c.red(v.error));
       if (v.readyAt) console.log(`elapsed ${formatDuration(Math.round((Date.now() - Date.parse(v.readyAt)) / 1000))}`);
+      const waiting = v.tasks.flatMap((t, i) => (t.ready ? [] : [i + 1]));
+      if (v.preparingTask) console.log(c.yellow(`setting up ${v.preparingTask}`));
+      if (waiting.length) console.log(c.dim(`not set up yet: question ${waiting.join(', ')} (./cka task <n> sets one up)`));
       printConnection(v.connection);
       if (v.lastGrade) printGrade(v.lastGrade);
     }),
   );
 
 program
-  .command('task')
-  .description('print the task of the current session')
+  .command('task [n]')
+  .description('print the task of the current session; with n, set up question n if needed and print only it')
   .action(
-    action(() => {
+    action(async (n?: string) => {
       const v = o().sessions.current();
       if (!v) return console.log('No active session.');
-      printTask(v);
+      if (n === undefined) return printTask(v);
+      const i = Number(n) - 1;
+      const task = v.tasks[i];
+      if (!task) fail(`There is no question ${n}; this session has ${v.tasks.length}.`);
+      const { ready } = o().sessions.openTask(task.id);
+      const view = await awaitReady(ready);
+      printTask(view, i);
     }),
   );
 

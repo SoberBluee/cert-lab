@@ -47,10 +47,7 @@ export interface ScenarioFilters {
 export const api = {
   scenarios: (f: ScenarioFilters = {}) => {
     const params = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]);
-    return request<{ scenarios: ScenarioSummary[]; errors: { file: string; messages: string[] }[] }>(
-      'GET',
-      `/scenarios?${params}`,
-    );
+    return request<{ scenarios: ScenarioSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/scenarios?${params}`);
   },
   scenario: (id: string) => request<ScenarioDetail>('GET', `/scenarios/${encodeURIComponent(id)}`),
   images: () => request<BaseImage[]>('GET', '/images'),
@@ -59,6 +56,7 @@ export const api = {
   start: (scenarioId: string) => request<SessionView>('POST', '/sessions', { scenarioId, mode: 'practice' }),
   reset: () => request<SessionView>('POST', '/sessions/current/reset'),
   grade: () => request<GradeResult>('POST', '/sessions/current/grade'),
+  openTask: (taskId: string) => request<SessionView>('POST', `/sessions/current/tasks/${encodeURIComponent(taskId)}/open`),
   hint: (taskId?: string) => request<SessionView>('POST', '/sessions/current/hint', { taskId }),
   solution: () => request<SessionView>('POST', '/sessions/current/solution'),
   end: () => request<SessionView>('DELETE', '/sessions/current'),
@@ -90,8 +88,7 @@ export const studioApi = {
   job: () => request<{ job: StudioJob | null }>('GET', '/studio/job').then((r) => r.job),
   recipes: (spoilers = false) => request<RecipeCatalog>('GET', `/studio/recipes${spoilers ? '?spoilers=1' : ''}`),
   quickPreview: (req: QuickCreateRequest) => request<QuickPreview>('POST', '/studio/quick/preview', req),
-  quickCreate: (req: QuickCreateRequest) =>
-    request<{ id: string; job: StudioJob | null; jobError: string | null }>('POST', '/studio/quick', req),
+  quickCreate: (req: QuickCreateRequest) => request<{ id: string; job: StudioJob | null; jobError: string | null }>('POST', '/studio/quick', req),
 };
 
 export const kubeconfigUrl = '/api/sessions/current/kubeconfig';

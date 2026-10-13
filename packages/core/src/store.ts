@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_grade TEXT,
   connection TEXT,
   vars TEXT NOT NULL DEFAULT '{}',
+  tasks_ready TEXT,
+  preparing_task TEXT,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS mock_exams (
@@ -84,6 +86,10 @@ export interface SessionRow {
   lastGrade?: GradeResult;
   connection?: ConnectionInfo;
   vars: Record<string, string>;
+  /** Tasks whose setup has run; undefined for sessions started before deferred setup, where every task is ready. */
+  tasksReady?: string[];
+  /** Task whose deferred setup is running right now. */
+  preparingTask?: string;
   updatedAt: string;
 }
 
@@ -123,6 +129,8 @@ function toSession(r: Row): SessionRow {
     lastGrade: json<GradeResult>(r.last_grade),
     connection: json<ConnectionInfo>(r.connection),
     vars: json<Record<string, string>>(r.vars) ?? {},
+    tasksReady: json<string[]>(r.tasks_ready),
+    preparingTask: opt(r.preparing_task),
     updatedAt: r.updated_at as string,
   };
 }
@@ -138,6 +146,8 @@ const SESSION_COLUMNS: Record<string, string> = {
   lastGrade: 'last_grade',
   connection: 'connection',
   attemptId: 'attempt_id',
+  tasksReady: 'tasks_ready',
+  preparingTask: 'preparing_task',
 };
 
 const ATTEMPT_COLUMNS: Record<string, string> = {
@@ -170,6 +180,8 @@ export class Store {
   private migrate() {
     const cols = (this.db.prepare('PRAGMA table_info(sessions)').all() as Row[]).map((r) => r.name);
     if (!cols.includes('vars')) this.db.exec(`ALTER TABLE sessions ADD COLUMN vars TEXT NOT NULL DEFAULT '{}'`);
+    if (!cols.includes('tasks_ready')) this.db.exec('ALTER TABLE sessions ADD COLUMN tasks_ready TEXT');
+    if (!cols.includes('preparing_task')) this.db.exec('ALTER TABLE sessions ADD COLUMN preparing_task TEXT');
   }
 
   private update(table: string, columns: Record<string, string>, id: string | number, patch: Record<string, unknown>) {
@@ -211,9 +223,7 @@ export class Store {
 
   /** The most recent session that has not been explicitly ended (failed sessions stay visible). */
   openSession(): SessionRow | undefined {
-    const r = this.db
-      .prepare(`SELECT * FROM sessions WHERE state != 'completed' ORDER BY started_at DESC LIMIT 1`)
-      .get() as Row | undefined;
+    const r = this.db.prepare(`SELECT * FROM sessions WHERE state != 'completed' ORDER BY started_at DESC LIMIT 1`).get() as Row | undefined;
     return r ? toSession(r) : undefined;
   }
 
@@ -248,9 +258,7 @@ export class Store {
     this.db.exec('BEGIN');
     try {
       this.db.prepare('DELETE FROM check_results WHERE attempt_id = ?').run(attemptId);
-      const ins = this.db.prepare(
-        'INSERT INTO check_results (attempt_id, check_id, passed, weight, output) VALUES (?, ?, ?, ?, ?)',
-      );
+      const ins = this.db.prepare('INSERT INTO check_results (attempt_id, check_id, passed, weight, output) VALUES (?, ?, ?, ?, ?)');
       for (const r of results) ins.run(attemptId, r.checkId, r.passed ? 1 : 0, r.weight, r.output.slice(0, 2000));
       this.db.exec('COMMIT');
     } catch (e) {

@@ -94,7 +94,9 @@ export function lintScenario(s: LoadedScenario, read: FileReader, where: string,
     const label = d.tasks ? `task ${t.id}: check weights` : 'check weights';
     if (weights !== t.points) warn(`${label} add up to ${weights} but points is ${t.points}`);
     if (!t.hints.length) warn(d.tasks ? `task ${t.id} has no hints` : 'no hints');
+    if (t.setupStage > 0 && !t.setup.length) warn(`task ${t.id} has setupStage ${t.setupStage} but no setup steps`);
   }
+  if (s.tasks.length === 1 && s.tasks[0].setupStage > 0) warn('setupStage has no effect in a single-task scenario; its setup runs at start');
   if (d.tasks) {
     const total = s.tasks.reduce((sum, t) => sum + t.points, 0);
     if (total !== d.points) warn(`task points add up to ${total} but scenario points is ${d.points}`);

@@ -31,6 +31,11 @@ export class OrchestratorError extends Error {
 
 const ACTIVE: SessionState[] = ['provisioning', 'running', 'grading'];
 const ASSIST_MODES: Mode[] = ['practice', 'dry-run', 'verify'];
+/** Authoring runs set up every task at start, so their checks and solution see the whole lab. */
+const SETUP_ALL_MODES: Mode[] = ['dry-run', 'verify'];
+const isReady = (row: Pick<SessionRow, 'tasksReady'>, taskId: string) => !row.tasksReady || row.tasksReady.includes(taskId);
+const byStage = <T extends { setupStage: number }>(tasks: T[]) => [...tasks].sort((a, b) => a.setupStage - b.setupStage);
+const questionList = (ns: number[]) => (ns.length === 1 ? `question ${ns[0]}` : `questions ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`);
 const tail = (s: string, n = 500) => (s.length > n ? '...' + s.slice(-n) : s).trim();
 const short = (s: string, n = 60) => {
   const line = s.trim().split('\n')[0];
@@ -73,6 +78,7 @@ export class SessionManager extends EventEmitter {
         markdown: t.markdown,
         hintsRevealed: t.hints.slice(0, row.hintsRevealed[t.id] ?? 0),
         hintsTotal: t.hints.length,
+        ready: isReady(row, t.id),
       })) ?? [];
     return {
       id: row.id,
@@ -96,6 +102,7 @@ export class SessionManager extends EventEmitter {
       solutionViewed: row.solutionViewed,
       solution: row.solutionViewed ? s?.solutionMd : undefined,
       lastGrade: row.lastGrade,
+      preparingTask: row.preparingTask,
     };
   }
 
@@ -157,24 +164,26 @@ export class SessionManager extends EventEmitter {
     this.store.createSession({ id, scenarioId, mode, base: scenario.def.base, attemptId, vars });
     this.log.info({ sessionId: id, scenarioId, mode, vars }, 'session created');
     this.emitChange(id);
-    const ready = this.provision(id, renderScenario(scenario, vars), vars);
+    const ready = this.provision(id, renderScenario(scenario, vars), vars, mode);
     return { view: this.toView(this.store.getSession(id)!), ready };
   }
 
-  private async provision(id: string, s: LoadedScenario, vars: Vars): Promise<SessionView> {
+  private async provision(id: string, s: LoadedScenario, vars: Vars, mode: Mode): Promise<SessionView> {
     const t0 = Date.now();
     try {
+      this.store.updateSession(id, { tasksReady: [], preparingTask: undefined });
       this.progress(id, `Preparing "${s.def.title}" on the ${s.def.base} base`);
       await this.driver.createSession(s.def.nodes, s.def.base, {
         sessionId: id,
         onProgress: (m) => this.progress(id, m),
       });
       if (!this.stillProvisioning(id)) return this.toView(this.store.getSession(id)!);
-      const steps = [...s.def.setup, ...s.tasks.flatMap((t) => t.setup)];
+      const atStart = SETUP_ALL_MODES.includes(mode) || s.tasks.length === 1 ? byStage(s.tasks) : s.tasks.filter((t) => t.setupStage === 0);
+      const steps = [...s.def.setup, ...atStart.flatMap((t) => t.setup)];
       if (steps.length) await this.runSteps(id, s, steps, 'setup', vars);
       const connection = await this.driver.getConnectionInfo(id);
       if (this.stillProvisioning(id)) {
-        this.store.updateSession(id, { state: 'running', readyAt: now(), connection });
+        this.store.updateSession(id, { state: 'running', readyAt: now(), connection, tasksReady: atStart.map((t) => t.id) });
         this.progress(id, `Lab ready in ${Math.round((Date.now() - t0) / 1000)}s`);
       }
     } catch (e) {
@@ -235,10 +244,12 @@ export class SessionManager extends EventEmitter {
       progress: [],
       lastGrade: undefined,
       connection: undefined,
+      tasksReady: [],
+      preparingTask: undefined,
     });
     this.log.info({ sessionId: row.id, vars: row.vars }, 'session reset');
     this.emitChange(row.id);
-    const ready = this.provision(row.id, s, row.vars);
+    const ready = this.provision(row.id, s, row.vars, row.mode);
     return { view: this.toView(this.store.getSession(row.id)!), ready };
   }
 
@@ -247,11 +258,13 @@ export class SessionManager extends EventEmitter {
     if (row.state !== 'running') {
       throw new OrchestratorError(`Cannot grade while the session is ${row.state}.`, 409);
     }
+    if (row.preparingTask) throw new OrchestratorError('Cannot grade while a question is being set up.', 409);
     const s = this.scenarioFor(row);
+    const skipTasks = s.tasks.filter((t) => !isReady(row, t.id)).map((t) => t.id);
     this.store.updateSession(row.id, { state: 'grading' });
     this.emitChange(row.id);
     try {
-      const outcome = await runChecks(this.driver, row.id, s, { ...opts, vars: row.vars });
+      const outcome = await runChecks(this.driver, row.id, s, { ...opts, vars: row.vars, skipTasks });
       const elapsedS = row.readyAt ? Math.round((Date.now() - Date.parse(row.readyAt)) / 1000) : 0;
       const result: GradeResult = {
         score: outcome.score,
@@ -324,7 +337,68 @@ export class SessionManager extends EventEmitter {
     const s = this.scenarioFor(row);
     const steps: Step[] | undefined = s.def.solution ?? (s.solutionScript ? [{ node: 'controlplane', script: 'solution.sh', timeoutSeconds: 600 }] : undefined);
     if (!steps) throw new OrchestratorError(`Scenario "${s.def.id}" has no solution steps or solution.sh.`, 400);
+    // The solution fixes every question, so each one must be broken first.
+    for (const t of byStage(s.tasks)) {
+      const view = await this.openTask(t.id).ready;
+      if (view.state !== 'running') throw new OrchestratorError(view.error ?? `Setting up ${t.id} failed.`, 500);
+    }
     await this.runSteps(row.id, s, steps, 'solution', row.vars);
+  }
+
+  /**
+   * Sets up a deferred task the first time the learner opens it, after every unopened task with a
+   * lower non-zero stage (node setup needs the API that a later stage may break). Returns at once;
+   * `ready` resolves when the setup is done. Opens are queued, so setup never runs twice.
+   */
+  openTask(taskId: string): StartResult {
+    const row = this.requireOpen();
+    const task = this.scenarioFor(row).tasks.find((t) => t.id === taskId);
+    if (!task) throw new OrchestratorError(`Unknown task "${taskId}".`, 404);
+    if (row.state === 'running' && !isReady(row, taskId)) {
+      if (!row.preparingTask) this.store.updateSession(row.id, { preparingTask: taskId });
+      this.opening = this.opening
+        .then(() => this.prepare(row.id, taskId))
+        .catch((e) => this.log.error({ sessionId: row.id, task: taskId, err: e }, 'task setup crashed'));
+    }
+    const ready = this.opening.then(() => this.toView(this.store.getSession(row.id)!));
+    return { view: this.toView(this.store.getSession(row.id)!), ready };
+  }
+
+  private opening: Promise<void> = Promise.resolve();
+
+  private async prepare(id: string, taskId: string): Promise<void> {
+    const row = this.store.getSession(id);
+    if (!row) return;
+    if (row.state !== 'running' || isReady(row, taskId)) {
+      if (row.preparingTask === taskId) this.store.updateSession(id, { preparingTask: undefined });
+      return;
+    }
+    if (row.preparingTask && row.preparingTask !== taskId) {
+      this.log.warn({ sessionId: id, task: taskId, preparing: row.preparingTask }, 'another process is setting up a task');
+      return;
+    }
+    const s = this.scenarioFor(row);
+    const target = s.tasks.find((t) => t.id === taskId)!;
+    const todo = byStage(s.tasks.filter((t) => !isReady(row, t.id) && (t.id === taskId || (t.setupStage > 0 && t.setupStage < target.setupStage))));
+    const label = questionList(todo.map((t) => s.tasks.indexOf(t) + 1));
+    const t0 = Date.now();
+    this.store.updateSession(id, { preparingTask: taskId });
+    this.progress(id, `Preparing ${label}`);
+    try {
+      for (const t of todo) {
+        await this.runSteps(id, s, t.setup, 'setup', row.vars);
+        const ready = this.store.getSession(id)?.tasksReady ?? [];
+        this.store.updateSession(id, { tasksReady: [...ready, t.id] });
+      }
+      this.progress(id, `${label[0].toUpperCase()}${label.slice(1)} ready in ${Math.round((Date.now() - t0) / 1000)}s`);
+    } catch (e) {
+      const message = (e as Error).message;
+      this.log.error({ sessionId: id, task: taskId, err: e }, 'task setup failed');
+      if (this.store.getSession(id)?.state === 'running') this.store.updateSession(id, { state: 'failed', error: message });
+    } finally {
+      this.store.updateSession(id, { preparingTask: undefined });
+      this.emitChange(id);
+    }
   }
 
   async end(opts: { stopVms?: boolean } = {}): Promise<SessionView> {
@@ -363,10 +437,19 @@ export class SessionManager extends EventEmitter {
    */
   async recoverOnStartup(): Promise<void> {
     const row = this.store.openSession();
-    if (!row || (row.state !== 'provisioning' && row.state !== 'grading')) return;
+    if (!row) return;
+    // A half-applied break cannot safely be re-run, so an interrupted question setup fails the session too.
+    const interrupted =
+      row.state === 'provisioning' || row.state === 'grading'
+        ? row.state
+        : row.state === 'running' && row.preparingTask
+          ? `setting up ${row.preparingTask}`
+          : undefined;
+    if (!interrupted) return;
     this.store.updateSession(row.id, {
       state: 'failed',
-      error: `The orchestrator restarted while this session was ${row.state}. Press Reset to rebuild the lab, or End to tear it down.`,
+      preparingTask: undefined,
+      error: `The orchestrator restarted while this session was ${interrupted}. Press Reset to rebuild the lab, or End to tear it down.`,
     });
     this.log.warn({ sessionId: row.id, state: row.state }, 'recovered leaked session');
     try {

@@ -134,6 +134,8 @@ export const TaskSchema = z.strictObject({
   points: z.number().positive(),
   context: z.string().optional(),
   setup: z.array(StepSchema).default([]),
+  /** 0: set up at session start. 1 or more: set up when the learner first opens the task, after any unopened task with a lower stage. */
+  setupStage: z.number().int().min(0).max(9).default(0),
   checks: z.array(CheckSchema).min(1),
   hints: z.array(z.string()).default([]),
 });
@@ -227,7 +229,7 @@ export const LEGACY_TASK_ID = 'main';
 /** Every scenario as a task list. A single-task scenario (top-level checks) becomes one task "main". */
 export function scenarioTasks(s: Scenario): Task[] {
   if (s.tasks) return s.tasks;
-  return [{ id: LEGACY_TASK_ID, title: s.title, points: s.points, context: s.context, setup: [], checks: s.checks ?? [], hints: s.hints }];
+  return [{ id: LEGACY_TASK_ID, title: s.title, points: s.points, context: s.context, setup: [], setupStage: 0, checks: s.checks ?? [], hints: s.hints }];
 }
 
 export function formatZodError(error: z.ZodError): string[] {

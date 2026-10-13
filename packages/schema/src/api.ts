@@ -72,6 +72,8 @@ export interface SessionTask {
   markdown: string;
   hintsRevealed: string[];
   hintsTotal: number;
+  /** False until the task's setup has run; deferred tasks are set up when first opened. */
+  ready: boolean;
 }
 
 export interface ProgressLine {
@@ -103,6 +105,8 @@ export interface SessionView {
   solutionViewed: boolean;
   solution?: string;
   lastGrade?: GradeResult;
+  /** Task whose deferred setup is running. */
+  preparingTask?: string;
 }
 
 export interface AttemptRecord {

@@ -32,9 +32,7 @@ app.setErrorHandler((err: FastifyError | OrchestratorError, req, reply) => {
 
 await app.register(fastifyWebsocket);
 const VITE_PORT = 5173;
-const allowedOrigins = [
-  ...new Set([HOST, '127.0.0.1', 'localhost'].flatMap((h) => [`http://${h}:${PORT}`, `http://${h}:${VITE_PORT}`])),
-];
+const allowedOrigins = [...new Set([HOST, '127.0.0.1', 'localhost'].flatMap((h) => [`http://${h}:${PORT}`, `http://${h}:${VITE_PORT}`]))];
 registerTerminal(app, { sessions, log, driverName: orch.driver.name, allowedOrigins });
 registerStudio(app, { studio: new Studio(library), library, sessions, driver: orch.driver, log, allowedOrigins });
 
@@ -111,6 +109,12 @@ app.get('/api/sessions/current/events', (req, reply) => {
 
 app.post('/api/sessions/current/reset', async (_req, reply) => {
   const { view } = await sessions.reset();
+  reply.status(202);
+  return view;
+});
+
+app.post<{ Params: { id: string } }>('/api/sessions/current/tasks/:id/open', async (req, reply) => {
+  const { view } = sessions.openTask(req.params.id);
   reply.status(202);
   return view;
 });

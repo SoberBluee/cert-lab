@@ -40,7 +40,7 @@ export class FakeDriver implements Driver {
     return { exitCode: 0, stdout: '', stderr: '' };
   }
 
-  async copyIn(): Promise<void> {}
+  async copyIn(_sessionId: string, _node: string, _localPath: string, _remotePath: string): Promise<void> {}
 
   async getConnectionInfo(): Promise<ConnectionInfo> {
     return {

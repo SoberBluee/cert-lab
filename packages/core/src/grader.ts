@@ -56,7 +56,7 @@ export function evaluate(expect: Expect, r: ExecResult): Evaluation {
   if (expect.matches !== undefined && !new RegExp(expect.matches, 'm').test(out)) {
     return fail(`output does not match /${short(expect.matches)}/`);
   }
-  if (expect.notEmpty !== undefined && (out.length > 0) !== expect.notEmpty) {
+  if (expect.notEmpty !== undefined && out.length > 0 !== expect.notEmpty) {
     return fail(expect.notEmpty ? 'output is empty' : `expected empty output, got "${short(out)}"`);
   }
   if (expect.gte !== undefined || expect.lte !== undefined) {
@@ -172,22 +172,32 @@ export async function runChecks(
   driver: Driver,
   sessionId: string,
   scenario: LoadedScenario,
-  opts: GradeOptions & { vars?: Vars } = {},
+  opts: GradeOptions & { vars?: Vars; skipTasks?: string[] } = {},
 ): Promise<ChecksOutcome> {
   const retry = opts.retry ?? true;
   const limit = limiter(MAX_PARALLEL_EXECS);
   const perTask = await Promise.all(
     scenario.tasks.map(async (task) => {
-      const checks = await Promise.all(
-        task.checks.map((check) =>
-          runCheck(driver, sessionId, check, {
-            dir: scenario.dir,
-            windowS: retry ? (check.retrySeconds ?? scenario.def.settleSeconds) : 0,
-            vars: opts.vars,
-            limit,
-          }),
-        ),
-      );
+      // A task that was never set up would pass checks like "every node is Ready" for free.
+      const checks = opts.skipTasks?.includes(task.id)
+        ? task.checks.map((check): CheckResult => ({
+            id: check.id,
+            description: check.description,
+            passed: false,
+            weight: check.weight,
+            detail: 'not attempted',
+            output: 'not attempted: the question was never opened',
+          }))
+        : await Promise.all(
+            task.checks.map((check) =>
+              runCheck(driver, sessionId, check, {
+                dir: scenario.dir,
+                windowS: retry ? (check.retrySeconds ?? scenario.def.settleSeconds) : 0,
+                vars: opts.vars,
+                limit,
+              }),
+            ),
+          );
       const score: TaskScore = {
         id: task.id,
         title: task.title,

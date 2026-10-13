@@ -28,7 +28,9 @@ function ProgressLog({ session, compact }: { session: SessionView; compact?: boo
       {session.progress.map((p, i) => (
         <li key={i} className="flex gap-3">
           <span className="shrink-0 text-zinc-600">{new Date(p.at).toLocaleTimeString()}</span>
-          <span className={i === session.progress.length - 1 && session.state === 'provisioning' ? 'text-amber-300' : 'text-zinc-400'}>
+          <span
+            className={i === session.progress.length - 1 && (session.state === 'provisioning' || session.preparingTask) ? 'text-amber-300' : 'text-zinc-400'}
+          >
             {p.message}
           </span>
         </li>
@@ -54,13 +56,10 @@ function QuestionTabs({ session, active, onSelect }: { session: SessionView; act
             title={t.title}
             onClick={() => onSelect(i)}
             className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${
-              i === active
-                ? 'border-sky-700 bg-sky-950/60 text-sky-100'
-                : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+              i === active ? 'border-sky-700 bg-sky-950/60 text-sky-100' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
             }`}
           >
-            {mark && <span className={`h-1.5 w-1.5 rounded-full ${mark}`} />}
-            Q{i + 1} · {t.points} pt
+            {mark && <span className={`h-1.5 w-1.5 rounded-full ${mark}`} />}Q{i + 1} · {t.points} pt
           </button>
         );
       })}
@@ -68,8 +67,28 @@ function QuestionTabs({ session, active, onSelect }: { session: SessionView; act
   );
 }
 
+/** Shown instead of a task's text until its deferred setup has run. */
+function PreparingTask({ session, active, onOpen }: { session: SessionView; active: number; onOpen: () => void }) {
+  if (!session.preparingTask) {
+    return (
+      <div className="space-y-3 text-sm text-zinc-400">
+        <p>This question is set up when you start it.</p>
+        <Button variant="primary" disabled={session.state !== 'running'} onClick={onOpen}>
+          Set up question {active + 1}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-amber-300">Preparing question {active + 1}… the terminal stays usable meanwhile.</p>
+      <ProgressLog session={{ ...session, progress: session.progress.slice(-4) }} compact />
+    </div>
+  );
+}
+
 /** The active task's text and its revealed hints. */
-function TaskBody({ session, active }: { session: SessionView; active: number }) {
+function TaskBody({ session, active, onOpen }: { session: SessionView; active: number; onOpen: () => void }) {
   const task = session.tasks[active];
   if (!task) return <div className="text-zinc-500">Loading task…</div>;
   const multi = session.tasks.length > 1;
@@ -83,7 +102,7 @@ function TaskBody({ session, active }: { session: SessionView; active: number })
           {task.context && <div className="mt-0.5 font-mono text-xs text-zinc-500">context {task.context}</div>}
         </div>
       )}
-      <Markdown>{task.markdown}</Markdown>
+      {task.ready ? <Markdown>{task.markdown}</Markdown> : <PreparingTask session={session} active={active} onOpen={onOpen} />}
       {task.hintsRevealed.length > 0 && (
         <div>
           <h2 className="mb-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">
@@ -105,6 +124,7 @@ function TaskPane(props: {
   session: SessionView;
   active: number;
   onSelect: (i: number) => void;
+  onOpen: () => void;
   grading: boolean;
   canGrade: boolean;
   canHint: boolean;
@@ -136,7 +156,7 @@ function TaskPane(props: {
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
         <ErrorBanner error={props.error} />
         {props.grading && <div className="text-sm text-sky-300">Grading… unmet checks are retried for up to 30 seconds.</div>}
-        <TaskBody session={session} active={props.active} />
+        <TaskBody session={session} active={props.active} onOpen={props.onOpen} />
         {session.solution && (
           <div>
             <h2 className="mb-2 text-xs font-semibold tracking-wide text-amber-400 uppercase">Solution</h2>
@@ -168,11 +188,7 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
     <div className="mx-auto max-w-3xl space-y-4">
       <Card title="Session ended">
         <h2 className="mb-4 text-xl font-semibold text-zinc-100">{ended.scenarioTitle}</h2>
-        {ended.lastGrade ? (
-          <GradeResultView result={ended.lastGrade} />
-        ) : (
-          <p className="text-sm text-zinc-400">The session ended without being graded.</p>
-        )}
+        {ended.lastGrade ? <GradeResultView result={ended.lastGrade} /> : <p className="text-sm text-zinc-400">The session ended without being graded.</p>}
         <div className="mt-3 text-xs text-zinc-500">
           {ended.hintsRevealed.length} hint{ended.hintsRevealed.length === 1 ? '' : 's'} used
           {ended.solutionViewed && ' · solution viewed (assisted)'}
@@ -216,7 +232,8 @@ export function SessionPage() {
       setSession(null);
     },
   });
-  const mutations = [grade, hint, solution, reset, end];
+  const openTask = useMutation({ mutationFn: api.openTask, onSuccess: setSession });
+  const mutations = [grade, hint, solution, reset, end, openTask];
   const error = mutations.find((m) => m.error)?.error;
 
   const [activeTask, setActiveTask] = useState(0);
@@ -225,9 +242,14 @@ export function SessionPage() {
   const task = session?.tasks[activeTask] ?? session?.tasks[0];
 
   const state = session?.state;
-  const canGrade = state === 'running' && !grade.isPending;
-  const canHint =
-    (state === 'running' || state === 'grading') && !!task && task.hintsRevealed.length < task.hintsTotal && session?.mode === 'practice';
+  const openActive = () => task && !task.ready && state === 'running' && openTask.mutate(task.id);
+  const selectTask = (i: number) => {
+    setActiveTask(i);
+    const t = session?.tasks[i];
+    if (t && !t.ready && state === 'running') openTask.mutate(t.id);
+  };
+  const canGrade = state === 'running' && !grade.isPending && !session?.preparingTask;
+  const canHint = (state === 'running' || state === 'grading') && !!task && task.hintsRevealed.length < task.hintsTotal && session?.mode === 'practice';
   const canReset = state === 'running' || state === 'failed';
   const canSolution = !!session && session.mode === 'practice' && !session.solutionViewed && !!scenario.data?.hasSolution && state !== 'provisioning';
 
@@ -328,19 +350,14 @@ export function SessionPage() {
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-4">
           {live && session.connection && (
-            <div
-              className={
-                focusActive
-                  ? 'fixed inset-x-0 top-0 z-40 grid h-dvh grid-cols-[minmax(320px,38%)_minmax(0,1fr)] gap-3 bg-zinc-950 p-3'
-                  : ''
-              }
-            >
+            <div className={focusActive ? 'fixed inset-x-0 top-0 z-40 grid h-dvh grid-cols-[minmax(320px,38%)_minmax(0,1fr)] gap-3 bg-zinc-950 p-3' : ''}>
               {focusActive && (
                 <TaskPane
                   key="task"
                   session={session}
                   active={activeTask}
-                  onSelect={setActiveTask}
+                  onSelect={selectTask}
+                  onOpen={openActive}
                   grading={state === 'grading' || grade.isPending}
                   canGrade={canGrade}
                   canHint={canHint}
@@ -394,8 +411,8 @@ export function SessionPage() {
 
           <Card title={session.tasks.length > 1 ? `Tasks (${session.tasks.length} questions)` : 'Task'}>
             <div className="space-y-4">
-              <QuestionTabs session={session} active={activeTask} onSelect={setActiveTask} />
-              <TaskBody session={session} active={activeTask} />
+              <QuestionTabs session={session} active={activeTask} onSelect={selectTask} />
+              <TaskBody session={session} active={activeTask} onOpen={openActive} />
             </div>
           </Card>
 
