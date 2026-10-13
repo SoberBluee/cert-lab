@@ -106,10 +106,12 @@ steps:
 /** Answers check commands from a table; everything else succeeds with empty output. */
 class CheckDriver extends FakeDriver {
   results = new Map<string, string>();
+  runs: { node: string; script: string; env?: Record<string, string> }[] = [];
   constructor() {
     super(0);
   }
-  override async exec(_s: string, _n: string, command: string, _opts?: ExecOptions): Promise<ExecResult> {
+  override async exec(_s: string, node: string, command: string, opts?: ExecOptions): Promise<ExecResult> {
+    this.runs.push({ node, script: command, env: opts?.env });
     return { exitCode: 0, stdout: this.results.get(command) ?? '', stderr: '' };
   }
 }
@@ -142,15 +144,26 @@ describe('LearnWatcher', () => {
     const f = watcherFixture();
     await f.watcher.consume([f.cmd('echo b'), f.cmd('echo a')]);
     assert.equal(f.progress().current, 1);
-    assert.deepEqual(f.progress().steps[0], { id: 'a', done: true, doneAt: f.progress().steps[0].doneAt, failure: undefined, lastCommand: 'echo a' });
+    assert.deepEqual(f.progress().steps[0], {
+      id: 'a',
+      done: true,
+      doneAt: f.progress().steps[0].doneAt,
+      failure: undefined,
+      attempt: undefined,
+      lastCommand: 'echo a',
+    });
     assert.equal(f.progress().steps[1].done, false);
   });
 
-  it('ignores failed commands and other nodes', async () => {
+  it("ignores failed commands and other nodes, and says why they didn't count", async () => {
     const f = watcherFixture();
-    await f.watcher.consume([f.cmd('echo a', 1), { ...f.cmd('echo a'), node: 'worker-1' }]);
+    await f.watcher.consume([f.cmd('echo a', 1)]);
+    assert.deepEqual(f.progress().steps[0].attempt, { command: 'echo a', reason: 'it failed with exit code 1' });
+    await f.watcher.consume([{ ...f.cmd('echo a'), node: 'worker-1' }]);
+    assert.deepEqual(f.progress().steps[0].attempt, { command: 'echo a', reason: 'it ran on worker-1; this step is on controlplane' });
+    await f.watcher.consume([f.cmd('ls')]);
+    assert.deepEqual(f.progress().steps[0].attempt, { command: 'ls', reason: "it isn't this step's command" });
     assert.equal(f.progress().current, 0);
-    assert.equal(f.saves(), 0);
   });
 
   it('reports a failing check, then re-checks after later commands', async () => {
@@ -179,11 +192,15 @@ describe('LearnWatcher', () => {
     assert.ok(f.progress().completedAt);
   });
 
-  it('skips the current step', async () => {
+  it('skips the current step by running its command as the learner, without logging it', async () => {
     const f = watcherFixture();
     await f.watcher.skip();
     assert.equal(f.progress().current, 1);
     assert.equal(f.progress().steps[0].skipped, true);
+    const run = f.driver.runs.find((r) => r.env?.CKA_LEARN_CMD);
+    assert.equal(run?.env?.CKA_LEARN_CMD, 'echo a');
+    assert.match(run!.script, /sudo -u ubuntu/);
+    assert.doesNotMatch(run!.script, new RegExp(COMMAND_LOG));
   });
 
   it('reads the log incrementally from each node', async () => {

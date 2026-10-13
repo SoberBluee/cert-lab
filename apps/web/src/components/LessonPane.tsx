@@ -100,6 +100,11 @@ function Step({ step, n, progress, current, drill }: { step: LessonStepView; n: 
                   Matched <code className="font-mono text-zinc-400">{progress.lastCommand}</code>, checking the result…
                 </p>
               )}
+              {progress?.attempt && (
+                <p className="text-xs break-all text-zinc-500">
+                  <code className="font-mono text-zinc-400">{progress.attempt.command}</code> didn't count: {progress.attempt.reason}.
+                </p>
+              )}
             </>
           )}
           {done && !progress?.skipped && progress?.lastCommand && (
@@ -177,8 +182,12 @@ export function LessonPane({
         </ol>
       </div>
       <footer className="flex flex-wrap gap-2 border-t border-zinc-800 px-4 py-2.5">
-        <Button disabled={complete || skipping || session.state !== 'running'} onClick={onSkip}>
-          Skip step
+        <Button
+          disabled={complete || skipping || session.state !== 'running'}
+          onClick={onSkip}
+          title="Runs this step's command for you, so the next steps still work, and moves on"
+        >
+          {skipping ? 'Running it for you…' : 'Skip step'}
         </Button>
         <Button onClick={onReset}>Start over</Button>
         <Button variant="danger" className="ml-auto" onClick={onEnd}>

@@ -43,12 +43,12 @@ export const hookSteps = (nodes: string[]): Step[] => nodes.map((node) => ({ nod
  * Runs a lesson command the way a learner would: as ubuntu in its home directory. The command is
  * then appended to the command log, since non-interactive shells skip the bashrc hook.
  */
-export function runAsLearner(driver: Driver, sessionId: string, node: string, command: string): Promise<ExecResult> {
+export function runAsLearner(driver: Driver, sessionId: string, node: string, command: string, log = true): Promise<ExecResult> {
   const script = [
     'cd /home/ubuntu',
     'sudo -u ubuntu -H bash -c "$CKA_LEARN_CMD"',
     'rc=$?',
-    `printf '0\\t%s\\t%s\\t%s\\n' "$(date +%s)" "$rc" "$(printf '%s' "$CKA_LEARN_CMD" | head -n1 | tr '\\t' ' ')" >> ${COMMAND_LOG}`,
+    log ? `printf '0\\t%s\\t%s\\t%s\\n' "$(date +%s)" "$rc" "$(printf '%s' "$CKA_LEARN_CMD" | head -n1 | tr '\\t' ' ')" >> ${COMMAND_LOG}` : '',
     'exit $rc',
   ].join('\n');
   return driver.exec(sessionId, node, script, { timeoutMs: 300_000, env: { CKA_LEARN_CMD: command } });
@@ -146,6 +146,13 @@ export class LearnWatcher {
     return this.busy;
   }
 
+  /** Runs fn once no poll or skip is in flight, and keeps polls out until it finishes. */
+  private async exclusive(fn: () => Promise<void>): Promise<void> {
+    while (this.busy) await this.busy;
+    this.busy = fn().finally(() => (this.busy = undefined));
+    return this.busy;
+  }
+
   private async poll(): Promise<void> {
     if (!this.host.isRunning(this.sessionId)) return;
     const fresh: LoggedCommand[] = [];
@@ -174,6 +181,7 @@ export class LearnWatcher {
       s.done = true;
       s.doneAt = now();
       s.failure = undefined;
+      s.attempt = undefined;
       if (command) s.lastCommand = command;
       p.current++;
       changed = true;
@@ -193,13 +201,24 @@ export class LearnWatcher {
       const step = steps[p.current];
       if (!step) break;
       const progress = p.steps[p.current];
-      if (step.match && c.node === step.node && (c.exitCode === 0 || step.allowFailure) && commandMatches(step, c.command)) {
+      const matches = !!step.match && commandMatches(step, c.command);
+      if (matches && c.node === step.node && (c.exitCode === 0 || step.allowFailure)) {
         progress.lastCommand = c.command;
+        progress.attempt = undefined;
         changed = true;
         if (await check()) complete(c.command);
-      } else if ((progress.lastCommand || !step.match) && step.check) {
-        if (await check()) complete();
+        continue;
       }
+      if (step.match) {
+        const reason = !matches
+          ? "it isn't this step's command"
+          : c.node !== step.node
+            ? `it ran on ${c.node}; this step is on ${step.node}`
+            : `it failed with exit code ${c.exitCode}`;
+        progress.attempt = { command: c.command, reason };
+        changed = true;
+      }
+      if ((progress.lastCommand || !step.match) && step.check && (await check())) complete();
     }
     if (p.current >= steps.length && !p.completedAt) {
       p.completedAt = now();
@@ -208,14 +227,25 @@ export class LearnWatcher {
     if (changed && this.host.isRunning(this.sessionId)) this.host.saveProgress(this.sessionId, p);
   }
 
-  /** Marks the current step skipped and moves on. */
-  async skip(): Promise<void> {
-    await this.busy;
-    const p = this.host.getProgress(this.sessionId);
-    if (!p || p.current >= p.steps.length) return;
-    Object.assign(p.steps[p.current], { done: true, skipped: true, doneAt: now(), failure: undefined });
-    p.current++;
-    if (p.current >= p.steps.length) p.completedAt = now();
-    this.host.saveProgress(this.sessionId, p);
+  /**
+   * Runs the current step's command for the learner, so later steps find the state they expect,
+   * then marks the step skipped. The run is not logged, so it cannot complete a later step.
+   */
+  skip(): Promise<void> {
+    return this.exclusive(async () => {
+      const p = this.host.getProgress(this.sessionId);
+      if (!p || p.current >= p.steps.length) return;
+      const step = this.lesson.def.steps[p.current];
+      try {
+        const r = await runAsLearner(this.host.driver, this.sessionId, step.node, step.command, false);
+        if (r.exitCode !== 0) this.host.log.info({ sessionId: this.sessionId, step: step.id, stderr: r.stderr.slice(-500) }, 'learn: skipped step command failed');
+      } catch (e) {
+        this.host.log.warn({ sessionId: this.sessionId, step: step.id, err: e }, 'learn: running the skipped step failed');
+      }
+      Object.assign(p.steps[p.current], { done: true, skipped: true, doneAt: now(), failure: undefined, attempt: undefined });
+      p.current++;
+      if (p.current >= p.steps.length) p.completedAt = now();
+      if (this.host.isRunning(this.sessionId)) this.host.saveProgress(this.sessionId, p);
+    });
   }
 }

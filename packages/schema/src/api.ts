@@ -151,6 +151,8 @@ export interface LearnStepProgress {
   lastCommand?: string;
   /** Why the last matching command did not complete the step. */
   failure?: string;
+  /** The learner's latest command that did not count for this step, and why. */
+  attempt?: { command: string; reason: string };
 }
 
 export interface LearnProgress {
