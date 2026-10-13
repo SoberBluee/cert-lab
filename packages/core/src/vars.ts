@@ -1,4 +1,5 @@
 import { render, renderDeep, rollVars, type Vars } from '@cka/schema';
+import { selectFaults } from './faults';
 import type { LoadedScenario } from './scenarios';
 
 export function rollScenarioVars(s: LoadedScenario, pinned: Vars = {}): Vars {
@@ -20,6 +21,6 @@ export function renderScenario(s: LoadedScenario, vars: Vars): LoadedScenario {
     def: { ...renderDeep(s.def, vars), variables: s.def.variables },
     task: render(s.task, vars),
     tasks: renderDeep(s.tasks, vars),
-    solutionMd: s.solutionMd === undefined ? undefined : render(s.solutionMd, vars),
+    solutionMd: s.solutionMd === undefined ? undefined : render(selectFaults(s.solutionMd, vars), vars),
   };
 }

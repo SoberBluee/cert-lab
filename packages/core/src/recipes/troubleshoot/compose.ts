@@ -1,3 +1,4 @@
+import { faultBlock } from '../../faults';
 import type { QuestionOutput, Refs, ScriptPart } from '../types';
 import type { Fault, FaultCategory } from './types';
 
@@ -52,14 +53,16 @@ export function composeTrouble(cat: FaultCategory, v: Refs, faultIds: string[], 
   if (cpFix.length) solution.push({ script: cpFix.join('\n\n') });
 
   const where = cat.hidden?.NODE ? ` on \`${v.NODE}\`` : '';
+  const faultVar = /^\$\{(\w+)\}$/.exec(fault)?.[1];
   const sections = faults.map((f) => {
     const blocks = [
       f.nodeFix?.trim() ? `On the broken worker:\n\n\`\`\`bash\n${f.nodeFix.trim()}\n\`\`\`` : '',
       f.fix?.trim() ? `${f.nodeFix?.trim() ? 'Then, on the controlplane:\n\n' : ''}\`\`\`bash\n${f.fix.trim()}\n\`\`\`` : '',
     ].filter(Boolean);
-    return `#### ${f.label} (\`${f.id}\`)\n\n${f.explain.trim()}\n\n${blocks.join('\n\n')}`;
+    const section = `#### ${f.label} (\`${f.id}\`)\n\n${f.explain.trim()}\n\n${blocks.join('\n\n')}`;
+    return faultVar ? faultBlock(faultVar, f.id, section) : section;
   });
-  const solutionMd = `This run's fault: **\`${fault}\`**${where}.\n\nEvery fault this question can roll:\n\n${sections.join('\n\n')}`;
+  const solutionMd = `This run's fault: **\`${fault}\`**${where}.\n\n${sections.join('\n\n')}`;
 
   return {
     title: shell.title,

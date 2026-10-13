@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { parseAllDocuments, parse as parseYaml } from 'yaml';
 import type { FieldInput, PartInput, QuickQuestion, RecipeField, ScenarioBundle } from '@cka/schema';
+import { selectFaults } from './faults';
 import { buildQuickBundle } from './quick';
 import { BUILDERS, CATEGORIES, composeCreate, faultList, recipeCatalog, type Builder, type PartBase } from './recipes';
 import { ScenarioLibrary } from './scenarios';
@@ -320,6 +321,10 @@ describe('Troubleshoot track', () => {
       assert.equal(def.variables.Q1_FAULT.oneOf.length, faultList(c).length);
       const solutionMd = res.bundle.files.find((x) => x.path === 'solution.md')!.content;
       for (const f of faultList(c)) assert.match(solutionMd, new RegExp(`\\(\`${f.id}\`\\)`));
+      const [rolled, ...others] = faultList(c);
+      const shown = selectFaults(solutionMd, { Q1_FAULT: rolled.id });
+      assert.match(shown, new RegExp(`\\(\`${rolled.id}\`\\)`));
+      for (const f of others) assert.doesNotMatch(shown, new RegExp(`\\(\`${f.id}\`\\)`), `solution still shows ${f.id}`);
       const text = res.questions[0].markdown + res.questions[0].title;
       for (const f of faultList(c)) assert.ok(!text.includes(f.id), `task text gives away ${f.id}`);
     });
