@@ -13,17 +13,32 @@ export function useSession() {
 export function useSessionStream() {
   const qc = useQueryClient();
   useEffect(() => {
-    const es = new EventSource('/api/sessions/current/events');
-    es.addEventListener('session', (e) => {
-      const { session } = JSON.parse((e as MessageEvent).data) as { session: SessionView | null };
-      const prev = qc.getQueryData<SessionView | null>(sessionKey);
-      qc.setQueryData(sessionKey, session);
-      if (prev?.state !== session?.state) {
-        qc.invalidateQueries({ queryKey: ['scenarios'] });
-        qc.invalidateQueries({ queryKey: ['history'] });
-      }
-    });
-    return () => es.close();
+    let es: EventSource | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const connect = () => {
+      es = new EventSource('/api/sessions/current/events');
+      es.addEventListener('session', (e) => {
+        attempts = 0;
+        const { session } = JSON.parse((e as MessageEvent).data) as { session: SessionView | null };
+        const prev = qc.getQueryData<SessionView | null>(sessionKey);
+        qc.setQueryData(sessionKey, session);
+        if (prev?.state !== session?.state) {
+          qc.invalidateQueries({ queryKey: ['scenarios'] });
+          qc.invalidateQueries({ queryKey: ['history'] });
+        }
+      });
+      // EventSource gives up for good when a reconnect gets an error response (e.g. a proxy 502 while the API restarts).
+      es.onerror = () => {
+        if (es?.readyState !== EventSource.CLOSED) return;
+        retry = setTimeout(connect, Math.min(1000 * 2 ** attempts++, 10_000));
+      };
+    };
+    connect();
+    return () => {
+      clearTimeout(retry);
+      es?.close();
+    };
   }, [qc]);
 }
 
