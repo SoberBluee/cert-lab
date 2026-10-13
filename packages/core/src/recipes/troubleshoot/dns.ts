@@ -13,6 +13,17 @@ kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | gr
 const restartCoreDns = `kubectl -n kube-system rollout restart deployment/coredns
 kubectl -n kube-system rollout status deployment/coredns --timeout=240s`;
 
+/** Replaces the running Pods so a break takes effect now rather than on the next reload. */
+const bounceCoreDns = 'kubectl -n kube-system delete pod -l k8s-app=kube-dns --wait=false >/dev/null';
+
+/** Renames the Corefile key of ConfigMap `coredns`, then proves the new key holds the config. */
+const corefileKey = (from: string, to: string) => `kubectl -n kube-system get configmap coredns -o yaml | sed -E 's/^  ${from}: /  ${to}: /' | kubectl replace -f - >/dev/null
+kubectl -n kube-system get configmap coredns -o jsonpath='{.data.${to}}' | grep -q kubernetes || { echo "could not rename the Corefile key" >&2; exit 1; }`;
+
+/** Points the dns and dns-tcp ports of Service `kube-dns` at another container port; metrics (9153) is untouched. */
+const dnsTargetPort = (from: number, to: number) => `kubectl -n kube-system get service kube-dns -o yaml | sed -E 's/targetPort: ${from}$/targetPort: ${to}/' | kubectl replace -f - >/dev/null
+[ "$(kubectl -n kube-system get service kube-dns -o jsonpath='{.spec.ports[*].targetPort}' | tr ' ' '\\n' | grep -cx ${to})" = 2 ] || { echo "could not edit Service kube-dns" >&2; exit 1; }`;
+
 /** A here-string rather than a heredoc: fault snippets are indented inside a `case`. */
 const clientPod = (ns: string, dnsPolicy = '') => `kubectl -n "${ns}" delete pod client --ignore-not-found --wait=true >/dev/null
 kubectl -n "${ns}" apply -f - <<< '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"client"},"spec":{${dnsPolicy ? `"dnsPolicy":"${dnsPolicy}",` : ''}"containers":[{"name":"shell","image":"busybox:1.36","command":["sleep","infinity"]}]}}'
@@ -133,14 +144,15 @@ exit 1`,
       'kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?',
       'kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.',
       `kubectl -n ${NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?`,
+      'Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.',
     ],
   }),
-  faults: ({ NS }) => [
+  faults: ({ NS }, state) => [
     {
       id: 'corefile-typo',
       label: 'Corefile typo crashes CoreDNS',
       break: `${corefile('s#^([[:space:]]*)forward \\. /etc/resolv\\.conf#\\1forwrd . /etc/resolv.conf#', 'forwrd \\. ')}
-kubectl -n kube-system delete pod -l k8s-app=kube-dns --wait=false >/dev/null`,
+${bounceCoreDns}`,
       fix: `${corefile('s#^([[:space:]]*)forwrd \\. /etc/resolv\\.conf#\\1forward . /etc/resolv.conf#', 'forward \\. /etc/resolv\\.conf')}
 ${restartCoreDns}`,
       wait: waitResolving(NS),
@@ -184,6 +196,49 @@ ${restartCoreDns}`,
       fix: clientPod(NS),
       wait: waitResolving(NS),
       explain: `Pod \`client\` has \`dnsPolicy: Default\`, so it inherits the node's resolv.conf: no cluster nameserver and no cluster search domains. The field cannot be changed on a running Pod; recreate \`client\` without it (the default is \`ClusterFirst\`).`,
+    },
+    {
+      id: 'corefile-loop',
+      label: 'CoreDNS forwards to itself',
+      break: `${corefile('s#^([[:space:]]*)forward \\. /etc/resolv\\.conf#\\1forward . 127.0.0.1#', 'forward \\. 127\\.0\\.0\\.1')}
+${bounceCoreDns}`,
+      fix: `${corefile('s#^([[:space:]]*)forward \\. 127\\.0\\.0\\.1#\\1forward . /etc/resolv.conf#', 'forward \\. /etc/resolv\\.conf')}
+${restartCoreDns}`,
+      wait: waitResolving(NS),
+      explain:
+        'The Corefile says `forward . 127.0.0.1`, so CoreDNS forwards unknown names to itself. The `loop` plugin spots its own probe coming back, logs "Loop (127.0.0.1:...) detected" and exits, so the Pods crash-loop. Set `forward . /etc/resolv.conf` again in ConfigMap `coredns`, then restart the Deployment.',
+    },
+    {
+      id: 'coredns-rbac',
+      label: 'CoreDNS lost its RBAC binding',
+      break: `kubectl get clusterrolebinding system:coredns -o json > "${state}.crb.json"
+kubectl delete clusterrolebinding system:coredns >/dev/null
+${bounceCoreDns}`,
+      fix: `kubectl create clusterrolebinding system:coredns --clusterrole=system:coredns --serviceaccount=kube-system:coredns
+${restartCoreDns}`,
+      wait: waitResolving(NS),
+      explain:
+        'ClusterRoleBinding `system:coredns` is gone, so the CoreDNS service account may not list Services, EndpointSlices or Namespaces. New Pods log "forbidden" and "plugin/ready: Still waiting on: kubernetes", never become ready, and Service `kube-dns` has no endpoints. Bind ClusterRole `system:coredns` to service account `kube-system:coredns` again and restart the Deployment.',
+    },
+    {
+      id: 'kube-dns-target-port',
+      label: 'kube-dns Service targets the wrong port',
+      break: dnsTargetPort(53, 5353),
+      fix: dnsTargetPort(5353, 53),
+      wait: waitResolving(NS),
+      explain:
+        'Ports `dns` and `dns-tcp` of Service `kube-dns` have `targetPort: 5353`. CoreDNS is healthy and the Service has endpoints, but nothing listens on 5353, so lookups time out. Compare `kubectl -n kube-system get endpointslices -l k8s-app=kube-dns` with the container ports, and set both target ports back to `53`.',
+    },
+    {
+      id: 'corefile-key',
+      label: 'Corefile key renamed in the ConfigMap',
+      break: `${corefileKey('Corefile', 'corefile')}
+${bounceCoreDns}`,
+      fix: `${corefileKey('corefile', 'Corefile')}
+${restartCoreDns}`,
+      wait: waitResolving(NS),
+      explain:
+        'ConfigMap `coredns` holds the config under key `corefile`, but the Deployment mounts key `Corefile`. New Pods stay in `ContainerCreating` and `kubectl describe` shows "configmap references non-existent config key: Corefile". Rename the key back to `Corefile` and restart the Deployment.',
     },
   ],
 };

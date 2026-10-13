@@ -1,5 +1,5 @@
 import { createNs, nsField } from '../types';
-import { waitNotReady, waitReady } from './nodes';
+import { KUBELET_CONFIG, waitNotReady, waitReady } from './nodes';
 import type { FaultCategory } from './types';
 
 export const M = '/etc/kubernetes/manifests';
@@ -156,7 +156,7 @@ EOF`,
       'kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down.',
       'Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting.',
       `Static pod manifests live in ${M}; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).`,
-      `If controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in ${KUBELET_CONF}.`,
+      `If controlplane itself is NotReady, or no control plane container runs at all: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in ${KUBELET_CONF} and ${KUBELET_CONFIG} (staticPodPath).`,
     ],
   }),
   faults: ({ NS }) => [
@@ -244,6 +244,18 @@ systemctl restart kubelet`,
       wait: `${waitReady('controlplane')}
 ${waitHealthy(NS)}`,
       explain: `\`client-certificate\` in \`${KUBELET_CONF}\` points at \`/var/lib/kubelet/pki/kubelet-client.pem\`, which does not exist, so the kubelet on controlplane cannot authenticate and exits. The node turns \`NotReady\` while the static pods keep running. \`journalctl -u kubelet\` shows the missing file; \`ls /var/lib/kubelet/pki\` shows \`kubelet-client-current.pem\`. Fix the path and restart the kubelet.`,
+    },
+    {
+      id: 'kubelet-static-pod-path',
+      label: 'controlplane kubelet watches the wrong static pod directory',
+      break: `${scaleUp(NS)}
+${edit(KUBELET_CONFIG, `s#^staticPodPath: ${M}$#staticPodPath: /etc/kubernetes/manifest#`, '^staticPodPath: /etc/kubernetes/manifest$')}
+systemctl restart kubelet || true`,
+      settle: apiDown,
+      fix: `${edit(KUBELET_CONFIG, `s#^staticPodPath: /etc/kubernetes/manifest$#staticPodPath: ${M}#`, `^staticPodPath: ${M}$`)}
+systemctl restart kubelet`,
+      wait: waitHealthy(NS),
+      explain: `\`staticPodPath\` in \`${KUBELET_CONFIG}\` is \`/etc/kubernetes/manifest\`, a directory that does not exist. The kubelet runs, but it finds no static pod manifests and stops etcd, the API server, the scheduler and the controller manager, so kubectl fails. \`crictl ps\` on controlplane shows no control plane containers, and \`journalctl -u kubelet\` mentions the missing path. Set it back to \`${M}\` and restart the kubelet.`,
     },
   ],
 };
