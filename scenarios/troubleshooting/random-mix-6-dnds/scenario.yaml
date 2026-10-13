@@ -1,0 +1,254 @@
+id: random-mix-6-dnds
+title: Random mix 1
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 49
+points: 34
+tags: [ troubleshooting, pods, deployment, etcd, backup, pvc, pv, selector, consumer-pod, delete-keep-data, networkpolicy, dns, cronjob, job, certificates, pki, kubeadm, renew ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ retail, media, portal ] }
+  Q1_APP: { oneOf: [ storefront, ledger, checkout ] }
+  Q1_FAULT: { oneOf: [ oom-killed, image-pull, bad-command, configmap-key, liveness-port, readiness-path, requests-too-large, node-selector ], hidden: true }
+  Q2_BACKUP: { oneOf: [ /opt/backups/etcd.db, /srv/etcd/snapshot.db, /root/etcd-backup.db ] }
+  Q2_MARKER: { oneOf: [ backup-marker, pre-backup, audit-mark ] }
+  Q3_NS: { oneOf: [ billing, orders-app, photo-lib ] }
+  Q3_NAME: { oneOf: [ orders, invoices, photos ] }
+  Q3_SIZE: { oneOf: [ 100Mi, 500Mi, 1Gi ] }
+  Q3_ACCESS: { oneOf: [ ReadWriteOnce, ReadWriteMany ] }
+  Q3_SELECT_TIER: { oneOf: [ premium, standard, backup ] }
+  Q3_POD_MOUNT: { oneOf: [ /data, /srv/app, /var/lib/app ] }
+  Q4_NS: { oneOf: [ secure, payments, vault ] }
+  Q4_APP: { oneOf: [ api, ledger, billing ] }
+  Q4_FAULT: { oneOf: [ dns-egress-port, dns-namespace-selector, ingress-port, ingress-from-label, egress-to-label ], hidden: true }
+  Q5_NS: { oneOf: [ batch, nightly, reports ] }
+  Q5_APP: { oneOf: [ report, cleanup, export ] }
+  Q5_FAULT: { oneOf: [ suspended, never-schedule, deadline, backoff-zero-command, image-registry ], hidden: true }
+  Q6_EXPIRY: { oneOf: [ /opt/certs/apiserver-expiry.txt, /root/apiserver-expiry.txt ] }
+tasks:
+  - id: q1
+    title: Unhealthy Deployment ${Q1_APP}
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: ${Q1_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-stable
+        description: ${Q1_APP}'s Pods do not restart over 20 seconds
+        type: kubectl
+        run: r() { kubectl -n ${Q1_NS} get pods -l app=${Q1_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 20; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-serves
+        description: ${Q1_APP} serves HTTP on port 80
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec deployment/${Q1_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: nginx }
+        weight: 1
+      - id: q1-spec-resources
+        description: image, requests and limits match the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        weight: 1
+      - id: q1-spec-probes
+        description: probes match the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
+        expect: { equals: / 80 80 }
+        weight: 1
+      - id: q1-spec-config
+        description: APP_MODE comes from key mode of ${Q1_APP}-config, set to production
+        type: kubectl
+        run: echo "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q1_NS} get configmap ${Q1_APP}-config -o jsonpath='{.data.mode}')"
+        expect: { equals: "${Q1_APP}-config mode production" }
+        weight: 1
+      - id: q1-same-deployment
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get pods -l app=${Q1_APP} -o wide: what state are the Pods in, and do they restart?"
+      - "kubectl -n ${Q1_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
+      - kubectl -n ${Q1_NS} logs <pod> --previous shows why a crashed container exited.
+      - Compare kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml (and the ConfigMap) against the spec, line by line.
+  - id: q2
+    title: Back up etcd
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q2-snapshot-size
+        description: ${Q2_BACKUP} exists and is larger than 1 MB
+        run: stat -c %s "${Q2_BACKUP}" 2>/dev/null || echo 0
+        expect: { gte: 1000000 }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q2-snapshot-valid
+        description: ${Q2_BACKUP} is a valid etcd snapshot
+        run: ETCDCTL_API=3 etcdctl snapshot status "${Q2_BACKUP}" -w json 2>/dev/null | jq -r '.totalKey > 0'
+        expect: { equals: "true" }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q2-snapshot-fresh
+        description: The snapshot contains ConfigMap ${Q2_MARKER}
+        run: grep -qa -- "/registry/configmaps/default/${Q2_MARKER}" "${Q2_BACKUP}" 2>/dev/null && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+    hints:
+      - "The endpoint and certificate paths are in /etc/kubernetes/manifests/etcd.yaml: --listen-client-urls, --trusted-ca-file, --cert-file and --key-file."
+      - ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save <file>
+  - id: q3
+    title: PersistentVolumeClaim ${Q3_NAME}
+    points: 4
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - id: q3-deleted
+        description: PVC ${Q3_NAME} is deleted
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get pvc ${Q3_NAME} --ignore-not-found -o name
+        expect: { notEmpty: false }
+        weight: 2
+      - id: q3-released
+        description: ${Q3_NAME}-pv still exists and is Released
+        type: kubectl
+        run: kubectl get pv ${Q3_NAME}-pv -o jsonpath='{.status.phase}'
+        expect: { equals: Released }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl get pv ${Q3_NAME}-pv shows the class, access modes and capacity the claim must fit.
+      - kubectl get pv --show-labels; then spec.selector.matchLabels on the claim.
+      - "volumes: [{name: data, persistentVolumeClaim: {claimName: ${Q3_NAME}}}], then a volumeMount with readOnly: true."
+      - A claim in use by a Pod stays Terminating until the Pod is gone. With reclaim policy Retain the PV becomes Released.
+  - id: q4
+    title: Frontend cannot reach ${Q4_APP}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+        lane: q4
+    checks:
+      - id: q4-reachable
+        description: client gets the nginx page from http://${Q4_APP}
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec client -- wget -qO- -T 3 http://${Q4_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q4-stranger-blocked
+        description: stranger still cannot reach ${Q4_APP}
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec stranger -- wget -qO- -T 3 http://${Q4_APP} >/dev/null 2>&1 && echo open || echo blocked
+        expect: { equals: blocked }
+        weight: 2
+      - id: q4-default-deny
+        description: default-deny still selects every Pod for ingress and egress
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get networkpolicy default-deny -o jsonpath='{.spec.podSelector.matchLabels}|{.spec.policyTypes[*]}|{.spec.ingress}{.spec.egress}'
+        expect: { equals: "|Ingress Egress|" }
+        weight: 1
+      - id: q4-ingress-rule
+        description: ${Q4_APP}-ingress allows role=frontend on port 80
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get networkpolicy ${Q4_APP}-ingress -o jsonpath='{.spec.ingress[0].from[0].podSelector.matchLabels.role} {.spec.ingress[0].ports[0].port}'
+        expect: { equals: frontend 80 }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q4_NS} get networkpolicy, then kubectl -n ${Q4_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?"
+      - "Separate DNS from the connection: kubectl -n ${Q4_NS} exec client -- nslookup ${Q4_APP}, then wget the Service IP or a Pod IP directly."
+      - "Compare every selector with the real labels: kubectl -n ${Q4_NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns."
+      - A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.
+  - id: q5
+    title: CronJob ${Q5_APP} never succeeds
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        timeoutSeconds: 400
+        lane: q5
+    checks:
+      - id: q5-succeeded
+        description: a Job of ${Q5_APP} has completed
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get cronjob ${Q5_APP} -o jsonpath='{.status.lastSuccessfulTime}'
+        expect: { notEmpty: true }
+        weight: 3
+        retrySeconds: 150
+      - id: q5-spec
+        description: ${Q5_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get cronjob ${Q5_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.backoffLimit}|{.spec.jobTemplate.spec.activeDeadlineSeconds}|{.spec.jobTemplate.spec.template.spec.containers[0].image}|{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}'
+        expect: { equals: "* * * * *|false|2||busybox:1.36|date; sleep 8; echo report done" }
+        weight: 2
+      - id: q5-same-cronjob
+        description: ${Q5_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q5_NS} get cronjob ${Q5_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q5.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q5_NS} get cronjob ${Q5_APP}: look at SUSPEND, SCHEDULE and LAST SCHEDULE. Has it created any Job at all?"
+      - "kubectl -n ${Q5_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q5_NS} describe job <job> shows the reason (BackoffLimitExceeded, DeadlineExceeded, ...)."
+      - kubectl -n ${Q5_NS} logs <pod> and kubectl -n ${Q5_NS} describe pod <pod> show what the container did, or why it never started.
+      - "To test a fix without waiting for the next minute: kubectl -n ${Q5_NS} create job test-run --from=cronjob/${Q5_APP}"
+  - id: q6
+    title: Cluster certificates
+    points: 4
+    setup:
+      - node: controlplane
+        script: setup/q6.sh
+        lane: q6
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q6-expiry
+        description: ${Q6_EXPIRY} holds the expiry date of the certificate
+        run: '[ "$(xargs < "${Q6_EXPIRY}" 2>/dev/null)" = "$(xargs < /root/.cka/apiserver-enddate)" ] && echo match || echo differs'
+        expect: { equals: match }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q6-renewed
+        description: /etc/kubernetes/pki/apiserver.crt was renewed
+        run: '[ "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -fingerprint -sha256)" != "$(cat /root/.cka/apiserver-fingerprint)" ] && echo renewed || echo old'
+        expect: { equals: renewed }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q6-serving
+        description: The API server serves the renewed certificate
+        run: '[ "$(echo | openssl s_client -connect 127.0.0.1:6443 2>/dev/null | openssl x509 -noout -fingerprint -sha256)" = "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -fingerprint -sha256)" ] && echo serving || echo stale'
+        expect: { equals: serving }
+        weight: 1
+        retrySeconds: 120
+    hints:
+      - The API server certificate is /etc/kubernetes/pki/apiserver.crt (see --tls-cert-file in its manifest).
+      - kubeadm certs check-expiration shows the same date in another format; openssl x509 -in <crt> -noout -enddate prints the exact text.
+      - kubeadm certs check-expiration lists every certificate; kubeadm certs renew apiserver renews one.
+      - "The API server reads its certificate at start: move its manifest out of /etc/kubernetes/manifests, wait for the container to stop, then move it back."

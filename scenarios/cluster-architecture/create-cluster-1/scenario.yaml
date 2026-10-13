@@ -1,0 +1,56 @@
+id: create-cluster-1
+title: Create Cluster 1
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 25
+points: 9
+tags: [ kubeadm, install, cni ]
+base: bare
+nodes: { controlPlane: 1, workers: 2 }
+settleSeconds: 30
+draft: true
+variables:
+  Q1_CIDR: { oneOf: [ 10.244.0.0/16, 192.168.0.0/16 ] }
+tasks:
+  - id: q1
+    title: Install a cluster
+    points: 9
+    checks:
+      - id: q1-nodes
+        description: controlplane, worker-1, worker-2 are Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort | xargs
+        expect: { equals: controlplane=True worker-1=True worker-2=True }
+        weight: 3
+        retrySeconds: 120
+      - id: q1-pod-cidr
+        description: The cluster was initialised with pod network ${Q1_CIDR}
+        type: kubectl
+        run: kubectl -n kube-system get configmap kubeadm-config -o jsonpath='{.data.ClusterConfiguration}' | awk '/podSubnet:/ {print $2}'
+        expect: { equals: "${Q1_CIDR}" }
+        weight: 1
+      - id: q1-calico
+        description: Calico runs on every node with IP pool ${Q1_CIDR}
+        type: kubectl
+        run: echo "$(kubectl -n kube-system get daemonset calico-node -o jsonpath='{.status.numberReady}') $(kubectl get ippools.crd.projectcalico.org -o jsonpath='{.items[*].spec.cidr}')"
+        expect: { equals: "3 ${Q1_CIDR}" }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-coredns
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 2
+        retrySeconds: 120
+      - type: ssh
+        node: controlplane
+        id: q1-ubuntu-kubectl
+        description: kubectl works for user ubuntu on controlplane
+        run: sudo -u ubuntu -H kubectl get --raw /readyz 2>/dev/null || true
+        expect: { equals: ok }
+        weight: 1
+    hints:
+      - kubeadm init --pod-network-cidr <cidr> prints the kubeconfig commands and the kubeadm join command for the workers.
+      - In /root/calico.yaml, uncomment CALICO_IPV4POOL_CIDR and its value in the calico-node DaemonSet and set the CIDR, then kubectl apply -f it.
+      - kubeadm token create --print-join-command prints a fresh join command; run it with sudo on each worker (ssh worker-1 from controlplane).
