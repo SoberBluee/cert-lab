@@ -1,0 +1,203 @@
+id: troubleshoot-1
+title: Troubleshoot 1
+domain: workloads
+difficulty: 2
+estimatedMinutes: 33
+points: 26
+tags: [ troubleshooting, scheduling, resourcequota, limitrange, affinity, pods, deployment, dns, coredns, service, configmap, secret, volumes, security-context ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ batch, reports, analytics ] }
+  Q1_APP: { oneOf: [ worker, renderer, indexer ] }
+  Q1_FAULT: { oneOf: [ quota-pods, quota-limits, limitrange-max, node-affinity, priority-class ], hidden: true }
+  Q2_NS: { oneOf: [ retail, media, portal ] }
+  Q2_APP: { oneOf: [ storefront, ledger, checkout ] }
+  Q2_FAULT: { oneOf: [ oom-killed, image-pull, bad-command, configmap-key, liveness-port, readiness-path, requests-too-large, node-selector ], hidden: true }
+  Q3_NS: { oneOf: [ shop, intranet, search ] }
+  Q3_FAULT: { oneOf: [ corefile-typo, scaled-to-zero, cluster-domain, kube-dns-selector, client-dns-policy ], hidden: true }
+  Q4_NS: { oneOf: [ brochure, docs, landing ] }
+  Q4_APP: { oneOf: [ site, welcome, promo ] }
+  Q4_FAULT: { oneOf: [ configmap-volume-missing, secret-items-key, mount-path, run-as-non-root, readonly-root ], hidden: true }
+tasks:
+  - id: q1
+    title: Deployment ${Q1_APP} not running
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: ${Q1_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 3
+        retrySeconds: 60
+      - id: q1-spec
+        description: replicas, image and requests match the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory}'
+        expect: { equals: 2 nginx:1.27-alpine 100m 64Mi }
+        weight: 1
+      - id: q1-same-deployment
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get deployment,replicaset,pods -o wide: are there fewer Pods than replicas, or Pods stuck in Pending?"
+      - "Missing Pods: kubectl -n ${Q1_NS} describe replicaset -l app=${Q1_APP} shows why creating them failed (FailedCreate events)."
+      - "Pending Pods: kubectl -n ${Q1_NS} describe pod <pod> shows the scheduler's reason under Events."
+      - "kubectl -n ${Q1_NS} get resourcequota,limitrange: what does the namespace enforce?"
+  - id: q2
+    title: Unhealthy Deployment ${Q2_APP}
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-ready
+        description: ${Q2_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q2-stable
+        description: ${Q2_APP}'s Pods do not restart over 20 seconds
+        type: kubectl
+        run: r() { kubectl -n ${Q2_NS} get pods -l app=${Q2_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 20; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 1
+        retrySeconds: 60
+      - id: q2-serves
+        description: ${Q2_APP} serves HTTP on port 80
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec deployment/${Q2_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: nginx }
+        weight: 1
+      - id: q2-spec-resources
+        description: image, requests and limits match the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        weight: 1
+      - id: q2-spec-probes
+        description: probes match the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
+        expect: { equals: / 80 80 }
+        weight: 1
+      - id: q2-spec-config
+        description: APP_MODE comes from key mode of ${Q2_APP}-config, set to production
+        type: kubectl
+        run: echo "$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q2_NS} get configmap ${Q2_APP}-config -o jsonpath='{.data.mode}')"
+        expect: { equals: "${Q2_APP}-config mode production" }
+        weight: 1
+      - id: q2-same-deployment
+        description: ${Q2_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q2.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} get pods -l app=${Q2_APP} -o wide: what state are the Pods in, and do they restart?"
+      - "kubectl -n ${Q2_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
+      - kubectl -n ${Q2_NS} logs <pod> --previous shows why a crashed container exited.
+      - Compare kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml (and the ConfigMap) against the spec, line by line.
+  - id: q3
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q3-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q3-fqdn
+        description: client resolves web.${Q3_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q3_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q3_NS} exec client -- nslookup -type=a web.${Q3_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q3-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q3-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q3-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q3_NS} exec client -- nslookup web.${Q3_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q3_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+  - id: q4
+    title: Deployment ${Q4_APP} does not serve its page
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+        lane: q4
+    checks:
+      - id: q4-ready
+        description: ${Q4_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q4-page
+        description: ${Q4_APP} serves the page from ${Q4_APP}-content
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec deployment/${Q4_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: "${Q4_APP} is up" }
+        weight: 2
+        retrySeconds: 30
+      - id: q4-token
+        description: the token from ${Q4_APP}-secret is readable at /etc/${Q4_APP}/token
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec deployment/${Q4_APP} -- cat /etc/${Q4_APP}/token
+        expect: { equals: "s3cr3t-${Q4_APP}" }
+        weight: 1
+        retrySeconds: 30
+      - id: q4-spec-volumes
+        description: the volumes still come from the ConfigMap and the Secret
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[*].configMap.name} {.spec.template.spec.volumes[*].secret.secretName}'
+        expect: { equals: "nginx:1.27-alpine ${Q4_APP}-content ${Q4_APP}-secret" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q4_NS} get pods -l app=${Q4_APP}: are the Pods Pending, ContainerCreating, crashing, or running but not ready?"
+      - "kubectl -n ${Q4_NS} describe pod <pod>: the Events name mount failures and container config errors."
+      - kubectl -n ${Q4_NS} logs <pod> (or --previous) shows why nginx exits or what it cannot find.
+      - Compare the volumes, volumeMounts and securityContext in kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o yaml with the spec and with the ConfigMap and Secret keys.
