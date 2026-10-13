@@ -28,35 +28,6 @@ variables:
   Q5_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
   Q6_NS: { oneOf: [ ops, core, platform ] }
   Q6_FAULT: { oneOf: [ apiserver-etcd-port, apiserver-etcd-certfile, etcd-cert-path, scheduler-command, controller-manager-kubeconfig, kubelet-client-cert ], hidden: true }
-setup:
-  - node: controlplane
-    script: setup/q1.sh
-    timeoutSeconds: 400
-    lane: q1
-  - node: controlplane
-    script: setup/q2.sh
-    timeoutSeconds: 400
-    lane: q2
-  - node: controlplane
-    script: setup/q3.sh
-    timeoutSeconds: 400
-    lane: q3
-  - node: controlplane
-    script: setup/q4.sh
-    timeoutSeconds: 400
-    lane: q4
-  - node: controlplane
-    script: setup/q5.sh
-  - node: worker-1
-    script: setup/q5-2.sh
-  - node: worker-2
-    script: setup/q5-3.sh
-  - node: controlplane
-    script: setup/q5-4.sh
-    timeoutSeconds: 300
-  - node: controlplane
-    script: setup/q6.sh
-    timeoutSeconds: 400
 solution:
   - node: controlplane
     script: setup/q6-solution.sh
@@ -71,6 +42,11 @@ tasks:
   - id: q1
     title: Unhealthy Deployment ${Q1_APP}
     points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
     checks:
       - id: q1-ready
         description: ${Q1_APP} has 2 ready replicas
@@ -124,6 +100,11 @@ tasks:
   - id: q2
     title: Service ${Q2_APP} unreachable
     points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
     checks:
       - id: q2-reachable
         description: client gets the nginx page from http://${Q2_APP}
@@ -159,6 +140,11 @@ tasks:
   - id: q3
     title: Pod ${Q3_CLAIM}-app stuck
     points: 5
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+        lane: q3
     checks:
       - id: q3-bound
         description: PVC ${Q3_CLAIM} is Bound to ${Q3_CLAIM}-pv
@@ -193,6 +179,11 @@ tasks:
   - id: q4
     title: ${Q4_APP} unreachable through the ingress
     points: 7
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+        lane: q4
     checks:
       - id: q4-ingress-serves
         description: www.${Q4_NS}.lab returns the nginx welcome page
@@ -234,6 +225,17 @@ tasks:
   - id: q5
     title: Unhealthy worker
     points: 6
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+      - node: worker-1
+        script: setup/q5-2.sh
+      - node: worker-2
+        script: setup/q5-3.sh
+      - node: controlplane
+        script: setup/q5-4.sh
+        timeoutSeconds: 300
+    setupStage: 1
     checks:
       - id: q5-all-ready
         description: every node is Ready
@@ -278,6 +280,11 @@ tasks:
   - id: q6
     title: Control plane after maintenance
     points: 8
+    setup:
+      - node: controlplane
+        script: setup/q6.sh
+        timeoutSeconds: 400
+    setupStage: 2
     checks:
       - id: q6-api-ready
         description: the API server reports ready

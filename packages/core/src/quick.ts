@@ -213,10 +213,11 @@ export function buildQuickBundle(req: QuickCreateRequest): {
   const domain: Domain = req.domain ?? built[0].out.domain;
   const files: BundleFile[] = [];
   const rank = ({ out }: (typeof built)[number]) => (out.breaksApi ? 2 : out.disruptive ? 1 : 0);
-  const setupOrder = [...built].sort((a, b) => rank(a) - rank(b));
   const fixOrder = [...built].sort((a, b) => rank(b) - rank(a));
+  // Node- and API-breaking questions are set up when first opened, so they cannot block the others.
+  const stage = (b: (typeof built)[number]) => (built.length > 1 ? rank(b) : 0);
 
-  const setup = setupOrder.flatMap((b) =>
+  const taskSetup = (b: (typeof built)[number]) =>
     b.out.setup.map((part, j) => {
       const { n, out } = b;
       const path = `setup/q${n}${j ? `-${j + 1}` : ''}.sh`;
@@ -230,8 +231,7 @@ export function buildQuickBundle(req: QuickCreateRequest): {
         ...(part.timeoutSeconds ? { timeoutSeconds: part.timeoutSeconds } : {}),
         ...(rank(b) === 0 ? { lane: `q${n}` } : {}),
       };
-    }),
-  );
+    });
 
   const CP = { node: 'controlplane', script: 'solution.sh' };
   const solution: { node: string; script: string; timeoutSeconds?: number }[] = [];
@@ -295,15 +295,20 @@ export function buildQuickBundle(req: QuickCreateRequest): {
     settleSeconds: Math.max(...built.map((b) => b.out.settleSeconds ?? 30)),
     draft: true,
     ...(Object.keys(variables).length ? { variables } : {}),
-    setup,
     ...(solution.some((s) => s !== CP) ? { solution } : {}),
-    tasks: built.map(({ n, out }) => ({
-      id: `q${n}`,
-      title: out.title,
-      points: out.points,
-      checks: out.checks.map((c) => ({ ...c, id: `q${n}-${c.id}` })),
-      hints: out.hints,
-    })),
+    tasks: built.map((b) => {
+      const { n, out } = b;
+      const setup = taskSetup(b);
+      return {
+        id: `q${n}`,
+        title: out.title,
+        points: out.points,
+        ...(setup.length ? { setup } : {}),
+        ...(stage(b) ? { setupStage: stage(b) } : {}),
+        checks: out.checks.map((c) => ({ ...c, id: `q${n}-${c.id}` })),
+        hints: out.hints,
+      };
+    }),
   };
   files.unshift({ path: 'scenario.yaml', content: toYaml(def) });
   files.sort((a, b) => a.path.localeCompare(b.path));

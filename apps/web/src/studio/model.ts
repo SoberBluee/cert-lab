@@ -37,6 +37,7 @@ export interface TaskDraft {
   points?: number;
   context?: string;
   setup?: StepDraft[];
+  setupStage?: number;
   checks?: CheckDraft[];
   hints?: string[];
 }

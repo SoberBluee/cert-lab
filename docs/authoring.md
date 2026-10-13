@@ -63,6 +63,24 @@ hints: ["vague", "more specific", "almost the answer"]
 
 Steps run one after another unless they carry a `lane`. Consecutive steps with a `lane` run as one batch: each lane runs its own steps in order, and the lanes run at the same time. A step without a lane waits for everything before it. Quick Create puts each question that does not break a node or the API server in its own lane (`q1`, `q2`, ...), so independent questions are set up in parallel.
 
+### Multi-question scenarios
+
+Instead of top-level `checks`, a scenario can list `tasks` (one per question, text in `tasks/<id>.md`). Each task has its own `checks`, `hints`, optional `setup` steps and a `setupStage`:
+
+```yaml
+tasks:
+  - id: q5
+    title: Unhealthy worker
+    points: 6
+    setupStage: 1        # default 0
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+    checks: [...]
+```
+
+Top-level `setup` and tasks with `setupStage: 0` run when the session starts. A task with a higher stage is set up the first time the learner opens it, after every unopened task with a lower non-zero stage. Quick Create uses stage 1 for questions that break a node and stage 2 for questions that may take the API server down, so a broken control plane does not block the other questions. A question that was never opened scores 0 and its checks are reported as not attempted. `dry-run` and `verify` set up every task at start, in stage order.
+
 Every setup step, solution step and check runs as **root** with `KUBECONFIG=/etc/kubernetes/admin.conf` exported. On workers that file does not exist, so run kubectl steps on `controlplane`. Nodes are named `controlplane`, `worker-1` and `worker-2`; `/etc/hosts` resolves these names on every node, and `ubuntu@controlplane` can `ssh worker-1` without a password.
 
 ### Checks

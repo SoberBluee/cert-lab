@@ -47,6 +47,19 @@ const troubleQ = (category: string, faults?: string[], randomize = false): Quick
 
 const scenarioOf = (bundle: ScenarioBundle) => parseYaml(bundle.files.find((f) => f.path === 'scenario.yaml')!.content);
 
+interface TaskDef {
+  id: string;
+  setupStage?: number;
+  setup?: { node: string; script: string; lane?: string }[];
+}
+
+/** One line per task with setup, in the order a session sets them up: "stage id: node script, ...". */
+const setupByStage = (def: { tasks: TaskDef[] }) =>
+  def.tasks
+    .filter((t) => t.setup?.length)
+    .sort((a, b) => (a.setupStage ?? 0) - (b.setupStage ?? 0))
+    .map((t) => `${t.setupStage ?? 0} ${t.id}: ${t.setup!.map((s) => `${s.node} ${s.script}${s.lane ? ` lane ${s.lane}` : ''}`).join(', ')}`);
+
 function build(questions: QuickQuestion[]) {
   const { build, errors } = buildQuickBundle({
     id: 'quick-test',
@@ -328,10 +341,11 @@ describe('Troubleshoot track', () => {
     const dep = BUILDERS.find((b) => b.id === 'deployment')!;
     const { build: res } = build([troubleQ('nodes'), createQ(dep, [], [])]);
     const def = scenarioOf(res.bundle);
-    assert.deepEqual(
-      def.setup.map((s: { node: string; script: string }) => `${s.node} ${s.script}`),
-      ['controlplane setup/q2.sh', 'controlplane setup/q1.sh', 'worker-1 setup/q1-2.sh', 'worker-2 setup/q1-3.sh', 'controlplane setup/q1-4.sh'],
-    );
+    assert.equal(def.setup, undefined);
+    assert.deepEqual(setupByStage(def), [
+      '0 q2: controlplane setup/q2.sh lane q2',
+      '1 q1: controlplane setup/q1.sh, worker-1 setup/q1-2.sh, worker-2 setup/q1-3.sh, controlplane setup/q1-4.sh',
+    ]);
     assert.deepEqual(def.solution, [
       { node: 'worker-1', script: 'setup/q1-solution.sh' },
       { node: 'worker-2', script: 'setup/q1-solution-2.sh' },
@@ -348,18 +362,12 @@ describe('Troubleshoot track', () => {
     const { build: res, issues } = build([troubleQ('controlplane'), troubleQ('nodes'), createQ(dep, [], []), troubleQ('pods')]);
     assert.deepEqual(issues, []);
     const def = scenarioOf(res.bundle);
-    assert.deepEqual(
-      def.setup.map((s: { node: string; script: string; lane?: string }) => `${s.node} ${s.script}${s.lane ? ` lane ${s.lane}` : ''}`),
-      [
-        'controlplane setup/q3.sh lane q3',
-        'controlplane setup/q4.sh lane q4',
-        'controlplane setup/q2.sh',
-        'worker-1 setup/q2-2.sh',
-        'worker-2 setup/q2-3.sh',
-        'controlplane setup/q2-4.sh',
-        'controlplane setup/q1.sh',
-      ],
-    );
+    assert.deepEqual(setupByStage(def), [
+      '0 q3: controlplane setup/q3.sh lane q3',
+      '0 q4: controlplane setup/q4.sh lane q4',
+      '1 q2: controlplane setup/q2.sh, worker-1 setup/q2-2.sh, worker-2 setup/q2-3.sh, controlplane setup/q2-4.sh',
+      '2 q1: controlplane setup/q1.sh',
+    ]);
     assert.deepEqual(def.solution, [
       { node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 },
       { node: 'worker-1', script: 'setup/q2-solution.sh' },
@@ -372,6 +380,7 @@ describe('Troubleshoot track', () => {
 
   it('a control plane question alone still lists its solution step', () => {
     const def = scenarioOf(build([troubleQ('controlplane')]).build.bundle);
+    assert.equal(def.tasks[0].setupStage, undefined);
     assert.deepEqual(def.solution, [{ node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 }]);
   });
 
