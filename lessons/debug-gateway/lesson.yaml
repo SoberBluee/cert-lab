@@ -1,0 +1,165 @@
+id: debug-gateway
+title: Debug a Gateway API HTTPRoute, layer by layer
+summary: api.lab.local is not served through the Traefik Gateway. Follow the Gateway API checklist (GatewayClass, Gateway and its listeners, the route's status conditions, backend refs, hostnames) and fix every layer you find.
+topic: troubleshooting
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    timeoutSeconds: 300
+    run: |
+      kubectl get gatewayclass traefik >/dev/null 2>&1 || { echo "this cluster image has no Gateway API: rebuild images with ./cka images build --force" >&2; exit 1; }
+      kubectl create namespace api
+      timeout 60 bash -c "until kubectl -n api get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
+      kubectl apply -f - <<EOF
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+        namespace: api
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: { app: api }
+        template:
+          metadata:
+            labels: { app: api }
+          spec:
+            containers:
+              - name: web
+                image: nginx:1.27-alpine
+                ports: [{ name: http, containerPort: 80 }]
+                readinessProbe:
+                  httpGet: { path: /, port: http }
+                  periodSeconds: 5
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: api
+        namespace: api
+      spec:
+        selector: { app: api }
+        ports: [{ port: 80, targetPort: http }]
+      ---
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: HTTPRoute
+      metadata:
+        name: api
+        namespace: api
+      spec:
+        parentRefs:
+          - { name: web-gateway, namespace: traefik, sectionName: websecure }
+        hostnames: [api.lab.locl]
+        rules:
+          - backendRefs:
+              - { name: api, port: 8080 }
+      EOF
+      kubectl -n api rollout status deployment/api --timeout=240s
+steps:
+  - id: reproduce
+    title: Reproduce the problem
+    explain: |
+      Traefik serves Gateway API traffic on NodePort `30080`, like Ingress traffic. The `Host` header selects the route. You get `404 page not found`: the Gateway answered, but no route matched.
+    command: "curl -s -H 'Host: api.lab.local' http://controlplane:30080/"
+    match: '^curl\b(?=.*api\.lab\.local)'
+    allowFailure: true
+  - id: gatewayclass
+    title: "Check 1: is the GatewayClass accepted?"
+    explain: |
+      A GatewayClass ties Gateways to a controller, like an IngressClass. `traefik` shows `ACCEPTED True`: the controller is installed and has claimed it.
+    command: kubectl get gatewayclass
+    match: '^kubectl\b(?=.*\bget (gatewayclass(es)?|gc)\b)'
+  - id: gateway
+    title: "Check 2: is the Gateway programmed?"
+    explain: |
+      Routes attach to a Gateway, not to the class. Gateway `traefik-gateway` in namespace `traefik` shows `PROGRAMMED True`. Note its exact name and namespace.
+    command: kubectl get gateway -A
+    match: '^kubectl\b(?=.*\bget (gateways?|gtw)\b)'
+  - id: listeners
+    title: "Check 3: read the Gateway's listeners"
+    explain: |
+      A route picks a listener with `sectionName`. This Gateway has one HTTP listener, `web`, and its `allowedRoutes` decides which namespaces may attach routes to it.
+    command: kubectl -n traefik get gateway traefik-gateway -o yaml
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(gateways?|gtw)\b)(?=.*(describe|-o\s*(yaml|json)|traefik-gateway))'
+  - id: route-status
+    title: "Check 4: read the HTTPRoute's status"
+    explain: |
+      The route's `status.parents` is where the controller reports back. Here there is no accepted parent: `parentRefs` names Gateway `web-gateway`, which does not exist, and asks for listener `websecure`, which `traefik-gateway` does not have. Always compare `parentRefs` with the Gateway you just read.
+    command: kubectl -n api describe httproute api
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(httproutes?)\b)(?=.*(describe|-o\s*(yaml|json)))'
+  - id: fix-parent
+    title: Attach the route to the real Gateway
+    explain: |
+      Set `parentRefs[0].name` to `traefik-gateway` (`kubectl -n api edit httproute api`).
+    command: kubectl -n api patch httproute api --type=json -p '[{"op":"replace","path":"/spec/parentRefs/0/name","value":"traefik-gateway"}]'
+    check:
+      id: parent-fixed
+      description: the route's parent is traefik-gateway
+      type: kubectl
+      run: kubectl -n api get httproute api -o jsonpath='{.spec.parentRefs[0].name}'
+      expect: { equals: traefik-gateway }
+  - id: fix-section
+    title: Pick a listener that exists
+    explain: |
+      Set `parentRefs[0].sectionName` to `web`. With a wrong `sectionName`, the route's `Accepted` condition is `False` with reason `NoMatchingParent`.
+    command: kubectl -n api patch httproute api --type=json -p '[{"op":"replace","path":"/spec/parentRefs/0/sectionName","value":"web"}]'
+    check:
+      id: section-fixed
+      description: the route attaches to listener web
+      type: kubectl
+      run: kubectl -n api get httproute api -o jsonpath='{.spec.parentRefs[0].sectionName}'
+      expect: { equals: web }
+  - id: route-status-again
+    title: "Check 5: read the status again"
+    explain: |
+      `Accepted` is now `True`: the Gateway takes the route. Next look at `ResolvedRefs`, which reports whether the route's backends are usable, then compare the `backendRefs` with the Service.
+    command: kubectl -n api get httproute api -o yaml
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(httproutes?)\b)(?=.*(describe|-o\s*(yaml|json)))'
+  - id: service
+    title: "Check 6: which port does the Service expose?"
+    explain: |
+      Service `api` exposes port `80`, but the route's `backendRefs` asks for `8080`. Like an Ingress backend, a backendRef names the **Service** port.
+    command: kubectl -n api get service api
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(svc|services?)\b)'
+  - id: fix-port
+    title: Fix the backend port
+    explain: |
+      Set `rules[0].backendRefs[0].port` to `80`.
+    command: kubectl -n api patch httproute api --type=json -p '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/port","value":80}]'
+    check:
+      id: port-fixed
+      description: the backendRef uses Service port 80
+      type: kubectl
+      run: kubectl -n api get httproute api -o jsonpath='{.spec.rules[0].backendRefs[0].port}'
+      expect: { equals: '80' }
+  - id: retry
+    title: Test again
+    explain: |
+      Accepted, resolved, and still `404`. When the route is healthy but nothing matches, compare what the request sends with what the route matches: the **hostname**. Look at `hostnames` in the route: `api.lab.locl`.
+    command: "curl -s -H 'Host: api.lab.local' http://controlplane:30080/"
+    match: '^curl\b(?=.*api\.lab\.local)'
+    allowFailure: true
+  - id: fix-hostname
+    title: Fix the hostname
+    explain: |
+      Set `hostnames[0]` to `api.lab.local`.
+    command: kubectl -n api patch httproute api --type=json -p '[{"op":"replace","path":"/spec/hostnames/0","value":"api.lab.local"}]'
+    check:
+      id: hostname-fixed
+      description: the route matches api.lab.local
+      type: kubectl
+      run: kubectl -n api get httproute api -o jsonpath='{.spec.hostnames[0]}'
+      expect: { equals: api.lab.local }
+  - id: confirm
+    title: Confirm the page loads
+    explain: |
+      The welcome page comes back. The checklist, in order: reproduce with the right Host header, GatewayClass accepted, Gateway programmed, its listeners, the route's `parentRefs` against them (name, namespace, `sectionName`), its `Accepted` and `ResolvedRefs` conditions, backend Service and port, and finally hostnames and path matches.
+    command: "curl -s -H 'Host: api.lab.local' http://controlplane:30080/"
+    match: '^curl\b(?=.*api\.lab\.local)'
+    check:
+      id: serves
+      description: api.lab.local returns the nginx welcome page
+      type: kubectl
+      run: "curl -s -m 5 -H 'Host: api.lab.local' http://controlplane:30080/"
+      expect: { contains: Welcome to nginx }
+      retrySeconds: 30

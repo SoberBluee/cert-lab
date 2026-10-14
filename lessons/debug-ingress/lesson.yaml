@@ -1,0 +1,158 @@
+id: debug-ingress
+title: Debug an Ingress, layer by layer
+summary: shop.lab.local returns 404 through the Traefik ingress controller. Follow the Ingress checklist (controller, IngressClass, the Ingress rule, the Service's endpoints and selector, then ports) and fix every layer you find.
+topic: troubleshooting
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    timeoutSeconds: 300
+    run: |
+      kubectl get ingressclass traefik >/dev/null 2>&1 || { echo "this cluster image has no Traefik: rebuild images with ./cka images build --force" >&2; exit 1; }
+      kubectl create namespace store
+      timeout 60 bash -c "until kubectl -n store get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
+      kubectl apply -f - <<EOF
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+        namespace: store
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: { app: web }
+        template:
+          metadata:
+            labels: { app: web }
+          spec:
+            containers:
+              - name: web
+                image: nginx:1.27-alpine
+                ports: [{ name: http, containerPort: 80 }]
+                readinessProbe:
+                  httpGet: { path: /, port: http }
+                  periodSeconds: 5
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: web
+        namespace: store
+      spec:
+        selector: { app: web-app }
+        ports: [{ port: 80, targetPort: http }]
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: web
+        namespace: store
+      spec:
+        ingressClassName: nginx
+        rules:
+          - host: shop.lab.local
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service: { name: web, port: { number: 8080 } }
+      EOF
+      kubectl -n store rollout status deployment/web --timeout=240s
+steps:
+  - id: reproduce
+    title: Reproduce the problem
+    explain: |
+      The Traefik controller serves Ingress traffic on NodePort `30080` of every node. The `Host` header picks the Ingress rule, so always send it. You get `404 page not found`: Traefik answered, but no route matched this host.
+    command: "curl -s -H 'Host: shop.lab.local' http://controlplane:30080/"
+    match: '^curl\b(?=.*shop\.lab\.local)'
+    allowFailure: true
+  - id: controller
+    title: "Check 1: is the ingress controller running?"
+    explain: |
+      An Ingress is only a rule; a controller has to read it and route traffic. The Traefik Pod in namespace `traefik` is `Running`, and the 404 proved it answers. Next: does it consider this Ingress its own?
+    command: kubectl -n traefik get pods
+    match: '^kubectl\b(?=.*\bget (po|pods?)\b)(?=.*(traefik|-A\b|--all-namespaces))'
+  - id: classes
+    title: "Check 2: which IngressClasses exist?"
+    explain: |
+      Each controller claims Ingresses through an IngressClass. This cluster has exactly one: `traefik`.
+    command: kubectl get ingressclass
+    match: '^kubectl\b(?=.*\bget (ingressclass(es)?)\b)'
+  - id: ingress
+    title: "Check 3: look at the Ingress"
+    explain: |
+      `CLASS` is `nginx` and `ADDRESS` is empty. No controller claims class `nginx`, so the rule is ignored and Traefik never routes it.
+    command: kubectl -n store get ingress
+    match: '^kubectl\b(?=.*\bget (ing|ingress(es)?)\b)'
+  - id: fix-class
+    title: Give the Ingress the right class
+    explain: |
+      Set `spec.ingressClassName` to `traefik` (`kubectl -n store edit ingress web`).
+    command: kubectl -n store patch ingress web --type=json -p '[{"op":"replace","path":"/spec/ingressClassName","value":"traefik"}]'
+    check:
+      id: class-fixed
+      description: Ingress web uses class traefik
+      type: kubectl
+      run: kubectl -n store get ingress web -o jsonpath='{.spec.ingressClassName}'
+      expect: { equals: traefik }
+  - id: retry
+    title: Test again
+    explain: |
+      Traefik picks the rule up now, but the request still fails: now it is `404` or `503` from the backend side. The rule is claimed; next check where it sends traffic.
+    command: "curl -s -H 'Host: shop.lab.local' http://controlplane:30080/"
+    match: '^curl\b(?=.*shop\.lab\.local)'
+    allowFailure: true
+  - id: describe
+    title: "Check 4: read the rule and its backend"
+    explain: |
+      `describe` lists the host, the path and the backend `web:8080`, followed by the endpoints it resolved to. Note both the Service name and the port: you will compare them with the Service next.
+    command: kubectl -n store describe ingress web
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(ing|ingress(es)?)\b)(?=.*(describe|-o\s*(yaml|json)))'
+  - id: endpoints
+    title: "Check 5: does the Service have endpoints?"
+    explain: |
+      `ENDPOINTS` is `<none>`: Service `web` sends traffic to no Pod at all, even though two ready Pods run.
+    command: kubectl -n store get endpoints web
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(ep|endpoints|endpointslices?)\b)'
+  - id: selector
+    title: "Check 6: compare the Service selector with the Pod labels"
+    explain: |
+      `describe service` shows `Selector: app=web-app`, but the Pods are labelled `app=web` (`kubectl -n store get pods --show-labels`). Also note the Service's `Port: 80`.
+    command: kubectl -n store describe service web
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(svc|services?)\b)'
+  - id: fix-selector
+    title: Fix the Service selector
+    explain: |
+      Set the selector to `app: web`. This step turns green when the Service has endpoints.
+    command: "kubectl -n store patch service web -p '{\"spec\":{\"selector\":{\"app\":\"web\"}}}'"
+    check:
+      id: has-endpoints
+      description: Service web has endpoints
+      type: kubectl
+      run: kubectl -n store get endpoints web -o jsonpath='{.subsets[0].addresses[*].ip}' | wc -w | tr -d ' '
+      expect: { equals: '2' }
+      retrySeconds: 15
+  - id: fix-port
+    title: Point the Ingress at the Service's port
+    explain: |
+      The Ingress backend asks for port `8080`, but Service `web` only exposes `80`. An Ingress backend names the **Service** port (not the container port). Set `service.port.number` to `80`.
+    command: kubectl -n store patch ingress web --type=json -p '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service/port/number","value":80}]'
+    check:
+      id: port-fixed
+      description: the Ingress backend uses Service port 80
+      type: kubectl
+      run: kubectl -n store get ingress web -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.port.number}'
+      expect: { equals: '80' }
+  - id: confirm
+    title: Confirm the page loads
+    explain: |
+      The welcome page comes back. The checklist, in order: reproduce with the right Host header, the controller, the IngressClass, the Ingress (class, host, path, backend), the Service endpoints and selector, and finally that the backend port is a **Service** port.
+    command: "curl -s -H 'Host: shop.lab.local' http://controlplane:30080/"
+    match: '^curl\b(?=.*shop\.lab\.local)'
+    check:
+      id: serves
+      description: shop.lab.local returns the nginx welcome page
+      type: kubectl
+      run: "curl -s -m 5 -H 'Host: shop.lab.local' http://controlplane:30080/"
+      expect: { contains: Welcome to nginx }
+      retrySeconds: 30

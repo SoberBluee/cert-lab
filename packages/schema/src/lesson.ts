@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CheckSchema, NodeNameSchema, StepSchema } from './scenario';
 
-export const LESSON_TOPICS = ['certificates', 'etcd', 'cluster', 'openssl', 'firewall', 'systemd', 'networking', 'files'] as const;
+export const LESSON_TOPICS = ['certificates', 'etcd', 'cluster', 'troubleshooting', 'openssl', 'firewall', 'systemd', 'networking', 'files'] as const;
 export const LessonTopicSchema = z.enum(LESSON_TOPICS);
 export type LessonTopic = z.infer<typeof LessonTopicSchema>;
 

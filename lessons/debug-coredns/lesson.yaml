@@ -1,0 +1,115 @@
+id: debug-coredns
+title: Debug cluster DNS, layer by layer
+summary: Pods cannot resolve any name. Follow the DNS checklist (the Pod's resolver, the kube-dns Service, the CoreDNS Pods and logs, the Corefile, then the endpoints) and fix every layer you find.
+topic: troubleshooting
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    timeoutSeconds: 300
+    run: |
+      kubectl delete pod dnstest --ignore-not-found --wait=true >/dev/null
+      kubectl run dnstest --image=busybox:1.36 --restart=Never -- sleep infinity
+      kubectl wait --for=condition=Ready pod/dnstest --timeout=180s
+      kubectl -n kube-system get configmap coredns -o yaml | sed -E 's#^([[:space:]]*)forward \. /etc/resolv\.conf#\1forwrd . /etc/resolv.conf#' | kubectl replace -f - >/dev/null
+      kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -q 'forwrd \. ' || { echo "could not edit the Corefile" >&2; exit 1; }
+      kubectl -n kube-system patch service kube-dns -p '{"spec":{"selector":{"k8s-app":"core-dns"}}}' >/dev/null
+      kubectl -n kube-system delete pod -l k8s-app=kube-dns --wait=false >/dev/null
+      for _ in $(seq 1 60); do
+        [[ "$(kubectl -n kube-system get pods -l k8s-app=kube-dns -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{"\n"}{end}' | grep -c true)" == 0 ]] && break
+        sleep 2
+      done
+steps:
+  - id: reproduce
+    title: Reproduce the problem
+    explain: |
+      Test from inside a Pod: DNS for Pods is served by CoreDNS, not by the node. `kubernetes.default` always exists, so if it does not resolve, DNS is broken for everyone. Here the lookup fails because no DNS server answers.
+    command: kubectl exec dnstest -- nslookup kubernetes.default
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)'
+    allowFailure: true
+  - id: resolv
+    title: "Check 1: which server does the Pod ask?"
+    explain: |
+      The kubelet writes each Pod's `/etc/resolv.conf`. `nameserver 10.96.0.10` is the ClusterIP of Service `kube-dns`, and the `search` line lets short names like `kubernetes.default` work. This Pod is configured correctly, so the problem is on the server side.
+    command: kubectl exec dnstest -- cat /etc/resolv.conf
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*resolv\.conf)'
+  - id: service
+    title: "Check 2: does the kube-dns Service exist with that IP?"
+    explain: |
+      `kube-dns` in `kube-system` has ClusterIP `10.96.0.10` and ports 53/UDP and 53/TCP, matching the Pod's resolver. The Service is there; next, what is behind it.
+    command: kubectl -n kube-system get service kube-dns
+    match: '^kubectl\b(?=.*\b(get|describe)\b)(?=.*\b(svc|services?)\b)(?=.*(kube-dns|kube-system|-A\b|--all-namespaces))'
+  - id: pods
+    title: "Check 3: are the CoreDNS Pods running?"
+    explain: |
+      The CoreDNS Pods still carry the historical label `k8s-app=kube-dns`. Both are in `CrashLoopBackOff` (or `Error`): they start and exit straight away.
+    command: kubectl -n kube-system get pods -l k8s-app=kube-dns
+    match: '^kubectl\b(?=.*\bget (po|pods?)\b)(?=.*(kube-system|kube-dns|coredns|-A\b|--all-namespaces))'
+  - id: logs
+    title: "Check 4: why do they exit?"
+    explain: |
+      A crashing container's log is the first place to look. CoreDNS refuses to start: `Unknown directive 'forwrd'`. The Corefile has a typo. (`--previous` shows the log of the last crashed attempt if the current one is empty.)
+    command: kubectl -n kube-system logs -l k8s-app=kube-dns --tail=20
+    match: '^kubectl\b(?=.*\blogs\b)(?=.*(kube-dns|coredns))'
+    allowFailure: true
+  - id: corefile
+    title: "Check 5: read the Corefile"
+    explain: |
+      The Corefile lives in ConfigMap `coredns`. Find the `forwrd . /etc/resolv.conf` line: it should be `forward`. While you are here, check the rest: `kubernetes cluster.local in-addr.arpa ip6.arpa` must name the cluster domain.
+    command: kubectl -n kube-system get configmap coredns -o yaml
+    match: '^kubectl\b(?=.*\b(get|describe|edit)\b)(?=.*\b(cm|configmaps?)\b)(?=.*coredns)'
+  - id: fix-corefile
+    title: Fix the Corefile and restart CoreDNS
+    explain: |
+      Change `forwrd` to `forward` (`kubectl -n kube-system edit configmap coredns`). Crash-looping Pods only re-read the file on their next restart, after a growing back-off, so restart the Deployment to pick it up now. This step turns green when both CoreDNS Pods are ready.
+    command: kubectl -n kube-system get configmap coredns -o yaml | sed 's/forwrd \./forward ./' | kubectl replace -f - && kubectl -n kube-system rollout restart deployment coredns
+    check:
+      id: coredns-ready
+      description: the Corefile is fixed and CoreDNS runs 2 ready replicas
+      type: kubectl
+      run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -q forwrd && echo typo || kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+      expect: { equals: '2' }
+      retrySeconds: 90
+  - id: retry
+    title: Test again
+    explain: |
+      CoreDNS is healthy now, but lookups still fail. Healthy Pods are only half of it: the Service has to send traffic to them. Keep going down the checklist.
+    command: kubectl exec dnstest -- nslookup kubernetes.default
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)'
+    allowFailure: true
+  - id: endpoints
+    title: "Check 6: does kube-dns have endpoints?"
+    explain: |
+      `ENDPOINTS` is `<none>`: the Service selects no Pod, so 10.96.0.10 leads nowhere even though CoreDNS runs.
+    command: kubectl -n kube-system get endpoints kube-dns
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(ep|endpoints|endpointslices?)\b)'
+  - id: selector
+    title: "Check 7: compare the selector with the Pod labels"
+    explain: |
+      `describe` shows `Selector: k8s-app=core-dns`, but the Pods are labelled `k8s-app=kube-dns` (`kubectl -n kube-system get pods --show-labels`). One wrong character in a selector empties the Service.
+    command: kubectl -n kube-system describe service kube-dns
+    match: '^kubectl\b(?=.*\b(describe|get|edit)\b)(?=.*\b(svc|services?)\b)(?=.*kube-dns)'
+  - id: fix-selector
+    title: Point kube-dns back at CoreDNS
+    explain: |
+      Set the selector to `k8s-app: kube-dns`. This step turns green when the Service has endpoints again.
+    command: "kubectl -n kube-system patch service kube-dns -p '{\"spec\":{\"selector\":{\"k8s-app\":\"kube-dns\"}}}'"
+    check:
+      id: has-endpoints
+      description: kube-dns selects the CoreDNS Pods and has endpoints
+      type: kubectl
+      run: echo "$(kubectl -n kube-system get service kube-dns -o jsonpath='{.spec.selector.k8s-app}') $(kubectl -n kube-system get endpoints kube-dns -o jsonpath='{.subsets[0].addresses[*].ip}' | wc -w | tr -d ' ')"
+      expect: { equals: kube-dns 2 }
+      retrySeconds: 15
+  - id: confirm
+    title: Confirm short names and full names resolve
+    explain: |
+      Test the fully qualified name too: it skips the search domains, so it proves the server answers rather than the Pod's config guessing right. The checklist, in order: reproduce from a Pod, its resolv.conf, the kube-dns Service, the CoreDNS Pods, their logs, the Corefile, then the Service endpoints and selector.
+    command: kubectl exec dnstest -- nslookup kubernetes.default.svc.cluster.local
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)'
+    check:
+      id: resolves
+      description: dnstest resolves kubernetes.default.svc.cluster.local
+      type: kubectl
+      run: kubectl exec dnstest -- nslookup kubernetes.default.svc.cluster.local 2>/dev/null | grep -A1 '^Name:' | tail -1
+      expect: { matches: '10\.96\.0\.1$' }
+      retrySeconds: 30

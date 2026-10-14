@@ -1,0 +1,142 @@
+id: debug-kubelet
+title: Debug a failing kubelet, layer by layer
+summary: The kubelet on worker-2 will not stay up and the node is NotReady. Follow the kubelet checklist (service status, its log, where its flags come from, its kubeconfig, then boot persistence) and fix every layer you find.
+topic: troubleshooting
+estimatedMinutes: 15
+setup:
+  - node: worker-2
+    run: |
+      systemctl disable kubelet
+      sed -i -E 's#^([[:space:]]*server: https://.*):6443$#\1:6444#' /etc/kubernetes/kubelet.conf
+      grep -qE 'server: https://.*:6444$' /etc/kubernetes/kubelet.conf || { echo "could not edit kubelet.conf" >&2; exit 1; }
+      touch /etc/default/kubelet
+      grep -q '^KUBELET_EXTRA_ARGS=' /etc/default/kubelet || echo 'KUBELET_EXTRA_ARGS=' >> /etc/default/kubelet
+      sed -i -E 's#^KUBELET_EXTRA_ARGS=(.*)$#KUBELET_EXTRA_ARGS=\1 --pod-max-pids-limit=100#' /etc/default/kubelet
+      grep -q -- '--pod-max-pids-limit=100' /etc/default/kubelet || { echo "could not edit /etc/default/kubelet" >&2; exit 1; }
+      systemctl restart kubelet || true
+  - node: controlplane
+    timeoutSeconds: 240
+    run: |
+      for _ in $(seq 1 90); do
+        [[ "$(kubectl get node worker-2 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" != True ]] && exit 0
+        sleep 2
+      done
+      echo "worker-2 is still Ready" >&2
+      exit 1
+steps:
+  - id: nodes
+    title: Find the unhealthy node
+    explain: |
+      `worker-2` is `NotReady`. `kubectl describe node worker-2` would say `Kubelet stopped posting node status`: the control plane has not heard from it, so the problem is on the node.
+    command: kubectl get nodes
+    match: '^kubectl\b(?=.*\bget (no|nodes?)\b)'
+  - id: status
+    title: "Check 1: what state is the kubelet in?"
+    explain: |
+      Switch to the **worker-2** terminal. `activating (auto-restart)` with `status=1/FAILURE` means it starts, exits and systemd retries it in a loop. Also note the `Loaded:` line: the unit is `disabled`. Remember that for later.
+    node: worker-2
+    command: systemctl status kubelet --no-pager
+    match: '^systemctl\b(?=.*\bstatus\b)(?=.*kubelet)'
+    allowFailure: true
+  - id: log
+    title: "Check 2: why does it exit?"
+    explain: |
+      The last lines of the log give the reason: `unknown flag: --pod-max-pids-limit`. The kubelet refuses to start with a flag it does not know (the real flag is `--pod-max-pids`). Next question: where does that flag come from?
+    node: worker-2
+    command: sudo journalctl -u kubelet -n 30 --no-pager
+    match: '^journalctl\b(?=.*(-u\s*|--unit[= ])kubelet)'
+  - id: unit
+    title: "Check 3: where do the kubelet's flags come from?"
+    explain: |
+      `systemctl cat` prints the unit **and its drop-ins**. The kubeadm drop-in `10-kubeadm.conf` builds the command line from `$KUBELET_KUBECONFIG_ARGS`, `$KUBELET_CONFIG_ARGS`, `$KUBELET_KUBEADM_ARGS` and `$KUBELET_EXTRA_ARGS`, loading the last one from `EnvironmentFile=-/etc/default/kubelet`.
+    node: worker-2
+    command: systemctl cat kubelet
+    match: '^systemctl cat\b(?=.*kubelet)'
+  - id: extra-args
+    title: "Check 4: read /etc/default/kubelet"
+    explain: |
+      `KUBELET_EXTRA_ARGS` contains `--pod-max-pids-limit=100`. That is where the bad flag comes from.
+    node: worker-2
+    command: cat /etc/default/kubelet
+    match: '^(cat|less|more|vi|vim|nano|grep)\b.*/etc/default/kubelet'
+  - id: fix-flag
+    title: Remove the flag and restart the kubelet
+    explain: |
+      Delete `--pod-max-pids-limit=100` from the file, then `systemctl restart kubelet`. Editing an environment file needs no `daemon-reload`; editing a unit or drop-in does. This step turns green when the flag is gone and the kubelet stays active.
+    node: worker-2
+    command: sudo sed -i 's/ *--pod-max-pids-limit=100//' /etc/default/kubelet && sudo systemctl restart kubelet
+    check:
+      id: kubelet-starts
+      description: the flag is gone and the kubelet is active on worker-2
+      type: ssh
+      node: worker-2
+      run: echo "$(grep -c -- '--pod-max-pids-limit' /etc/default/kubelet) $(systemctl is-active kubelet)"
+      expect: { equals: 0 active }
+      retrySeconds: 15
+  - id: log-again
+    title: "Check 5: the node is still NotReady. Read the log again"
+    explain: |
+      The kubelet runs now, but `kubectl get nodes` still shows NotReady. Back to the log: every request fails with `dial tcp ...:6444: connect: connection refused`. The kubelet is talking to the wrong address.
+    node: worker-2
+    command: sudo journalctl -u kubelet -n 30 --no-pager
+    match: '^journalctl\b(?=.*(-u\s*|--unit[= ])kubelet)'
+  - id: kubeconfig
+    title: "Check 6: which API server does the kubelet use?"
+    explain: |
+      The kubelet's credentials and server URL live in `/etc/kubernetes/kubelet.conf` (named by `--kubeconfig` in the drop-in). Its `server:` ends in `:6444`.
+    node: worker-2
+    command: sudo grep server /etc/kubernetes/kubelet.conf
+    match: '^(grep|cat|less|more|vi|vim|nano)\b.*kubelet\.conf'
+  - id: api-address
+    title: "Check 7: where does the API server really listen?"
+    explain: |
+      On **controlplane**. `kubectl cluster-info` prints the control plane URL: port `6443`. Always compare a broken config with a known-good one rather than guessing.
+    command: kubectl cluster-info
+    match: '^kubectl cluster-info\b'
+  - id: fix-port
+    title: Fix the port and restart the kubelet
+    explain: |
+      On **worker-2**, change `:6444` to `:6443` in `/etc/kubernetes/kubelet.conf` and restart the kubelet. This step turns green when worker-2 is Ready.
+    node: worker-2
+    command: sudo sed -i 's/:6444$/:6443/' /etc/kubernetes/kubelet.conf && sudo systemctl restart kubelet
+    check:
+      id: node-ready
+      description: worker-2 is Ready
+      type: kubectl
+      run: kubectl get node worker-2 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      expect: { equals: 'True' }
+      retrySeconds: 90
+  - id: enabled
+    title: "Check 8: will it survive a reboot?"
+    explain: |
+      `systemctl status` said `disabled` back in check 1. A running but disabled kubelet leaves the node NotReady after the next reboot. `is-enabled` prints `disabled`.
+    node: worker-2
+    command: systemctl is-enabled kubelet
+    match: '^systemctl is-enabled\b(?=.*kubelet)'
+    allowFailure: true
+  - id: enable
+    title: Enable the kubelet
+    explain: |
+      `systemctl enable kubelet` makes it start at boot.
+    node: worker-2
+    command: sudo systemctl enable kubelet
+    check:
+      id: kubelet-enabled
+      description: the kubelet is enabled on worker-2
+      type: ssh
+      node: worker-2
+      run: systemctl is-enabled kubelet 2>&1 || true
+      expect: { equals: enabled }
+  - id: confirm
+    title: Confirm every node is Ready
+    explain: |
+      The checklist, in order: node status, `systemctl status` (state **and** enabled), the kubelet log, `systemctl cat` for where flags come from, each file it names (`/etc/default/kubelet`, `kubelet.conf`, `/var/lib/kubelet/config.yaml`), restart, then re-check the log and the node until it is Ready and enabled.
+    command: kubectl get nodes
+    match: '^kubectl\b(?=.*\bget (no|nodes?)\b)'
+    check:
+      id: all-ready
+      description: every node is Ready
+      type: kubectl
+      run: kubectl get nodes --no-headers | awk '{print $2}' | sort -u | xargs
+      expect: { equals: Ready }
+      retrySeconds: 30

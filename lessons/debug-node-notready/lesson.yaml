@@ -1,0 +1,128 @@
+id: debug-node-notready
+title: Debug a NotReady node, layer by layer
+summary: worker-1 is NotReady and takes no Pods. Follow the node checklist (conditions and taints, kubelet, its log, the container runtime, the CNI config, then scheduling) and fix every layer you find.
+topic: troubleshooting
+estimatedMinutes: 15
+setup:
+  - node: worker-1
+    run: |
+      mkdir -p /root/cni-backup
+      mv /etc/cni/net.d/*.conflist /root/cni-backup/
+      ! ls /etc/cni/net.d/*.conflist >/dev/null 2>&1 || { echo "could not move the CNI config" >&2; exit 1; }
+      systemctl disable --now containerd
+  - node: controlplane
+    timeoutSeconds: 240
+    run: |
+      kubectl cordon worker-1 >/dev/null
+      for _ in $(seq 1 90); do
+        [[ "$(kubectl get node worker-1 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" != True ]] && exit 0
+        sleep 2
+      done
+      echo "worker-1 is still Ready" >&2
+      exit 1
+steps:
+  - id: nodes
+    title: Find the unhealthy node
+    explain: |
+      `worker-1` shows `NotReady,SchedulingDisabled`. Those are two separate problems: NotReady comes from the node's own health, SchedulingDisabled from a cordon. Fix the health first.
+    command: kubectl get nodes
+    match: '^kubectl\b(?=.*\bget (no|nodes?)\b)'
+  - id: describe
+    title: "Check 1: read the node's conditions"
+    explain: |
+      Under **Conditions**, `Ready` is `False` and its message says why, here `container runtime is down` (or that the kubelet stopped posting status). Also note **Taints** (`node.kubernetes.io/unschedulable`, `not-ready`) and `Unschedulable: true`.
+    command: kubectl describe node worker-1
+    match: '^kubectl\b(?=.*\bdescribe (no|nodes?)\b)'
+  - id: kubelet
+    title: "Check 2: is the kubelet running?"
+    explain: |
+      Switch to the **worker-1** terminal. The kubelet is the agent that reports node status, so check it first. It is `active (running)`: the kubelet itself is fine, so it is reporting a problem one layer below it.
+    node: worker-1
+    command: systemctl status kubelet --no-pager
+    match: '^systemctl\b(?=.*\bstatus\b)(?=.*kubelet)'
+    allowFailure: true
+  - id: kubelet-log
+    title: "Check 3: what does the kubelet complain about?"
+    explain: |
+      The kubelet log names the failing dependency: errors connecting to `unix:///run/containerd/containerd.sock`, the container runtime (CRI) socket. `-n 30` shows the last 30 lines; `--no-pager` prints them straight away.
+    node: worker-1
+    command: sudo journalctl -u kubelet -n 30 --no-pager
+    match: '^journalctl\b(?=.*(-u\s*|--unit[= ])kubelet)'
+  - id: containerd
+    title: "Check 4: is the container runtime running?"
+    explain: |
+      `containerd` is `inactive (dead)` and `disabled`, so it would not even come back after a reboot.
+    node: worker-1
+    command: systemctl status containerd --no-pager
+    match: '^systemctl\b(?=.*\bstatus\b)(?=.*containerd)'
+    allowFailure: true
+  - id: fix-containerd
+    title: Start containerd, and enable it
+    explain: |
+      `enable --now` starts it now **and** at boot. Fixing only the running state is the classic half-fix. This step turns green when containerd is active and enabled.
+    node: worker-1
+    command: sudo systemctl enable --now containerd
+    check:
+      id: containerd-up
+      description: containerd is active and enabled on worker-1
+      type: ssh
+      node: worker-1
+      run: echo "$(systemctl is-active containerd) $(systemctl is-enabled containerd)"
+      expect: { equals: active enabled }
+  - id: describe-again
+    title: "Check 5: is the node Ready now?"
+    explain: |
+      Back on **controlplane**. Still `NotReady`, but the `Ready` message has changed: `container runtime network not ready ... cni plugin not initialized`. Each fix can reveal the next layer, so always re-read the conditions.
+    command: kubectl describe node worker-1
+    match: '^kubectl\b(?=.*\bdescribe (no|nodes?)\b)'
+  - id: cni-dir
+    title: "Check 6: look at the CNI config on the node"
+    explain: |
+      On **worker-1**. containerd reads the Pod network config from `/etc/cni/net.d`. It is empty: the Calico file `10-calico.conflist` is gone. Compare with a healthy node (`ls /etc/cni/net.d` on worker-2).
+    node: worker-1
+    command: ls -l /etc/cni/net.d
+    match: '^ls\b(?=.*(/etc/cni|cni/net\.d))'
+    allowFailure: true
+  - id: fix-cni
+    title: Restore the CNI config
+    explain: |
+      Someone left a copy in `/root/cni-backup` (`sudo ls /root/cni-backup`). Put it back in `/etc/cni/net.d`, then restart containerd and the kubelet so they reload it. (Copying the file from a healthy worker works too.) This step turns green when worker-1 is Ready.
+    node: worker-1
+    command: sudo sh -c 'mv /root/cni-backup/*.conflist /etc/cni/net.d/' && sudo systemctl restart containerd kubelet
+    check:
+      id: node-ready
+      description: worker-1 is Ready
+      type: kubectl
+      run: kubectl get node worker-1 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      expect: { equals: 'True' }
+      retrySeconds: 90
+  - id: still-cordoned
+    title: "Check 7: does it take Pods?"
+    explain: |
+      On **controlplane**. `Ready`, but still `SchedulingDisabled`: the cordon is a separate setting the scheduler respects, and fixing the node's health does not remove it.
+    command: kubectl get nodes
+    match: '^kubectl\b(?=.*\bget (no|nodes?)\b)'
+  - id: uncordon
+    title: Uncordon worker-1
+    explain: |
+      `kubectl uncordon` clears `spec.unschedulable` and the matching taint.
+    command: kubectl uncordon worker-1
+    check:
+      id: schedulable
+      description: worker-1 is not cordoned
+      type: kubectl
+      run: echo "x$(kubectl get node worker-1 -o jsonpath='{.spec.unschedulable}')"
+      expect: { equals: x }
+  - id: confirm
+    title: Prove a Pod runs there
+    explain: |
+      Ready is not the same as working: schedule a Pod onto the node and watch it run. A `nodeSelector` (unlike `nodeName`) still goes through the scheduler, so it also proves the cordon is gone. The checklist, in order: node conditions and taints, kubelet status, kubelet log, container runtime, CNI config, then cordons and taints, and a real Pod.
+    command: |
+      kubectl run nodetest --image=nginx:1.27-alpine --overrides='{"spec":{"nodeSelector":{"kubernetes.io/hostname":"worker-1"}}}'
+    check:
+      id: pod-runs
+      description: Pod nodetest runs on worker-1
+      type: kubectl
+      run: kubectl get pod nodetest -o jsonpath='{.spec.nodeName} {.status.phase}' 2>/dev/null || true
+      expect: { equals: worker-1 Running }
+      retrySeconds: 60

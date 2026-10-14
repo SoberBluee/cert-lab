@@ -1,0 +1,243 @@
+id: debug-netpol
+title: Debug a NetworkPolicy outage, layer by layer
+summary: Pod frontend cannot reach Service backend in namespace shop. Work through the NetworkPolicy checklist in order (DNS, the Service, every policy's selector and port, both directions) and fix each layer you find.
+topic: troubleshooting
+estimatedMinutes: 15
+setup:
+  - node: controlplane
+    timeoutSeconds: 300
+    run: |
+      kubectl create namespace shop
+      timeout 60 bash -c "until kubectl -n shop get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
+      kubectl apply -f - <<EOF
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: backend
+        namespace: shop
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: { app: backend }
+        template:
+          metadata:
+            labels: { app: backend }
+          spec:
+            containers:
+              - name: web
+                image: nginx:1.27-alpine
+                ports: [{ containerPort: 80 }]
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: backend
+        namespace: shop
+      spec:
+        selector: { app: backend }
+        ports: [{ port: 80, targetPort: 80 }]
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: frontend
+        namespace: shop
+        labels: { app: frontend }
+      spec:
+        containers:
+          - name: shell
+            image: busybox:1.36
+            command: ["sleep", "infinity"]
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny
+        namespace: shop
+      spec:
+        podSelector: {}
+        policyTypes: [Ingress, Egress]
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-frontend
+        namespace: shop
+      spec:
+        podSelector:
+          matchLabels: { app: backend-api }
+        policyTypes: [Ingress]
+        ingress:
+          - from:
+              - podSelector:
+                  matchLabels: { app: frontend }
+            ports:
+              - { protocol: TCP, port: 8080 }
+      EOF
+      kubectl -n shop rollout status deployment/backend --timeout=240s
+      kubectl -n shop wait --for=condition=Ready pod/frontend --timeout=180s
+steps:
+  - id: reproduce
+    title: Reproduce the problem
+    explain: |
+      Always start by seeing the failure yourself, from the Pod that has the problem. `-T 3` makes `wget` give up after 3 seconds instead of hanging. It fails: keep the exact error in mind, because "bad address" (DNS) and "timed out" (connection) point at different layers.
+    command: kubectl -n shop exec frontend -- wget -qO- -T 3 http://backend
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bfrontend\b)(?=.*\b(wget|curl|nc)\b)(?=.*backend)'
+    allowFailure: true
+  - id: dns
+    title: "Check 1: is it DNS?"
+    explain: |
+      A Service name has to resolve before any connection can happen, so DNS is always the first layer. Here `nslookup` times out: the Pod cannot even reach the cluster DNS server. That alone breaks every request by name, whatever the other policies say.
+    command: kubectl -n shop exec frontend -- nslookup backend
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bfrontend\b)(?=.*\b(nslookup|dig|host)\b)'
+    allowFailure: true
+  - id: coredns
+    title: "Check 2: is CoreDNS itself healthy?"
+    explain: |
+      Before blaming the namespace, rule out the DNS server. Both CoreDNS Pods are `Running` and ready, so DNS works for the rest of the cluster: something in namespace `shop` stops this Pod from reaching it.
+    command: kubectl -n kube-system get pods -l k8s-app=kube-dns
+    match: '^kubectl\b(?=.*\bget (po|pods?)\b)(?=.*(kube-system|kube-dns|coredns|-A\b|--all-namespaces))'
+  - id: list-policies
+    title: "Check 3: which NetworkPolicies exist?"
+    explain: |
+      As soon as any policy selects a Pod for a direction (Ingress or Egress), everything in that direction not explicitly allowed is dropped. List what is in the namespace: `default-deny` and `allow-frontend`.
+    command: kubectl -n shop get networkpolicy
+    match: '^kubectl\b(?=.*\bget (netpol|networkpolic(y|ies))\b)'
+  - id: default-deny
+    title: Read default-deny
+    explain: |
+      `podSelector: {}` selects **every** Pod in the namespace, and `policyTypes` lists both `Ingress` and `Egress` with no rules. So all egress is denied, including DNS on port 53 to `kube-system`. Nothing else opens it: there is no DNS policy.
+    command: kubectl -n shop describe networkpolicy default-deny
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(netpol|networkpolic(y|ies))\b)(?=.*default-deny)'
+  - id: allow-dns
+    title: Allow DNS egress for every Pod
+    explain: |
+      Add a policy that selects every Pod (`podSelector: {}`) and allows egress to the CoreDNS Pods in `kube-system` on port 53, **both UDP and TCP** (large answers fall back to TCP). The `namespaceSelector` and `podSelector` in the same `to` entry mean "Pods with this label in that namespace". This step turns green when `nslookup backend` works from `frontend`.
+    command: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-dns
+        namespace: shop
+      spec:
+        podSelector: {}
+        policyTypes: [Egress]
+        egress:
+          - to:
+              - namespaceSelector:
+                  matchLabels: { kubernetes.io/metadata.name: kube-system }
+                podSelector:
+                  matchLabels: { k8s-app: kube-dns }
+            ports:
+              - { protocol: UDP, port: 53 }
+              - { protocol: TCP, port: 53 }
+      EOF
+    check:
+      id: dns-works
+      description: frontend resolves backend
+      type: kubectl
+      run: timeout 10 kubectl -n shop exec frontend -- nslookup backend.shop.svc.cluster.local >/dev/null 2>&1 && echo resolves || echo fails
+      expect: { equals: resolves }
+      retrySeconds: 15
+  - id: retry
+    title: Try the request again
+    explain: |
+      DNS is fixed, but the request still fails, now with a timeout instead of "bad address". That is the next layer: the connection itself. One fix rarely solves a NetworkPolicy outage, so always re-test after each one.
+    command: kubectl -n shop exec frontend -- wget -qO- -T 3 http://backend
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bfrontend\b)(?=.*\b(wget|curl|nc)\b)(?=.*backend)'
+    allowFailure: true
+  - id: endpoints
+    title: "Check 4: does the Service have endpoints?"
+    explain: |
+      A Service with no endpoints fails the same way as a blocked one, so rule it out. `backend` lists two Pod IPs on port 80: the Service and its selector are fine.
+    command: kubectl -n shop get endpoints backend
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(ep|endpoints|endpointslices?)\b)'
+  - id: ports
+    title: "Check 5: which port does traffic really arrive on?"
+    explain: |
+      NetworkPolicies match the port **on the Pod** (the Service's `targetPort`), not the Service port. `describe` shows `Port: 80/TCP` and `TargetPort: 80/TCP`, so a policy for this app must allow port 80.
+    command: kubectl -n shop describe service backend
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(svc|services?)\b)'
+  - id: labels
+    title: "Check 6: what labels do the Pods really have?"
+    explain: |
+      Policies pick Pods by label, so you need the real labels to compare against. The backend Pods carry `app=backend`, the client `app=frontend`.
+    command: kubectl -n shop get pods --show-labels
+    match: '^kubectl\b(?=.*\bget (po|pods?)\b)(?=.*(--show-labels|-L\b|-o\s*(yaml|json|wide)))'
+  - id: read-allow
+    title: Read allow-frontend
+    explain: |
+      Check every field against what you just saw. `PodSelector: app=backend-api` selects **no Pod** (the label is `app=backend`), so the policy does nothing. And it allows port `8080`, but nginx listens on `80`. Two bugs in one policy.
+    command: kubectl -n shop describe networkpolicy allow-frontend
+    match: '^kubectl\b(?=.*\b(describe|get|edit)\b)(?=.*\b(netpol|networkpolic(y|ies))\b)(?=.*allow-frontend)'
+  - id: fix-selector
+    title: Point allow-frontend at the backend Pods
+    explain: |
+      Set `spec.podSelector.matchLabels.app` to `backend`, with `kubectl edit` or a patch.
+    command: kubectl -n shop patch networkpolicy allow-frontend --type=json -p '[{"op":"replace","path":"/spec/podSelector/matchLabels/app","value":"backend"}]'
+    check:
+      id: selector-fixed
+      description: allow-frontend selects app=backend
+      type: kubectl
+      run: kubectl -n shop get networkpolicy allow-frontend -o jsonpath='{.spec.podSelector.matchLabels.app}'
+      expect: { equals: backend }
+  - id: fix-port
+    title: Allow the port nginx listens on
+    explain: |
+      Set the port in `spec.ingress[0].ports` to `80`.
+    command: kubectl -n shop patch networkpolicy allow-frontend --type=json -p '[{"op":"replace","path":"/spec/ingress/0/ports/0/port","value":80}]'
+    check:
+      id: port-fixed
+      description: allow-frontend allows port 80
+      type: kubectl
+      run: kubectl -n shop get networkpolicy allow-frontend -o jsonpath='{.spec.ingress[0].ports[0].port}'
+      expect: { equals: '80' }
+  - id: egress-side
+    title: "Check 7: the other direction"
+    explain: |
+      Still failing. A connection needs **egress allowed at the client** and **ingress allowed at the server**. `allow-frontend` covers the backend's ingress, but `default-deny` also blocks the frontend's egress, and `allow-dns` only opens port 53. Run the request once more to confirm it still times out.
+    command: kubectl -n shop exec frontend -- wget -qO- -T 3 http://backend
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bfrontend\b)(?=.*\b(wget|curl|nc)\b)(?=.*backend)'
+    allowFailure: true
+  - id: allow-egress
+    title: Let frontend connect out to backend
+    explain: |
+      Add an egress policy for the `app=frontend` Pods that allows the `app=backend` Pods on TCP port 80. This step turns green when the request from `frontend` returns the nginx page.
+    command: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: frontend-egress
+        namespace: shop
+      spec:
+        podSelector:
+          matchLabels: { app: frontend }
+        policyTypes: [Egress]
+        egress:
+          - to:
+              - podSelector:
+                  matchLabels: { app: backend }
+            ports:
+              - { protocol: TCP, port: 80 }
+      EOF
+    check:
+      id: reachable
+      description: frontend gets the nginx page from http://backend
+      type: kubectl
+      run: kubectl -n shop exec frontend -- wget -qO- -T 3 http://backend 2>&1 || true
+      expect: { contains: Welcome to nginx }
+      retrySeconds: 20
+  - id: confirm
+    title: Confirm the fix, and that the lockdown still holds
+    explain: |
+      The request works. `default-deny` is untouched, so anything you did not explicitly allow is still blocked. The checklist you just followed, in order: reproduce, DNS, CoreDNS, list policies, read each one, Service endpoints and target port, Pod labels, then selector, port and **both directions** for every policy.
+    command: kubectl -n shop get networkpolicy
+    match: '^kubectl\b(?=.*\b(get|describe)\b)(?=.*\b(netpol|networkpolic(y|ies))\b)'
+    check:
+      id: deny-kept
+      description: default-deny still denies ingress and egress for every Pod
+      type: kubectl
+      run: kubectl -n shop get networkpolicy default-deny -o jsonpath='{.spec.podSelector.matchLabels}|{.spec.policyTypes[*]}|{.spec.ingress}{.spec.egress}'
+      expect: { equals: '|Ingress Egress|' }

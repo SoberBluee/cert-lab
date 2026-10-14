@@ -16,6 +16,10 @@ const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
       certificates: { name: 'Certificates', blurb: 'openssl, kubeadm certs and CertificateSigningRequests' },
       etcd: { name: 'etcd', blurb: 'etcdctl and etcdutl: back up and restore the cluster state' },
       cluster: { name: 'Cluster', blurb: 'kubeadm and control plane chores' },
+      troubleshooting: {
+        name: 'Debugging, step by step',
+        blurb: 'several faults at once: work through the checks in order until every layer is fixed',
+      },
     },
   },
   linux: {
