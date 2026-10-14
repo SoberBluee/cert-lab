@@ -1,5 +1,5 @@
 id: test-1
-title: Test 1
+title: "Workloads: create a Deployment and a Pod, fix a rollout"
 domain: workloads
 difficulty: 2
 estimatedMinutes: 25

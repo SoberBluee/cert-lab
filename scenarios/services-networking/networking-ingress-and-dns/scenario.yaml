@@ -1,5 +1,5 @@
 id: networking-ingress-and-dns
-title: Networking, Ingress and DNS
+title: "Networking mix: Services, Ingress, policies and DNS"
 domain: services-networking
 difficulty: 3
 estimatedMinutes: 54

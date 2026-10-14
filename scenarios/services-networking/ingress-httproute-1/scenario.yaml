@@ -1,5 +1,5 @@
 id: ingress-httproute-1
-title: Ingress & HTTPRoute 1
+title: Apps unreachable through Ingress and HTTPRoute
 domain: services-networking
 difficulty: 2
 estimatedMinutes: 16

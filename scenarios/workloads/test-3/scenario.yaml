@@ -1,5 +1,5 @@
 id: test-3
-title: Test 3
+title: "Mixed exam: workloads, DNS, control plane and StorageClass"
 domain: workloads
 difficulty: 3
 estimatedMinutes: 45

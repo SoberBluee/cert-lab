@@ -1,5 +1,5 @@
 id: create-cluster-1
-title: Create Cluster 1
+title: Install a cluster with kubeadm
 domain: cluster-architecture
 difficulty: 3
 estimatedMinutes: 25

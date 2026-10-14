@@ -1,5 +1,5 @@
 id: test-4
-title: test-4
+title: "Mixed exam: quotas, control plane, StorageClass and autoscaling"
 domain: workloads
 difficulty: 3
 estimatedMinutes: 37

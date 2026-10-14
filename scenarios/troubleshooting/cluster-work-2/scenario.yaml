@@ -1,5 +1,5 @@
 id: cluster-work-2
-title: Cluster work 2
+title: "Cluster maintenance: control plane, etcd, worker and certificates"
 domain: troubleshooting
 difficulty: 3
 estimatedMinutes: 35
