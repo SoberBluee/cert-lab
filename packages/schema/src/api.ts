@@ -1,5 +1,5 @@
 import type { ConnectionInfo } from './driver';
-import type { LessonTopic } from './lesson';
+import type { LessonTopic, LessonTrack } from './lesson';
 import type { Base, Domain } from './scenario';
 
 export type SessionState = 'provisioning' | 'running' | 'grading' | 'completed' | 'failed';
@@ -129,6 +129,7 @@ export interface LessonView {
   id: string;
   title: string;
   summary: string;
+  track: LessonTrack;
   topic: LessonTopic;
   steps: LessonStepView[];
 }
@@ -137,6 +138,7 @@ export interface LessonSummary {
   id: string;
   title: string;
   summary: string;
+  track: LessonTrack;
   topic: LessonTopic;
   estimatedMinutes: number;
   stepCount: number;

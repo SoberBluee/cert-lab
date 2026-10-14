@@ -1,0 +1,157 @@
+id: linux-firewall
+title: Open and block ports with ufw
+summary: On worker-2, find a listening service, lock the node down with ufw while keeping SSH and the kubelet reachable, open the service port, delete the rule again and look at the iptables rules underneath.
+track: linux
+topic: firewall
+estimatedMinutes: 12
+setup:
+  - node: worker-2
+    run: |
+      ufw --force reset >/dev/null
+      sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="ACCEPT"/' /etc/default/ufw
+      # SSH from the lab network stays open whatever the learner does, so the terminal and the step watcher keep working.
+      subnet="$(ip -4 route | awk '/proto kernel/ {print $1; exit}')"
+      ufw allow from "$subnet" to any port 22 proto tcp comment 'cka-lab ssh' >/dev/null
+      systemctl stop cka-lab-web 2>/dev/null || true
+      systemctl reset-failed cka-lab-web 2>/dev/null || true
+      install -d /srv/web && echo 'hello from worker-2' > /srv/web/index.html
+      systemd-run --unit cka-lab-web --property=Restart=always python3 -m http.server 8080 --directory /srv/web >/dev/null
+steps:
+  - id: listening
+    title: Find what listens on worker-2
+    explain: |
+      Switch the terminal to **worker-2**. `ss -tlnp` lists TCP sockets in the LISTEN state with numeric ports and the owning process (`-p` needs root). A small web server listens on 8080.
+    command: sudo ss -tlnp
+    node: worker-2
+    match: '^(ss|netstat)\s+-[a-zA-Z]*l'
+  - id: status
+    title: Check the firewall
+    explain: |
+      `ufw status verbose` shows whether ufw is active and its default policies. It is inactive, so nothing is filtered yet.
+    command: sudo ufw status verbose
+    node: worker-2
+    match: '^ufw status\b'
+  - id: reach-before
+    title: Reach the port from the control plane
+    explain: |
+      Switch to **controlplane**. `nc -zv -w 3 <host> <port>` only tests whether a TCP connection opens: `-z` sends no data, `-w 3` gives up after 3 seconds. It succeeds while the firewall is off.
+    command: nc -zv -w 3 worker-2 8080
+    match: '^(nc|ncat)\b(?=.*worker-2)(?=.*\b8080\b)|^curl\b.*worker-2:8080'
+  - id: default-deny
+    title: Deny incoming traffic by default
+    explain: |
+      Back on **worker-2**. `ufw default deny incoming` drops anything that no rule allows once ufw is enabled. Set defaults and allow rules **before** enabling, or you lock yourself out.
+    command: sudo ufw default deny incoming
+    node: worker-2
+    match: '^ufw default deny( incoming)?\s*$'
+    check:
+      id: policy-deny
+      description: the default incoming policy is deny
+      type: ssh
+      node: worker-2
+      run: grep -q '^DEFAULT_INPUT_POLICY="DROP"' /etc/default/ufw && echo deny || echo allow
+      expect: { equals: deny }
+  - id: allow-ssh
+    title: Allow SSH
+    explain: |
+      `ufw allow 22/tcp` (or `ufw allow ssh`) keeps remote logins working. On a real node this is the rule that saves you.
+    command: sudo ufw allow 22/tcp
+    node: worker-2
+    match: '^ufw allow\b.*\b(22|ssh|OpenSSH)\b'
+  - id: allow-kubelet
+    title: Allow the kubelet API
+    explain: |
+      The API server talks to the kubelet on **10250** for logs, exec and metrics. Blocking it makes `kubectl logs` and `kubectl exec` fail for Pods on this node.
+    command: sudo ufw allow 10250/tcp
+    node: worker-2
+    match: '^ufw allow\b.*\b10250\b'
+  - id: enable
+    title: Enable the firewall
+    explain: |
+      `ufw --force enable` skips the "may disrupt existing ssh connections" prompt. Existing connections survive; new ones must match a rule.
+    command: sudo ufw --force enable
+    node: worker-2
+    match: '^ufw (--force )?enable\b'
+    check:
+      id: ufw-active
+      description: ufw is active on worker-2
+      type: ssh
+      node: worker-2
+      run: ufw status | head -1
+      expect: { equals: 'Status: active' }
+  - id: blocked
+    title: Watch the port get blocked
+    explain: |
+      On **controlplane**, run the same `nc` again. It now times out: no rule allows 8080.
+    command: nc -zv -w 3 worker-2 8080
+    match: '^(nc|ncat)\b(?=.*worker-2)(?=.*\b8080\b)|^curl\b.*worker-2:8080'
+    allowFailure: true
+    check:
+      id: port-blocked
+      description: worker-2:8080 is blocked from controlplane
+      type: ssh
+      node: controlplane
+      run: nc -z -w 3 worker-2 8080 && echo open || echo blocked
+      expect: { equals: blocked }
+  - id: allow-web
+    title: Open port 8080
+    explain: |
+      On **worker-2**, `ufw allow 8080/tcp` adds the rule. Rules apply immediately, no reload needed.
+    command: sudo ufw allow 8080/tcp
+    node: worker-2
+    match: '^ufw allow\b.*\b8080\b'
+  - id: reach-after
+    title: Reach it again
+    explain: |
+      On **controlplane**, the connection opens again.
+    command: nc -zv -w 3 worker-2 8080
+    match: '^(nc|ncat)\b(?=.*worker-2)(?=.*\b8080\b)|^curl\b.*worker-2:8080'
+    check:
+      id: port-open
+      description: worker-2:8080 is reachable from controlplane
+      type: ssh
+      node: controlplane
+      run: nc -z -w 3 worker-2 8080 && echo open || echo blocked
+      expect: { equals: open }
+  - id: numbered
+    title: List the rules with numbers
+    explain: |
+      On **worker-2**, `ufw status numbered` shows each rule with an index you can delete by: `ufw delete <n>`.
+    command: sudo ufw status numbered
+    node: worker-2
+    match: '^ufw status numbered\b'
+  - id: delete
+    title: Delete the 8080 rule
+    explain: |
+      Delete by repeating the rule after `delete`, or by its number. The IPv6 copy of the rule goes too when you delete by rule.
+    command: sudo ufw delete allow 8080/tcp
+    node: worker-2
+    match: '^ufw (--force )?delete\b'
+    check:
+      id: rule-gone
+      description: no ufw rule mentions 8080
+      type: ssh
+      node: worker-2
+      run: ufw status | grep -c 8080 || true
+      expect: { equals: '0' }
+  - id: iptables
+    title: Look underneath at iptables
+    explain: |
+      ufw is a front end for iptables. `iptables -L INPUT -n -v` shows the INPUT chain with packet counters; the `ufw-*` chains hold your rules. kube-proxy and Calico add their own chains here too, which is why you rarely edit iptables by hand on a node.
+    command: sudo iptables -L INPUT -n -v --line-numbers
+    node: worker-2
+    match: '^iptables(-legacy|-nft)?\b.*\s-(L|S|nL|vnL|nvL)\b|^iptables-save\b'
+  - id: disable
+    title: Disable the firewall again
+    explain: |
+      `ufw disable` stops filtering and keeps the rules for next time; `ufw reset` would delete them. The cluster's Pod traffic needs worker-2 open again.
+    command: sudo ufw disable
+    node: worker-2
+    match: '^ufw disable\b'
+    check:
+      id: ufw-inactive
+      description: ufw is inactive on worker-2
+      type: ssh
+      node: worker-2
+      run: ufw status | head -1
+      expect: { equals: 'Status: inactive' }

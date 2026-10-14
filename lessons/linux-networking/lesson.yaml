@@ -1,0 +1,109 @@
+id: linux-networking
+title: Node networking toolkit
+summary: Read addresses and routes, find which process owns a port, probe the API server and etcd, query cluster DNS from the node, add a hosts entry and set a persistent sysctl.
+track: linux
+topic: networking
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    run: |
+      sed -i '/k8s-api$/d' /etc/hosts
+      rm -f /etc/sysctl.d/90-lab.conf
+      sysctl -qw net.ipv4.tcp_fin_timeout=60
+steps:
+  - id: addresses
+    title: List the node's addresses
+    explain: |
+      `ip -br addr` prints one line per interface. `enp0s1` carries the node IP; the `cali*` interfaces belong to Pods on this node.
+    command: ip -br addr
+    match: '^ip\s+(-[a-z0-9]+\s+)*(a|addr|address)\b'
+  - id: routes
+    title: Show the routing table
+    explain: |
+      `ip route` shows the default gateway and how Pod CIDRs on other nodes are reached (Calico adds those routes).
+    command: ip route
+    match: '^ip\s+(-[a-z0-9]+\s+)*(r|ro|route)\b'
+  - id: listening
+    title: List listening TCP ports
+    explain: |
+      `ss -tlnp`: **t**cp, **l**istening, **n**umeric, with **p**rocesses (root needed to see other users' processes).
+    command: sudo ss -tlnp
+    match: '^(ss|netstat)\s+-[a-zA-Z]*l'
+  - id: control-plane-ports
+    title: Find the control plane ports
+    explain: |
+      Know these by heart: **6443** kube-apiserver, **2379/2380** etcd, **10250** kubelet, **10257** controller-manager, **10259** scheduler. Filter the list for them.
+    command: sudo ss -tlnp | grep -E ':(6443|2379|10250|10257|10259)\b'
+    match: '^(ss|netstat|lsof)\b.*\b(6443|2379|2380|10250|10257|10259)\b'
+  - id: livez
+    title: Ask the API server whether it is alive
+    explain: |
+      `curl -k https://localhost:6443/livez` works without credentials. `-k` skips certificate verification; add `?verbose` to see each check.
+    command: curl -k https://localhost:6443/livez?verbose
+    match: '^curl\b(?=.*(\s-k\b|--insecure))(?=.*:6443/(livez|readyz|healthz))'
+  - id: nc
+    title: Test that etcd's port is open
+    explain: |
+      `nc -zv -w 3 <host> <port>` checks that a TCP port accepts connections, without speaking its protocol.
+    command: nc -zv -w 3 127.0.0.1 2379
+    match: '^(nc|ncat)\b.*\b(2379|2380|6443|10250|10257|10259)\b'
+  - id: dns-service
+    title: Find the cluster DNS service
+    explain: |
+      CoreDNS is reached through the `kube-dns` Service. Its ClusterIP is what Pods have as `nameserver` in `/etc/resolv.conf`.
+    command: kubectl -n kube-system get svc kube-dns
+    match: '^kubectl\b(?=.*\b(svc|service|services)\b)(?=.*kube-dns)'
+  - id: dig
+    title: Query CoreDNS from the node
+    explain: |
+      The node itself does not use CoreDNS, so ask it explicitly: `dig @<kube-dns IP> <name> +short`. Service names resolve as `<svc>.<namespace>.svc.cluster.local`.
+    command: dig @10.96.0.10 kubernetes.default.svc.cluster.local +short
+    match: '^(dig|nslookup|host)\b.*kubernetes\.default'
+  - id: resolv
+    title: Read the node's resolver config
+    explain: |
+      `/etc/resolv.conf` on the node points at systemd-resolved (`127.0.0.53`), not CoreDNS. The kubelet's `resolvConf` setting decides what Pods with `dnsPolicy: Default` inherit.
+    command: cat /etc/resolv.conf
+    match: '^(cat|less|more|head|tail|vi|vim|view)\b.*resolv\.conf'
+  - id: hosts
+    title: Add a hosts entry
+    explain: |
+      `/etc/hosts` is checked before DNS. Map the name `k8s-api` to the `kubernetes` Service IP `10.96.0.1`. Append with `sudo tee -a` (plain `>>` would run without root), or edit the file.
+    command: echo '10.96.0.1 k8s-api' | sudo tee -a /etc/hosts
+    check:
+      id: hosts-entry
+      description: k8s-api resolves to 10.96.0.1
+      type: ssh
+      node: controlplane
+      run: getent hosts k8s-api | awk '{print $1}'
+      expect: { equals: 10.96.0.1 }
+  - id: use-hosts
+    title: Use the new name
+    explain: |
+      `getent hosts <name>` resolves a name the way programs do (hosts file, then DNS), so it is the honest test. Then call the API through the name.
+    command: getent hosts k8s-api && curl -k https://k8s-api/livez
+    match: '^(getent hosts|curl\b.*|ping\b.*|nc\b.*)\s*\S*k8s-api'
+  - id: sysctl
+    title: Read the kernel settings Kubernetes needs
+    explain: |
+      Nodes need IP forwarding and bridged traffic passed to iptables. Both must be `1`.
+    command: sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables
+    match: '^sysctl\b.*net\.(ipv4\.ip_forward|bridge\.)'
+  - id: modules
+    title: Check the kernel modules
+    explain: |
+      `br_netfilter` provides the `net.bridge.*` settings and `overlay` backs container filesystems. `modprobe <module>` loads one; a file in `/etc/modules-load.d/` loads it at boot.
+    command: lsmod | grep -E 'br_netfilter|overlay'
+    match: '^(lsmod|modprobe)\b'
+  - id: persist
+    title: Make a sysctl setting permanent
+    explain: |
+      `sysctl -w` lasts until reboot. Write the setting to a file in `/etc/sysctl.d/` and apply all files with `sysctl --system`. Set `net.ipv4.tcp_fin_timeout = 30` in `/etc/sysctl.d/90-lab.conf`.
+    command: echo 'net.ipv4.tcp_fin_timeout = 30' | sudo tee /etc/sysctl.d/90-lab.conf && sudo sysctl --system
+    check:
+      id: sysctl-persisted
+      description: tcp_fin_timeout is 30 and set in /etc/sysctl.d
+      type: ssh
+      node: controlplane
+      run: '[ "$(sysctl -n net.ipv4.tcp_fin_timeout)" = 30 ] && grep -rqs "tcp_fin_timeout *= *30" /etc/sysctl.d/ && echo ok || echo no'
+      expect: { equals: ok }

@@ -1,0 +1,106 @@
+id: linux-openssl
+title: openssl from scratch
+summary: Build a tiny CA, issue a client certificate from a CSR, read and verify it, check a key matches its certificate, and decode a certificate out of a kubeconfig.
+track: linux
+topic: openssl
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    run: |
+      rm -rf /home/ubuntu/pki-lab
+      install -d -o ubuntu -g ubuntu /home/ubuntu/pki-lab
+steps:
+  - id: ca-key
+    title: Generate a private key for a CA
+    explain: |
+      Every certificate starts with a key pair. `openssl genrsa -out <file> 2048` writes an RSA private key in PEM format. Work in `~/pki-lab`.
+    command: openssl genrsa -out ~/pki-lab/ca.key 2048
+    match: '^openssl (genrsa|genpkey)\b.*ca\.key'
+    check:
+      id: ca-key-valid
+      description: ~/pki-lab/ca.key is a private key
+      type: ssh
+      node: controlplane
+      run: openssl pkey -in /home/ubuntu/pki-lab/ca.key -noout >/dev/null 2>&1 && echo ok || echo missing
+      expect: { equals: ok }
+  - id: ca-cert
+    title: Self-sign the CA certificate
+    explain: |
+      `openssl req -x509 -new` creates a self-signed certificate straight from a key: no CSR needed. `-subj "/CN=lab-ca"` sets the subject without prompting, `-days` the validity.
+    command: openssl req -x509 -new -key ~/pki-lab/ca.key -subj "/CN=lab-ca" -days 365 -out ~/pki-lab/ca.crt
+    match: '^openssl req\b(?=.*-x509)(?=.*ca\.crt)'
+    check:
+      id: ca-cert-subject
+      description: ~/pki-lab/ca.crt is a certificate for CN lab-ca
+      type: ssh
+      node: controlplane
+      run: openssl x509 -in /home/ubuntu/pki-lab/ca.crt -noout -subject 2>/dev/null
+      expect: { matches: 'CN ?= ?lab-ca' }
+  - id: user-key
+    title: Generate a key for the user dev
+    explain: |
+      The user keeps this key private. Only the CSR made from it leaves the machine.
+    command: openssl genrsa -out ~/pki-lab/dev.key 2048
+    match: '^openssl (genrsa|genpkey)\b.*dev\.key'
+  - id: csr
+    title: Create a certificate signing request
+    explain: |
+      For Kubernetes users, **CN is the user name** and each **O is a group**. `openssl req -new -key ... -subj "/CN=dev/O=developers"` writes the CSR.
+    command: openssl req -new -key ~/pki-lab/dev.key -subj "/CN=dev/O=developers" -out ~/pki-lab/dev.csr
+    match: '^openssl req\b(?=.*-new)(?=.*dev\.csr)'
+    check:
+      id: csr-subject
+      description: ~/pki-lab/dev.csr asks for CN dev in group developers
+      type: ssh
+      node: controlplane
+      run: openssl req -in /home/ubuntu/pki-lab/dev.csr -noout -subject 2>/dev/null
+      expect: { matches: 'CN ?= ?dev, O ?= ?developers' }
+  - id: read-csr
+    title: Read the CSR back
+    explain: |
+      Always check what you are about to sign. `-noout -text` decodes the request; `-subject` prints just the name.
+    command: openssl req -in ~/pki-lab/dev.csr -noout -text
+    match: '^openssl req\b(?=.*-in\s+\S*dev\.csr)(?=.*-(text|subject)\b)'
+  - id: sign
+    title: Sign the CSR with the CA
+    explain: |
+      `openssl x509 -req` turns a CSR into a certificate signed by `-CA`/`-CAkey`. `-CAcreateserial` creates the serial-number file the first time. This is what the Kubernetes CA does for an approved CertificateSigningRequest.
+    command: openssl x509 -req -in ~/pki-lab/dev.csr -CA ~/pki-lab/ca.crt -CAkey ~/pki-lab/ca.key -CAcreateserial -days 30 -out ~/pki-lab/dev.crt
+    match: '^openssl x509\b(?=.*-req)(?=.*-CA\s)(?=.*dev\.crt)'
+    check:
+      id: dev-signed
+      description: ~/pki-lab/dev.crt was signed by the lab CA
+      type: ssh
+      node: controlplane
+      run: openssl verify -CAfile /home/ubuntu/pki-lab/ca.crt /home/ubuntu/pki-lab/dev.crt 2>&1
+      expect: { contains: 'dev.crt: OK' }
+  - id: inspect
+    title: Print the subject, issuer and expiry
+    explain: |
+      The issuer is now `CN = lab-ca`, and `notAfter` is 30 days out.
+    command: openssl x509 -in ~/pki-lab/dev.crt -noout -subject -issuer -enddate
+    match: '^openssl x509\b(?=.*-in\s+\S*dev\.crt)(?=.*-(subject|issuer|enddate|dates|text)\b)'
+  - id: verify
+    title: Verify the chain
+    explain: |
+      `openssl verify -CAfile <ca> <cert>` prints `<cert>: OK` when the CA signed it. Try it against `/etc/kubernetes/pki/ca.crt` too: that fails, because the cluster CA did not sign it.
+    command: openssl verify -CAfile ~/pki-lab/ca.crt ~/pki-lab/dev.crt
+    match: '^openssl verify\b(?=.*-CAfile\s+\S*ca\.crt)(?=.*dev\.crt)'
+  - id: key-match
+    title: Check that the key belongs to the certificate
+    explain: |
+      A key and a certificate match when they share the public modulus. Hash both and compare: the two lines must be identical. A mismatch is the classic "private key does not match public key" error.
+    command: openssl x509 -in ~/pki-lab/dev.crt -noout -modulus | md5sum; openssl rsa -in ~/pki-lab/dev.key -noout -modulus | md5sum
+    match: '^openssl (x509|rsa|pkey)\b.*-(modulus|pubkey)\b'
+  - id: kubeconfig-cert
+    title: Decode the client certificate in your kubeconfig
+    explain: |
+      kubeconfig files embed certificates as base64 in `client-certificate-data`. Pull the value out, `base64 -d` it and hand it to `openssl x509`. The subject shows who kubectl authenticates as.
+    command: grep client-certificate-data ~/.kube/config | awk '{print $2}' | base64 -d | openssl x509 -noout -subject -enddate
+    match: 'base64\s+(-d|--decode)\b.*\|\s*openssl x509\b'
+  - id: s-client
+    title: Fetch the certificate a server presents
+    explain: |
+      `openssl s_client -connect host:port` performs a TLS handshake and prints the server certificate. Pipe it into `openssl x509` to decode it; `echo |` closes the connection straight away.
+    command: echo | openssl s_client -connect localhost:6443 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName
+    match: 'openssl s_client\b.*-connect\s+\S+:6443'

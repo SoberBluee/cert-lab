@@ -1,0 +1,110 @@
+id: linux-systemd
+title: systemd and journald for the kubelet
+summary: Check and read the kubelet and containerd units, search their logs with journalctl, change the kubelet's environment with a drop-in, reload and restart it, then clean up.
+track: linux
+topic: systemd
+estimatedMinutes: 10
+setup:
+  - node: controlplane
+    run: |
+      rm -f /etc/systemd/system/kubelet.service.d/20-lab.conf /etc/systemd/system/kubelet.service.d/override.conf
+      systemctl daemon-reload
+steps:
+  - id: status
+    title: Check the kubelet service
+    explain: |
+      The kubelet is a systemd service, not a Pod. `systemctl status kubelet` shows whether it runs, since when, its main PID and the last log lines. `--no-pager` prints instead of opening a pager.
+    command: systemctl status kubelet --no-pager
+    match: '^systemctl status\b.*\bkubelet\b'
+  - id: active-enabled
+    title: Ask yes-or-no questions
+    explain: |
+      `is-active` (running now?) and `is-enabled` (starts at boot?) print one word, ideal in scripts. A node that comes back NotReady after a reboot often has the kubelet **disabled**.
+    command: systemctl is-active kubelet; systemctl is-enabled kubelet
+    match: '^systemctl is-(active|enabled)\b.*\bkubelet\b'
+  - id: cat
+    title: Read the unit and its drop-ins
+    explain: |
+      `systemctl cat kubelet` prints the unit file **and every drop-in**. kubeadm's `10-kubeadm.conf` adds the flags: `--kubeconfig`, `--config=/var/lib/kubelet/config.yaml` and `$KUBELET_KUBEADM_ARGS` from `/var/lib/kubelet/kubeadm-flags.env`.
+    command: systemctl cat kubelet --no-pager
+    match: '^systemctl cat\b.*\bkubelet\b'
+  - id: failed
+    title: List failed units
+    explain: |
+      `systemctl --failed` (or `list-units --failed`) is a quick health check of the whole node.
+    command: systemctl list-units --failed --no-pager
+    match: '^systemctl\b.*--failed\b'
+  - id: containerd
+    title: Check the container runtime
+    explain: |
+      The kubelet needs containerd. When every Pod on a node is stuck, check the runtime's service too.
+    command: systemctl status containerd --no-pager
+    match: '^systemctl status\b.*\bcontainerd\b'
+  - id: journal-last
+    title: Read the kubelet's last log lines
+    explain: |
+      `journalctl -u <unit>` reads one unit's logs. `-n 20` shows the last 20 lines, `-f` follows. This is where a kubelet that will not start tells you why.
+    command: journalctl -u kubelet -n 20 --no-pager
+    match: '^journalctl\b(?=.*(-u\s*|--unit[= ])kubelet)(?=.*(-n\b|--lines|-f\b|--follow))'
+  - id: journal-since
+    title: Limit the logs to a time window
+    explain: |
+      `--since "10 min ago"` (or `--since "2025-01-01 10:00"`, `--until`) cuts the noise down to the moment something broke.
+    command: journalctl -u kubelet --since "10 min ago" --no-pager | tail -n 5
+    match: '^journalctl\b(?=.*kubelet)(?=.*--since\b)'
+  - id: journal-err
+    title: Show only errors
+    explain: |
+      `-p err` keeps priority error and worse. Combine it with `--since` when hunting a recent failure.
+    command: journalctl -u kubelet -p err --no-pager | tail -n 5
+    match: '^journalctl\b(?=.*kubelet)(?=.*(-p\s*|--priority[= ])(err|3)\b)'
+  - id: drop-in
+    title: Add a drop-in that sets an environment variable
+    explain: |
+      Never edit the packaged unit; add a drop-in under `/etc/systemd/system/kubelet.service.d/`. Write a file with `[Service]` and `Environment="LAB_NOTE=drilled"`, either with `sudo systemctl edit kubelet` (opens an editor) or by writing the file directly as shown.
+    command: sudo mkdir -p /etc/systemd/system/kubelet.service.d && printf '[Service]\nEnvironment="LAB_NOTE=drilled"\n' | sudo tee /etc/systemd/system/kubelet.service.d/20-lab.conf
+    check:
+      id: drop-in-written
+      description: a kubelet drop-in sets LAB_NOTE
+      type: ssh
+      node: controlplane
+      run: grep -rqs 'LAB_NOTE=drilled' /etc/systemd/system/kubelet.service.d/ && echo ok || echo missing
+      expect: { equals: ok }
+  - id: daemon-reload
+    title: Reload systemd
+    explain: |
+      systemd caches unit files. After changing one, `systemctl daemon-reload` makes it read them again (`systemctl edit` does this for you).
+    command: sudo systemctl daemon-reload
+    match: '^systemctl daemon-reload\b'
+  - id: restart
+    title: Restart the kubelet
+    explain: |
+      The running process still has the old environment until it restarts. Running Pods are not affected by a kubelet restart.
+    command: sudo systemctl restart kubelet
+    match: '^systemctl restart\b.*\bkubelet\b'
+    check:
+      id: kubelet-has-env
+      description: the running kubelet has LAB_NOTE in its environment
+      type: ssh
+      node: controlplane
+      run: '[ "$(systemctl is-active kubelet)" = active ] && systemctl show kubelet -p Environment | grep -q LAB_NOTE=drilled && echo ok || echo no'
+      expect: { equals: ok }
+      retrySeconds: 15
+  - id: show
+    title: Confirm with systemctl show
+    explain: |
+      `systemctl show <unit> -p <Property>` prints the effective value of one property, after all drop-ins are applied.
+    command: systemctl show kubelet -p Environment
+    match: '^systemctl show\b.*\bkubelet\b'
+  - id: clean-up
+    title: Remove the drop-in
+    explain: |
+      Delete the file, `daemon-reload` and restart the kubelet so it runs exactly as kubeadm configured it.
+    command: sudo rm /etc/systemd/system/kubelet.service.d/20-lab.conf && sudo systemctl daemon-reload && sudo systemctl restart kubelet
+    check:
+      id: drop-in-gone
+      description: no kubelet drop-in sets LAB_NOTE any more
+      type: ssh
+      node: controlplane
+      run: grep -rqs 'LAB_NOTE' /etc/systemd/system/kubelet.service.d/ && echo present || echo removed
+      expect: { equals: removed }

@@ -10,6 +10,7 @@ import { ReferencePanel } from '../components/ReferencePanel';
 import { SPLIT_MIN_PX, SplitHandle, useSplit } from '../components/SplitHandle';
 import { Button, buttonClass, Card, ErrorBanner, Markdown, StateBadge } from '../components/ui';
 import { formatDuration, sessionKey, useNow, useSession } from '../hooks';
+import { SECTIONS, useSection } from '../section';
 
 const TerminalPanel = lazy(() => import('../components/Terminal').then((m) => ({ default: m.TerminalPanel })));
 
@@ -274,12 +275,14 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
           <Button variant="primary" onClick={() => retry.mutate()} disabled={retry.isPending}>
             {retry.isPending ? 'Starting…' : playground ? 'Start a new playground' : lesson ? 'Drill it again' : exam ? 'Retake exam' : 'Retry scenario'}
           </Button>
-          <Link to={lesson ? '/learn' : '/'} className={buttonClass()}>
+          <Link to={lesson ? `${SECTIONS[lesson.track].base}/learn` : '/'} className={buttonClass()}>
             {lesson ? 'Back to lessons' : 'Back to scenarios'}
           </Link>
-          <Link to="/history" className={buttonClass('ghost')}>
-            History
-          </Link>
+          {lesson?.track !== 'linux' && (
+            <Link to="/history" className={buttonClass('ghost')}>
+              History
+            </Link>
+          )}
         </div>
       </Card>
     </div>
@@ -288,6 +291,7 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
 
 export function SessionPage() {
   const qc = useQueryClient();
+  const section = useSection();
   const { data: session, isLoading } = useSession();
   const [ended, setEnded] = useState<SessionView | null>(null);
   const playground = session?.mode === 'playground';
@@ -411,8 +415,8 @@ export function SessionPage() {
     return (
       <div className="mx-auto max-w-md pt-16 text-center">
         <p className="mb-4 text-zinc-400">No active session.</p>
-        <Link to="/" className={buttonClass('primary')}>
-          Choose a scenario
+        <Link to={section === 'linux' ? '/linux/learn' : '/'} className={buttonClass('primary')}>
+          {section === 'linux' ? 'Choose a lesson' : 'Choose a scenario'}
         </Link>
       </div>
     );

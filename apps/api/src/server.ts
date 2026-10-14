@@ -93,8 +93,11 @@ app.post('/api/playground', async (_req, reply) => {
   return view;
 });
 
-app.get('/api/lessons', async () => ({
-  lessons: lessons.list().map(toLessonSummary),
+app.get<{ Querystring: { track?: string } }>('/api/lessons', async (req) => ({
+  lessons: lessons
+    .list()
+    .filter((l) => !req.query.track || l.def.track === req.query.track)
+    .map(toLessonSummary),
   errors: lessons.errors.map((e) => ({ file: e.file, messages: e.messages })),
 }));
 

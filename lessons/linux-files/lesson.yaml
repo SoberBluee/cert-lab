@@ -1,0 +1,114 @@
+id: linux-files
+title: Files and text on a node
+summary: Find and grep through /etc/kubernetes, edit a manifest copy with sed and diff it, cut columns with awk, query JSON with jq, encode and decode base64, back up the PKI with tar and fix ownership and permissions.
+track: linux
+topic: files
+estimatedMinutes: 12
+setup:
+  - node: controlplane
+    run: |
+      rm -rf /home/ubuntu/files-lab /home/ubuntu/pki-backup.tar.gz
+      install -d -o ubuntu -g ubuntu /home/ubuntu/files-lab
+      install -o ubuntu -g ubuntu -m 644 /etc/kubernetes/manifests/kube-apiserver.yaml /home/ubuntu/files-lab/kube-apiserver.yaml
+      kubectl --kubeconfig /etc/kubernetes/admin.conf delete secret lab-secret --ignore-not-found >/dev/null
+steps:
+  - id: find
+    title: Find every certificate kubeadm created
+    explain: |
+      `find <dir> -name '<pattern>'` searches recursively. Quote the pattern so the shell does not expand it first. `/etc/kubernetes/pki` is readable by root only.
+    command: sudo find /etc/kubernetes -name '*.crt'
+    match: '^find\b.*/etc/kubernetes\b.*-i?name\b'
+  - id: grep-r
+    title: Search the manifests for a flag
+    explain: |
+      `grep -rn <text> <dir>` searches every file below a directory and prints file and line number. Which file sets `--etcd-servers`?
+    command: sudo grep -rn 'etcd-servers' /etc/kubernetes/manifests/
+    match: '^(grep|egrep|rg)\b.*\s-[a-zA-Z]*[rR][a-zA-Z]*\b.*/etc/kubernetes'
+  - id: sed
+    title: Change a flag in place with sed
+    explain: |
+      `sed -i 's/old/new/' <file>` edits in place. Practise on the copy in `~/files-lab`: change `--secure-port=6443` to `8443`. On a real node, back up a manifest before editing it, and keep the backup **outside** `/etc/kubernetes/manifests`, or the kubelet runs it too.
+    command: sed -i 's/--secure-port=6443/--secure-port=8443/' ~/files-lab/kube-apiserver.yaml
+    match: '^sed\b.*\s-i\b.*kube-apiserver\.yaml'
+    check:
+      id: sed-applied
+      description: the copy now has --secure-port=8443
+      type: ssh
+      node: controlplane
+      run: grep -q -- '--secure-port=8443' /home/ubuntu/files-lab/kube-apiserver.yaml && echo ok || echo unchanged
+      expect: { equals: ok }
+  - id: diff
+    title: Compare the copy with the original
+    explain: |
+      `diff <a> <b>` prints only the lines that differ. It exits with 1 when the files differ, which is expected here.
+    command: sudo diff /etc/kubernetes/manifests/kube-apiserver.yaml ~/files-lab/kube-apiserver.yaml
+    match: '^diff\b.*kube-apiserver\.yaml'
+    allowFailure: true
+  - id: awk
+    title: Cut a column out of command output
+    explain: |
+      `awk '{print $2}'` prints the second whitespace-separated field; `cut -d' ' -f2` does the same for single-space separators. Print just the Pod names.
+    command: kubectl get pods -A --no-headers | awk '{print $2}'
+    match: '^(kubectl|crictl|ps|ss|df)\b.*\|\s*(awk|cut)\b'
+  - id: jq
+    title: Query JSON with jq
+    explain: |
+      `-o json | jq -r '<path>'` pulls fields out of any object. `.items[]` iterates a list, `-r` prints raw strings without quotes.
+    command: kubectl get nodes -o json | jq -r '.items[] | .metadata.name + " " + .status.nodeInfo.kubeletVersion'
+    match: '^kubectl\b.*-o\s*json\b.*\|\s*jq\b'
+  - id: encode
+    title: Encode a value with base64
+    explain: |
+      Secret values are base64-encoded. `echo -n` matters: without it the newline is encoded too, and the password silently gains a trailing `\n`.
+    command: echo -n 's3cr3t' | base64
+    match: '^(echo|printf)\b.*\|\s*base64(\s+-w\s*0)?\s*$'
+  - id: secret
+    title: Create a Secret
+    explain: |
+      `kubectl create secret generic` encodes literal values for you.
+    command: kubectl create secret generic lab-secret --from-literal=password=s3cr3t
+    match: '^kubectl create secret generic\s+lab-secret\b'
+  - id: decode
+    title: Read the Secret back
+    explain: |
+      Pull one key with jsonpath and decode it with `base64 -d`. This is the fastest way to read a Secret in the exam.
+    command: kubectl get secret lab-secret -o jsonpath='{.data.password}' | base64 -d
+    match: 'base64\s+(-d|--decode)\b'
+  - id: tar
+    title: Back up the PKI directory
+    explain: |
+      `tar -czf <archive> -C <dir> <path>`: **c**reate, g**z**ip, **f**ile. `-C` changes directory first, so the archive holds `pki/...` instead of absolute paths.
+    command: sudo tar -czf ~/pki-backup.tar.gz -C /etc/kubernetes pki
+    match: '^tar\b.*\s-?[a-zA-Z]*c[a-zA-Z]*\b.*\bpki\b'
+    check:
+      id: backup-written
+      description: ~/pki-backup.tar.gz contains pki/ca.crt
+      type: ssh
+      node: controlplane
+      run: tar -tzf /home/ubuntu/pki-backup.tar.gz 2>/dev/null | grep -qx 'pki/ca.crt' && echo ok || echo missing
+      expect: { equals: ok }
+  - id: list
+    title: List the archive without extracting it
+    explain: |
+      `tar -tzf <archive>` lists the contents. Check a backup before you rely on it.
+    command: tar -tzf ~/pki-backup.tar.gz | head
+    match: '^tar\b.*\s-?[a-zA-Z]*t[a-zA-Z]*\b.*pki-backup'
+  - id: permissions
+    title: Fix the owner and lock the archive down
+    explain: |
+      The archive was written by root and holds private keys. Give it to `ubuntu` with `chown` and make it readable by its owner only with `chmod 600`.
+    command: sudo chown ubuntu:ubuntu ~/pki-backup.tar.gz && chmod 600 ~/pki-backup.tar.gz
+    match: '^(chown|chmod)\b.*pki-backup'
+    check:
+      id: backup-locked
+      description: ~/pki-backup.tar.gz is owned by ubuntu with mode 600
+      type: ssh
+      node: controlplane
+      run: stat -c '%a %U' /home/ubuntu/pki-backup.tar.gz
+      expect: { equals: 600 ubuntu }
+  - id: ls
+    title: Confirm with ls -l
+    explain: |
+      `ls -l` shows mode, owner, group, size and date. `-rw-------` is mode 600.
+    command: ls -l ~/pki-backup.tar.gz
+    match: '^ls\b.*\s-[a-zA-Z]*l[a-zA-Z]*\b.*pki-backup'

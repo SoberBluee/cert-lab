@@ -306,7 +306,7 @@ learn
     action(() => {
       for (const l of o().lessons.list()) {
         console.log(
-          `${l.def.topic.padEnd(13)} ${l.def.id.padEnd(16)} ${l.def.title} ${c.dim(`(${l.def.steps.length} steps, ~${l.def.estimatedMinutes} min)`)}`,
+          `${l.def.track.padEnd(6)} ${l.def.topic.padEnd(13)} ${l.def.id.padEnd(18)} ${l.def.title} ${c.dim(`(${l.def.steps.length} steps, ~${l.def.estimatedMinutes} min)`)}`,
         );
       }
       for (const e of o().lessons.errors) console.log(c.red(`invalid: ${e.file} (run ./cka lint)`));

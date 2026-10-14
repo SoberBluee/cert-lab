@@ -1,26 +1,48 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import type { LessonSummary, LessonTopic } from '@cka/schema';
+import type { LessonSummary, LessonTopic, LessonTrack } from '@cka/schema';
 import { api } from '../api';
 import { buttonClass, ErrorBanner } from '../components/ui';
 import { sessionKey, useSession } from '../hooks';
+import { SECTIONS } from '../section';
 
-const TOPICS: Record<LessonTopic, { name: string; blurb: string }> = {
-  certificates: { name: 'Certificates', blurb: 'openssl, kubeadm certs and CertificateSigningRequests' },
-  etcd: { name: 'etcd', blurb: 'etcdctl and etcdutl: back up and restore the cluster state' },
-  cluster: { name: 'Cluster', blurb: 'kubeadm and control plane chores' },
+type Topics = Partial<Record<LessonTopic, { name: string; blurb: string }>>;
+
+const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
+  cka: {
+    intro:
+      'Guided drills for the commands you type again and again. Pick a lesson: the steps are on the left, a terminal on a fresh cluster on the right, and each step turns green once you have run it. Turn on Drill to hide the commands and type them from memory.',
+    topics: {
+      certificates: { name: 'Certificates', blurb: 'openssl, kubeadm certs and CertificateSigningRequests' },
+      etcd: { name: 'etcd', blurb: 'etcdctl and etcdutl: back up and restore the cluster state' },
+      cluster: { name: 'Cluster', blurb: 'kubeadm and control plane chores' },
+    },
+  },
+  linux: {
+    intro:
+      'The Linux commands the CKA expects you to know cold, practised on the nodes of a real cluster. Each step turns green once you have run it; turn on Drill to hide the commands and type them from memory.',
+    topics: {
+      openssl: { name: 'openssl', blurb: 'keys, CSRs, signing and reading certificates' },
+      firewall: { name: 'Firewall', blurb: 'ufw and iptables: open, block and inspect ports' },
+      systemd: { name: 'systemd and logs', blurb: 'systemctl, drop-ins and journalctl' },
+      networking: { name: 'Networking', blurb: 'ip, ss, curl, nc, DNS lookups and sysctl' },
+      files: { name: 'Files and text', blurb: 'find, grep, sed, awk, base64, tar and permissions' },
+    },
+  },
 };
 
-export function LearnPage() {
+export function LearnPage({ track }: { track: LessonTrack }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const session = useSession().data;
-  const lessons = useQuery({ queryKey: ['lessons'], queryFn: api.lessons });
+  const sessionPath = `${SECTIONS[track].base}/session`;
+  const { intro, topics: TOPICS } = TRACKS[track];
+  const lessons = useQuery({ queryKey: ['lessons', track], queryFn: () => api.lessons(track) });
   const start = useMutation({
     mutationFn: api.startLesson,
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
-      navigate('/session');
+      navigate(sessionPath);
     },
   });
   const byTopic = new Map<LessonTopic, LessonSummary[]>();
@@ -30,10 +52,7 @@ export function LearnPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-zinc-100">Learn</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Guided drills for the commands you type again and again. Pick a lesson: the steps are on the left, a terminal on a fresh cluster on the right, and
-          each step turns green once you have run it. Turn on Drill to hide the commands and type them from memory.
-        </p>
+        <p className="mt-1 text-sm text-zinc-400">{intro}</p>
       </div>
 
       {session && (
@@ -43,7 +62,7 @@ export function LearnPage() {
               ? `The lesson "${session.scenarioTitle}" is open.`
               : `A session for "${session.scenarioTitle}" is open. End it to start a lesson.`}
           </span>
-          <Link to="/session" className={`${buttonClass('primary')} ml-auto`}>
+          <Link to={sessionPath} className={`${buttonClass('primary')} ml-auto`}>
             Go to session
           </Link>
         </div>
@@ -61,8 +80,8 @@ export function LearnPage() {
         .map((topic) => (
           <section key={topic} className="space-y-2">
             <div className="flex items-baseline gap-3">
-              <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">{TOPICS[topic].name}</h2>
-              <span className="text-xs text-zinc-500">{TOPICS[topic].blurb}</span>
+              <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">{TOPICS[topic]!.name}</h2>
+              <span className="text-xs text-zinc-500">{TOPICS[topic]!.blurb}</span>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               {byTopic.get(topic)!.map((l) => (
@@ -83,7 +102,7 @@ export function LearnPage() {
             </div>
           </section>
         ))}
-      {lessons.data && !lessons.data.lessons.length && <p className="text-sm text-zinc-500">No lessons found in lessons/.</p>}
+      {lessons.data && !lessons.data.lessons.length && <p className="text-sm text-zinc-500">No {track} lessons found in lessons/.</p>}
     </div>
   );
 }

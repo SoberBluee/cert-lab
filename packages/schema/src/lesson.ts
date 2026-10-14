@@ -1,9 +1,14 @@
 import { z } from 'zod';
 import { CheckSchema, NodeNameSchema, StepSchema } from './scenario';
 
-export const LESSON_TOPICS = ['certificates', 'etcd', 'cluster'] as const;
+export const LESSON_TOPICS = ['certificates', 'etcd', 'cluster', 'openssl', 'firewall', 'systemd', 'networking', 'files'] as const;
 export const LessonTopicSchema = z.enum(LESSON_TOPICS);
 export type LessonTopic = z.infer<typeof LessonTopicSchema>;
+
+/** Which section of the app lists the lesson: CKA Labs or Linux Labs. */
+export const LESSON_TRACKS = ['cka', 'linux'] as const;
+export const LessonTrackSchema = z.enum(LESSON_TRACKS);
+export type LessonTrack = z.infer<typeof LessonTrackSchema>;
 
 const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, { message: 'use lowercase letters, digits and dashes' });
 
@@ -44,6 +49,7 @@ export const LessonSchema = z
     id: SlugSchema,
     title: z.string().min(1),
     summary: z.string().min(1),
+    track: LessonTrackSchema.default('cka'),
     topic: LessonTopicSchema,
     estimatedMinutes: z.number().positive(),
     setup: z.array(StepSchema).default([]),

@@ -92,6 +92,7 @@ export const toLessonSummary = ({ def }: LoadedLesson): LessonSummary => ({
   id: def.id,
   title: def.title,
   summary: def.summary,
+  track: def.track,
   topic: def.topic,
   estimatedMinutes: def.estimatedMinutes,
   stepCount: def.steps.length,
@@ -101,6 +102,7 @@ export const toLessonView = ({ def }: LoadedLesson): LessonView => ({
   id: def.id,
   title: def.title,
   summary: def.summary,
+  track: def.track,
   topic: def.topic,
   steps: def.steps.map((s) => ({
     id: s.id,
