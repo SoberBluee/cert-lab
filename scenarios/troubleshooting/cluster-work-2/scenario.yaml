@@ -1,0 +1,178 @@
+id: cluster-work-2
+title: Cluster work 2
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 35
+points: 22
+tags: [ troubleshooting, control-plane, static-pod, etcd, kubelet, backup, node, kubeconfig, systemd, certificates, pki, kubeadm ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q1_NS: { oneOf: [ ops, core, platform ] }
+  Q1_FAULT: { oneOf: [ apiserver-etcd-port, apiserver-etcd-certfile, etcd-cert-path, scheduler-command, controller-manager-kubeconfig, kubelet-client-cert, kubelet-static-pod-path ], hidden: true }
+  Q2_BACKUP: { oneOf: [ /opt/backups/etcd.db, /srv/etcd/snapshot.db, /root/etcd-backup.db ] }
+  Q2_MARKER: { oneOf: [ backup-marker, pre-backup, audit-mark ] }
+  Q3_NS: { oneOf: [ fleet, edge, infra ] }
+  Q3_FAULT: { oneOf: [ kubelet-kubeconfig-server, kubelet-client-ca, runtime-endpoint, kubelet-config-flag ], hidden: true }
+  Q3_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+  Q4_EXPIRY: { oneOf: [ /opt/certs/apiserver-expiry.txt, /root/apiserver-expiry.txt ] }
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+  - node: worker-1
+    script: setup/q3-solution.sh
+  - node: worker-2
+    script: setup/q3-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: Control plane after maintenance
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+    setupStage: 2
+    checks:
+      - id: q1-api-ready
+        description: the API server reports ready
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-components
+        description: node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        type: kubectl
+        run: "{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}{end}' | sort; } | xargs"
+        expect: { equals: controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-nodes-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 90
+      - id: q1-web-ready
+        description: web runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 2/2 }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-manifests
+        description: /etc/kubernetes/manifests holds only the four control plane manifests
+        type: ssh
+        node: controlplane
+        run: ls /etc/kubernetes/manifests | sort | xargs
+        expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
+        weight: 1
+    hints:
+      - "kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down."
+      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting."
+      - Static pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).
+      - "If controlplane itself is NotReady, or no control plane container runs at all: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml (staticPodPath)."
+  - id: q2
+    title: Back up etcd
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q2-snapshot-size
+        description: ${Q2_BACKUP} exists and is larger than 1 MB
+        run: stat -c %s "${Q2_BACKUP}" 2>/dev/null || echo 0
+        expect: { gte: 1000000 }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q2-snapshot-valid
+        description: ${Q2_BACKUP} is a valid etcd snapshot
+        run: ETCDCTL_API=3 etcdctl snapshot status "${Q2_BACKUP}" -w json 2>/dev/null | jq -r '.totalKey > 0'
+        expect: { equals: "true" }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q2-snapshot-fresh
+        description: The snapshot contains ConfigMap ${Q2_MARKER}
+        run: grep -qa -- "/registry/configmaps/default/${Q2_MARKER}" "${Q2_BACKUP}" 2>/dev/null && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+    hints:
+      - "The endpoint and certificate paths are in /etc/kubernetes/manifests/etcd.yaml: --listen-client-urls, --trusted-ca-file, --cert-file and --key-file."
+      - ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save <file>
+  - id: q3
+    title: Worker after a configuration change
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+      - node: worker-1
+        script: setup/q3-2.sh
+      - node: worker-2
+        script: setup/q3-3.sh
+      - node: controlplane
+        script: setup/q3-4.sh
+        timeoutSeconds: 300
+    setupStage: 1
+    checks:
+      - id: q3-all-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 3
+        retrySeconds: 90
+      - id: q3-kubelet-worker-1
+        description: the kubelet is running and enabled on worker-1
+        type: ssh
+        node: worker-1
+        run: echo $(systemctl is-active kubelet) $(systemctl is-enabled kubelet)
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q3-kubelet-worker-2
+        description: the kubelet is running and enabled on worker-2
+        type: ssh
+        node: worker-2
+        run: echo $(systemctl is-active kubelet) $(systemctl is-enabled kubelet)
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q3-agent
+        description: node-agent has a ready Pod on every worker
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get daemonset node-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
+        expect: { equals: 2/2 }
+        weight: 2
+        retrySeconds: 90
+    hints:
+      - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
+      - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
+      - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
+  - id: q4
+    title: Cluster certificates
+    points: 2
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        lane: q4
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q4-expiry
+        description: ${Q4_EXPIRY} holds the expiry date of the certificate
+        run: '[ "$(xargs < "${Q4_EXPIRY}" 2>/dev/null)" = "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2 | xargs)" ] && echo match || echo differs'
+        expect: { equals: match }
+        weight: 2
+    hints:
+      - The API server certificate is /etc/kubernetes/pki/apiserver.crt (see --tls-cert-file in its manifest).
+      - kubeadm certs check-expiration shows the same date in another format; openssl x509 -in <crt> -noout -enddate prints the exact text.

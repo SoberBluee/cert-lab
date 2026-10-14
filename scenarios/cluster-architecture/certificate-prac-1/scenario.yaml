@@ -1,0 +1,100 @@
+id: certificate-prac-1
+title: Certificate Prac 1
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 14
+points: 11
+tags: [ certificates, pki, kubeadm, user-csr, renew ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_EXPIRY: { oneOf: [ /opt/certs/apiserver-expiry.txt, /root/apiserver-expiry.txt ] }
+  Q1_USER_NAME: { oneOf: [ jane, auditor, dev-anna ] }
+  Q1_USER_NS: { oneOf: [ team-a, qa, payments ] }
+  Q1_USER_KUBECONFIG: { oneOf: [ /opt/certs/user.kubeconfig, /root/user.kubeconfig ] }
+  Q2_EXPIRY: { oneOf: [ /opt/certs/apiserver-expiry.txt, /root/apiserver-expiry.txt ] }
+tasks:
+  - id: q1
+    title: Cluster certificates
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-expiry
+        description: ${Q1_EXPIRY} holds the expiry date of the certificate
+        run: '[ "$(xargs < "${Q1_EXPIRY}" 2>/dev/null)" = "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2 | xargs)" ] && echo match || echo differs'
+        expect: { equals: match }
+        weight: 2
+      - id: q1-csr-approved
+        description: CSR ${Q1_USER_NAME} is approved for the kube-apiserver-client signer
+        type: kubectl
+        run: kubectl get csr "${Q1_USER_NAME}" -o jsonpath='{.status.conditions[?(@.type=="Approved")].status}/{.spec.signerName}'
+        expect: { equals: True/kubernetes.io/kube-apiserver-client }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-user-auth
+        description: ${Q1_USER_KUBECONFIG} authenticates as ${Q1_USER_NAME}
+        run: kubectl --kubeconfig "${Q1_USER_KUBECONFIG}" auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null || true
+        expect: { equals: "${Q1_USER_NAME}" }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-user-can-list
+        description: ${Q1_USER_NAME} can list Pods in ${Q1_USER_NS}
+        run: kubectl --kubeconfig "${Q1_USER_KUBECONFIG}" -n "${Q1_USER_NS}" auth can-i list pods 2>/dev/null || true
+        expect: { equals: yes }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-user-cannot-delete
+        description: ${Q1_USER_NAME} cannot delete Pods in ${Q1_USER_NS}
+        run: kubectl --kubeconfig "${Q1_USER_KUBECONFIG}" -n "${Q1_USER_NS}" auth can-i delete pods 2>/dev/null || true
+        expect: { equals: no }
+        weight: 1
+    hints:
+      - The API server certificate is /etc/kubernetes/pki/apiserver.crt (see --tls-cert-file in its manifest).
+      - kubeadm certs check-expiration shows the same date in another format; openssl x509 -in <crt> -noout -enddate prints the exact text.
+      - openssl genrsa and openssl req -subj "/CN=<user>" make the key and request; the CSR spec.request is the base64 of the request on one line.
+      - kubectl certificate approve <name>, then read .status.certificate and base64 -d it; kubectl config --kubeconfig <file> set-cluster, set-credentials --embed-certs and set-context build the kubeconfig.
+  - id: q2
+    title: Cluster certificates
+    points: 4
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q2-expiry
+        description: ${Q2_EXPIRY} holds the expiry date of the certificate
+        run: '[ "$(xargs < "${Q2_EXPIRY}" 2>/dev/null)" = "$(xargs < /root/.cka/apiserver-enddate)" ] && echo match || echo differs'
+        expect: { equals: match }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q2-renewed
+        description: /etc/kubernetes/pki/apiserver.crt was renewed
+        run: '[ "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -fingerprint -sha256)" != "$(cat /root/.cka/apiserver-fingerprint)" ] && echo renewed || echo old'
+        expect: { equals: renewed }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q2-serving
+        description: The API server serves the renewed certificate
+        run: '[ "$(echo | openssl s_client -connect 127.0.0.1:6443 2>/dev/null | openssl x509 -noout -fingerprint -sha256)" = "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -fingerprint -sha256)" ] && echo serving || echo stale'
+        expect: { equals: serving }
+        weight: 1
+        retrySeconds: 120
+    hints:
+      - The API server certificate is /etc/kubernetes/pki/apiserver.crt (see --tls-cert-file in its manifest).
+      - kubeadm certs check-expiration shows the same date in another format; openssl x509 -in <crt> -noout -enddate prints the exact text.
+      - kubeadm certs check-expiration lists every certificate; kubeadm certs renew apiserver renews one.
+      - "The API server reads its certificate at start: move its manifest out of /etc/kubernetes/manifests, wait for the container to stop, then move it back."

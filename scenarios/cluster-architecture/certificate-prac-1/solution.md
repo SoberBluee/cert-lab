@@ -1,0 +1,58 @@
+## Solution
+
+### Question 1: Cluster certificates
+
+```bash
+mkdir -p "$(dirname "${Q1_EXPIRY}")"
+openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2 > "${Q1_EXPIRY}"
+d=$(mktemp -d)
+openssl genrsa -out "$d/user.key" 2048
+openssl req -new -key "$d/user.key" -subj "/CN=${Q1_USER_NAME}" -out "$d/user.csr"
+kubectl apply -f - <<EOF
+apiVersion: certificates.k8s.io/v1
+kind: CertificateSigningRequest
+metadata:
+  name: ${Q1_USER_NAME}
+spec:
+  request: $(base64 -w0 < "$d/user.csr")
+  signerName: kubernetes.io/kube-apiserver-client
+  usages: [client auth]
+EOF
+kubectl certificate approve "${Q1_USER_NAME}"
+for _ in $(seq 1 30); do
+  [[ -n "$(kubectl get csr "${Q1_USER_NAME}" -o jsonpath='{.status.certificate}')" ]] && break
+  sleep 1
+done
+kubectl get csr "${Q1_USER_NAME}" -o jsonpath='{.status.certificate}' | base64 -d > "$d/user.crt"
+mkdir -p "$(dirname "${Q1_USER_KUBECONFIG}")"
+server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+kubectl config --kubeconfig "${Q1_USER_KUBECONFIG}" set-cluster kubernetes --server="$server" --certificate-authority=/etc/kubernetes/pki/ca.crt --embed-certs=true
+kubectl config --kubeconfig "${Q1_USER_KUBECONFIG}" set-credentials "${Q1_USER_NAME}" --client-certificate="$d/user.crt" --client-key="$d/user.key" --embed-certs=true
+kubectl config --kubeconfig "${Q1_USER_KUBECONFIG}" set-context "${Q1_USER_NAME}" --cluster=kubernetes --user="${Q1_USER_NAME}" --namespace="${Q1_USER_NS}"
+kubectl config --kubeconfig "${Q1_USER_KUBECONFIG}" use-context "${Q1_USER_NAME}"
+kubectl -n "${Q1_USER_NS}" create role "${Q1_USER_NAME}-pods" --verb=get,list,watch --resource=pods --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n "${Q1_USER_NS}" create rolebinding "${Q1_USER_NAME}-pods" --role="${Q1_USER_NAME}-pods" --user="${Q1_USER_NAME}" --dry-run=client -o yaml | kubectl apply -f -
+rm -rf "$d"
+```
+
+### Question 2: Cluster certificates
+
+```bash
+mkdir -p "$(dirname "${Q2_EXPIRY}")"
+openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2 > "${Q2_EXPIRY}"
+kubeadm certs renew apiserver
+mv /etc/kubernetes/manifests/kube-apiserver.yaml /root/kube-apiserver.yaml
+for _ in $(seq 1 60); do
+  [[ -z "$(crictl ps -q --name kube-apiserver 2>/dev/null)" ]] && break
+  sleep 2
+done
+mv /root/kube-apiserver.yaml /etc/kubernetes/manifests/kube-apiserver.yaml
+for _ in $(seq 1 240); do
+  [[ "$(curl -sk --max-time 3 https://127.0.0.1:6443/readyz 2>/dev/null || true)" == ok ]] && break
+  sleep 2
+done
+for _ in $(seq 1 120); do
+  [[ "$({ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type=="Ready")].status}{"\n"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort; } | xargs 2>/dev/null || true)" == "controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True" ]] && break
+  sleep 3
+done
+```
