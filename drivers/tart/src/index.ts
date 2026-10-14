@@ -9,6 +9,7 @@ export interface TartDriverOptions extends VmLabDriverOptions {
   tartBin?: string;
   sshBin?: string;
   scpBin?: string;
+  psBin?: string;
 }
 
 interface TartVm {
@@ -39,6 +40,7 @@ export class TartDriver extends VmLabDriver {
   private readonly bin: string;
   private readonly sshBin: string;
   private readonly scpBin: string;
+  private readonly psBin: string;
   private readonly ips = new Map<string, string>();
 
   constructor(opts: TartDriverOptions) {
@@ -46,6 +48,7 @@ export class TartDriver extends VmLabDriver {
     this.bin = opts.tartBin ?? process.env.CKA_TART_BIN ?? defaultTartBin();
     this.sshBin = opts.sshBin ?? 'ssh';
     this.scpBin = opts.scpBin ?? 'scp';
+    this.psBin = opts.psBin ?? 'ps';
   }
 
   golden(node: string, base: string): string {
@@ -236,8 +239,33 @@ export class TartDriver extends VmLabDriver {
     };
   }
 
+  /**
+   * Another macOS account's lab restores the same images, so its VMs claim the same node addresses
+   * and hostnames; SSH would then reach whichever VM answered last.
+   */
+  private async checkOtherLabs(): Promise<void> {
+    const r = await runProcess(this.psBin, ['-axo', 'uid=,user=,pid=,command='], { timeoutMs: 10_000, tool: 'ps', notFound: 'ps not found' }).catch(
+      () => undefined,
+    );
+    if (!r || r.exitCode !== 0) return;
+    const uid = userInfo().uid;
+    const names = new Set(NODES.map((n) => this.instance(n)));
+    const others = r.stdout
+      .split('\n')
+      .map((l) => /^\s*(\d+)\s+(\S+)\s+(\d+)\s+(?:\S*\/)?tart run\b.*\s(\S+)\s*$/.exec(l))
+      .filter((m): m is RegExpExecArray => !!m && Number(m[1]) !== uid && names.has(m[4]));
+    if (!others.length) return;
+    const users = [...new Set(others.map((m) => m[2]))].join(', ');
+    const pids = others.map((m) => m[3]).join(' ');
+    throw new DriverError(
+      `Another macOS user (${users}) is running a CKA lab on this Mac. Both labs use the same node addresses, so SSH would reach the wrong VMs. ` +
+        `Stop that lab first: end its session from that account, or run "sudo kill ${pids}".`,
+    );
+  }
+
   protected async startAll(): Promise<void> {
     this.checkKey();
+    await this.checkOtherLabs();
     this.ips.clear();
     await Promise.all(
       NODES.map(async (node) => {

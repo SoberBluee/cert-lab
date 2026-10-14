@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { TartDriver } from './index';
@@ -39,15 +39,24 @@ function setup(vms: Vm[]) {
     ['tart', TART_STUB],
     ['ssh', SSH_STUB],
     ['scp', SSH_STUB.replace('ssh $*', 'scp $*')],
+    ['ps', '#!/bin/bash\ncat "$STUB_DIR/ps.txt" 2>/dev/null\n'],
   ]) {
     writeFileSync(join(dir, name), body);
     chmodSync(join(dir, name), 0o755);
   }
   writeFileSync(join(dir, 'list.json'), JSON.stringify(vms.map((v) => ({ Source: 'local', State: 'stopped', ...v }))));
   process.env.STUB_DIR = dir;
-  const driver = new TartDriver({ dataDir, readyScriptPath, tartBin: join(dir, 'tart'), sshBin: join(dir, 'ssh'), scpBin: join(dir, 'scp') });
+  const driver = new TartDriver({
+    dataDir,
+    readyScriptPath,
+    tartBin: join(dir, 'tart'),
+    sshBin: join(dir, 'ssh'),
+    scpBin: join(dir, 'scp'),
+    psBin: join(dir, 'ps'),
+  });
   const calls = () => readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n');
-  return { driver, calls, dataDir };
+  const processes = (text: string) => writeFileSync(join(dir, 'ps.txt'), text);
+  return { driver, calls, dataDir, processes };
 }
 
 const goldens = (base: string) => ['controlplane', 'worker-1', 'worker-2'].map((n) => ({ Name: `cka-${n}-${base}` }));
@@ -85,6 +94,22 @@ describe('TartDriver', () => {
     assert.match(ssh[0], /-o ControlMaster=auto -o ControlPath=\/tmp\/cka-ssh-\d+\/%C/);
     assert.match(ssh[0], /-o BatchMode=yes/);
     assert.ok(ssh.some((l) => l.includes(`ubuntu@${IPS['worker-2']}`)));
+  });
+
+  it("refuses to boot while another macOS user's lab holds the node addresses", async () => {
+    const { driver, calls, processes } = setup(goldens('bare'));
+    const me = userInfo().uid;
+    processes(
+      [
+        `  ${me} me      101 tart run --no-graphics cka-controlplane`,
+        `  ${me + 1} alex    201 tart run --no-graphics cka-controlplane`,
+        `  ${me + 1} alex    202 /opt/homebrew/bin/tart run --no-graphics cka-worker-1`,
+        `  ${me + 1} alex    203 tart run --no-graphics something-else`,
+        '',
+      ].join('\n'),
+    );
+    await assert.rejects(driver.restoreSnapshot('s1', 'bare'), /Another macOS user \(alex\) is running a CKA lab.*sudo kill 201 202"/);
+    assert.ok(!calls().some((l) => l.startsWith('tart run')), 'no VM was started');
   });
 
   it('copies files with scp and installs them with sudo', async () => {
