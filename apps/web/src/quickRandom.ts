@@ -107,18 +107,31 @@ function randomQuestion(item: Item, plain = false): Question {
   return { key, type: 'create', builder, fields: randomFields(builder.fields), addons, followUps };
 }
 
-/** `n` items of `kind`: distinct while the catalog lasts, no solo builder unless n is 1, at most one that breaks the API. */
-export function pickItems(catalog: RecipeCatalog, n: number, kind: LabKind = 'random'): Item[] {
+const info = (i: Item) => (i.kind === 'create' ? i.builder : i.category);
+export const itemId = (i: Item) => `${i.kind}:${info(i).id}`;
+
+/** Every item a lab of `n` questions of `kind` can draw. */
+function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind): Item[] {
   const items: Item[] = [
     ...(kind === 'troubleshoot' ? [] : catalog.builders.map((builder) => ({ kind: 'create' as const, builder }))),
     ...(kind === 'create' ? [] : catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category }))),
   ];
-  const info = (i: Item) => (i.kind === 'create' ? i.builder : i.category);
+  return items.filter((i) => !(i.kind === 'create' && i.builder.solo && n > 1));
+}
+
+/**
+ * `n` items of `kind`: distinct while the catalog lasts, no solo builder unless n is 1, at most one
+ * that breaks the API. Items not in `seen` come first, so successive labs work through the whole
+ * catalog before repeating anything.
+ */
+export function pickItems(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', seen: ReadonlySet<string> = new Set()): Item[] {
+  const items = itemPool(catalog, n, kind);
+  const order = () => [...shuffle(items.filter((i) => !seen.has(itemId(i)))), ...shuffle(items.filter((i) => seen.has(itemId(i))))];
   const out: Item[] = [];
   let apiTaken = false;
   for (let pass = 0; out.length < n && pass < n; pass++) {
     const before = out.length;
-    for (const item of shuffle(items)) {
+    for (const item of order()) {
       if (out.length >= n) break;
       const x = info(item);
       if ('solo' in x && x.solo && n > 1) continue;
@@ -142,6 +155,26 @@ async function validRandomQuestion(item: Item): Promise<Question> {
   return randomQuestion(item, true);
 }
 
+const SEEN_KEY = 'cka.quick.seen';
+
+function loadSeen(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '[]') as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Remembers what was drawn; once every item of the pool has come up, starts a new round. */
+export function nextSeen(seen: ReadonlySet<string>, picked: Item[], pool: Item[]): Set<string> {
+  const next = new Set([...seen, ...picked.map(itemId)]);
+  if (pool.every((i) => next.has(itemId(i)))) for (const i of pool) next.delete(itemId(i));
+  return next;
+}
+
 export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind = 'random'): Promise<Question[]> {
-  return Promise.all(pickItems(catalog, n, kind).map(validRandomQuestion));
+  const seen = loadSeen();
+  const items = pickItems(catalog, n, kind, seen);
+  localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, items, itemPool(catalog, n, kind))]));
+  return Promise.all(items.map(validRandomQuestion));
 }
