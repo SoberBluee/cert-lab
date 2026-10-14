@@ -1,0 +1,111 @@
+id: ingress-httproute-1
+title: Ingress & HTTPRoute 1
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 16
+points: 14
+tags: [ troubleshooting, ingress, gateway-api, httproute ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  Q1_NS: { oneOf: [ shop, media, portal ] }
+  Q1_APP: { oneOf: [ web, store, blog ] }
+  Q1_FAULT: { oneOf: [ ingress-service-name, ingress-service-port, ingress-class, ingress-path, route-parent, route-section, route-backend-port ], hidden: true }
+  Q2_NS: { oneOf: [ shop, media, portal ] }
+  Q2_APP: { oneOf: [ web, store, blog ] }
+  Q2_FAULT: { oneOf: [ ingress-service-name, ingress-service-port, ingress-class, ingress-path, route-parent, route-section, route-backend-port ], hidden: true }
+tasks:
+  - id: q1
+    title: ${Q1_APP} unreachable through the ingress
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-ingress-serves
+        description: www.${Q1_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: www.${Q1_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-route-serves
+        description: api.${Q1_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: api.${Q1_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-spec-ingress
+        description: Ingress ${Q1_APP} still serves host www.${Q1_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get ingress ${Q1_APP} -o jsonpath='{.spec.rules[0].host}'
+        expect: { equals: "www.${Q1_NS}.lab" }
+        weight: 1
+      - id: q1-spec-route
+        description: HTTPRoute ${Q1_APP} still serves host api.${Q1_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get httproute ${Q1_APP} -o jsonpath='{.spec.hostnames[0]}'
+        expect: { equals: "api.${Q1_NS}.lab" }
+        weight: 1
+      - id: q1-spec-backend
+        description: Deployment and Service ${Q1_APP} match the spec
+        type: kubectl
+        run: echo $(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
+        expect: { equals: "2 ${Q1_APP} ${Q1_APP} 80" }
+        weight: 1
+    hints:
+      - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
+      - "kubectl -n ${Q1_NS} describe ingress ${Q1_APP}: check the class, the path and the backend Service and port against kubectl -n ${Q1_NS} get svc ${Q1_APP}."
+      - "kubectl -n ${Q1_NS} describe httproute ${Q1_APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used."
+      - kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.
+  - id: q2
+    title: ${Q2_APP} unreachable through the ingress
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-ingress-serves
+        description: www.${Q2_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: www.${Q2_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-route-serves
+        description: api.${Q2_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: api.${Q2_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-spec-ingress
+        description: Ingress ${Q2_APP} still serves host www.${Q2_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get ingress ${Q2_APP} -o jsonpath='{.spec.rules[0].host}'
+        expect: { equals: "www.${Q2_NS}.lab" }
+        weight: 1
+      - id: q2-spec-route
+        description: HTTPRoute ${Q2_APP} still serves host api.${Q2_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get httproute ${Q2_APP} -o jsonpath='{.spec.hostnames[0]}'
+        expect: { equals: "api.${Q2_NS}.lab" }
+        weight: 1
+      - id: q2-spec-backend
+        description: Deployment and Service ${Q2_APP} match the spec
+        type: kubectl
+        run: echo $(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
+        expect: { equals: "2 ${Q2_APP} ${Q2_APP} 80" }
+        weight: 1
+    hints:
+      - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
+      - "kubectl -n ${Q2_NS} describe ingress ${Q2_APP}: check the class, the path and the backend Service and port against kubectl -n ${Q2_NS} get svc ${Q2_APP}."
+      - "kubectl -n ${Q2_NS} describe httproute ${Q2_APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used."
+      - kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.

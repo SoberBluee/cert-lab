@@ -1,4 +1,5 @@
 import type { BuilderSummary, PartSummary } from '@cka/schema';
+import { hpaBuilder, vpaBuilder } from './autoscaling';
 import { certificatesBuilder, etcdBackupBuilder, etcdRestoreBuilder, installClusterBuilder } from './cluster';
 import { cronJobBuilder } from './cronjob';
 import { deploymentBuilder } from './deployment';
@@ -20,6 +21,8 @@ export const BUILDERS: Builder[] = [
   pvcBuilder,
   pvBuilder,
   storageClassBuilder,
+  hpaBuilder,
+  vpaBuilder,
   etcdBackupBuilder,
   etcdRestoreBuilder,
   certificatesBuilder,

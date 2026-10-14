@@ -94,7 +94,7 @@ kubectl -n "${NS}" rollout status daemonset/node-agent --timeout=240s`,
       'After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).',
     ],
   }),
-  faults: ({ NODE }) => [
+  faults: ({ NS, NODE }) => [
     {
       id: 'kubelet-kubeconfig-server',
       label: 'kubelet kubeconfig points at the wrong API server port',
@@ -144,6 +144,50 @@ systemctl daemon-reload
 systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain: `The kubeadm drop-in (\`10-kubeadm.conf\`) starts the kubelet with \`--config=/var/lib/kubelet/kubelet-config.yaml\`, which does not exist, so it exits with \`failed to load Kubelet config file\`. \`systemctl cat kubelet\` shows the flag and \`ls /var/lib/kubelet\` shows \`config.yaml\`. Fix the drop-in, then \`systemctl daemon-reload\` and restart the kubelet.`,
+    },
+    {
+      id: 'kubelet-kubeconfig-flag',
+      label: 'kubelet unit loads a kubeconfig that does not exist',
+      nodeBreak: `${DROPIN}
+${edit('"$dropin"', 's#--kubeconfig=/etc/kubernetes/kubelet\\.conf#--kubeconfig=/etc/kubernetes/kubelet.config#', '--kubeconfig=/etc/kubernetes/kubelet.config')}
+systemctl daemon-reload
+${restart}`,
+      settle: waitNotReady(NODE),
+      nodeFix: `${DROPIN}
+${edit('"$dropin"', 's#--kubeconfig=/etc/kubernetes/kubelet\\.config#--kubeconfig=/etc/kubernetes/kubelet.conf#', '--kubeconfig=/etc/kubernetes/kubelet.conf')}
+systemctl daemon-reload
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain: `The kubeadm drop-in starts the kubelet with \`--kubeconfig=/etc/kubernetes/kubelet.config\`. That file does not exist and the bootstrap kubeconfig is long gone, so the kubelet exits right after start and the node turns \`NotReady\`. \`systemctl cat kubelet\` shows the flag; \`ls /etc/kubernetes\` shows the real \`kubelet.conf\`. Fix the drop-in, then \`systemctl daemon-reload\` and restart the kubelet.`,
+    },
+    {
+      id: 'kubelet-serving-cert',
+      label: 'kubelet serving certificate file missing',
+      nodeBreak: `printf 'tlsCertFile: /var/lib/kubelet/pki/kubelet-server.crt\\ntlsPrivateKeyFile: /var/lib/kubelet/pki/kubelet-server.key\\n' >> ${CONFIG}
+grep -q '^tlsCertFile: ' ${CONFIG} || { echo "could not modify ${CONFIG}" >&2; exit 1; }
+${restart}`,
+      settle: waitNotReady(NODE),
+      nodeFix: `sed -i -E '/^tls(CertFile|PrivateKeyFile): /d' ${CONFIG}
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain: `\`${CONFIG}\` sets \`tlsCertFile\` and \`tlsPrivateKeyFile\` to \`/var/lib/kubelet/pki/kubelet-server.*\`, which do not exist, so the kubelet cannot load its serving certificate and exits at start. \`journalctl -u kubelet\` names the file, and \`ls /var/lib/kubelet/pki\` shows only the self-generated \`kubelet.crt\`/\`kubelet.key\` and the client certificates. Remove both lines (the kubelet then uses its self-signed certificate) and restart it.`,
+    },
+    {
+      id: 'kubelet-max-pods',
+      label: 'kubelet allows only two Pods',
+      nodeBreak: `sed -i '/^maxPods:/d' ${CONFIG}
+echo 'maxPods: 2' >> ${CONFIG}
+${restart}`,
+      settle: `for _ in $(seq 1 60); do
+  [[ "$(kubectl get node "${NODE}" -o jsonpath='{.status.capacity.pods}')" == 2 ]] && break
+  sleep 2
+done
+kubectl -n "${NS}" delete pod -l app=node-agent --field-selector "spec.nodeName=${NODE}" --wait=false >/dev/null 2>&1 || true
+sleep 15`,
+      nodeFix: `sed -i '/^maxPods:/d' ${CONFIG}
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain: `\`${CONFIG}\` sets \`maxPods: 2\`. calico-node and kube-proxy already fill those two slots, so the kubelet rejects the \`node-agent\` Pod with \`OutOfpods\` and the DaemonSet never gets ready there, although the node stays \`Ready\`. \`kubectl describe node\` shows \`pods: 2\` under Capacity, and \`kubectl get pods -o wide\` shows the rejected Pods. Remove \`maxPods\` (the default is 110) and restart the kubelet.`,
     },
   ],
 };

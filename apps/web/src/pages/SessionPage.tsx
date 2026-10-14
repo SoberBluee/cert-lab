@@ -13,13 +13,6 @@ import { formatDuration, sessionKey, useNow, useSession } from '../hooks';
 
 const TerminalPanel = lazy(() => import('../components/Terminal').then((m) => ({ default: m.TerminalPanel })));
 
-function Stopwatch({ session }: { session: SessionView }) {
-  const now = useNow();
-  if (!session.readyAt) return <span className="font-mono text-2xl text-zinc-600">--:--</span>;
-  const end = session.endedAt ? Date.parse(session.endedAt) : now;
-  return <span className="font-mono text-2xl text-zinc-100 tabular-nums">{formatDuration((end - Date.parse(session.readyAt)) / 1000)}</span>;
-}
-
 const WARN_MS = 15 * 60_000;
 const CRITICAL_MS = 5 * 60_000;
 
@@ -187,7 +180,7 @@ function TaskPane(props: {
           {session.scenarioTitle}
         </h1>
         <div className="flex flex-wrap items-center gap-2">
-          {exam ? <Countdown session={session} /> : <Stopwatch session={session} />}
+          {exam && <Countdown session={session} />}
           <div className="ml-auto flex gap-2">
             {exam ? (
               <Button variant="primary" disabled={!props.canSubmit} onClick={props.onSubmit}>
@@ -448,7 +441,7 @@ export function SessionPage() {
             )}
           </div>
         </div>
-        {exam ? <Countdown session={session} /> : <Stopwatch session={session} />}
+        {exam && <Countdown session={session} />}
         <div className="flex flex-wrap gap-2">
           {exam && (
             <Button variant="primary" disabled={!canSubmit} onClick={doSubmit}>

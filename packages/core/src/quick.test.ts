@@ -363,6 +363,18 @@ describe('Troubleshoot track', () => {
     });
   });
 
+  it('repairs a broken node before another disruptive fix that needs it', () => {
+    const { build: res } = build([troubleQ('dns'), troubleQ('nodes')]);
+    const def = scenarioOf(res.bundle);
+    assert.deepEqual(def.solution, [
+      { node: 'worker-1', script: 'setup/q2-solution.sh' },
+      { node: 'worker-2', script: 'setup/q2-solution-2.sh' },
+      { node: 'controlplane', script: 'solution.sh' },
+    ]);
+    const solution = res.bundle.files.find((f) => f.path === 'solution.sh')!.content;
+    assert.ok(solution.indexOf('# Question 2') < solution.indexOf('# Question 1'));
+  });
+
   it('runs control plane setup after node-breaking setup and fixes it first', () => {
     const dep = BUILDERS.find((b) => b.id === 'deployment')!;
     const { build: res, issues } = build([troubleQ('controlplane'), troubleQ('nodes'), createQ(dep, [], []), troubleQ('pods')]);

@@ -1,0 +1,58 @@
+id: quick-lab-m7ohxm
+title: "Quick lab: Troubleshoot"
+domain: workloads
+difficulty: 1
+estimatedMinutes: 7
+points: 6
+tags: [ troubleshooting, configmap, secret, volumes, security-context ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ brochure, docs, landing ] }
+  Q1_APP: { oneOf: [ site, welcome, promo ] }
+  Q1_FAULT: { oneOf: [ configmap-volume-missing, secret-items-key, mount-path, run-as-non-root, readonly-root ], hidden: true }
+tasks:
+  - id: q1
+    title: Deployment ${Q1_APP} does not serve its page
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: ${Q1_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-page
+        description: ${Q1_APP} serves the page from ${Q1_APP}-content
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec deployment/${Q1_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: "${Q1_APP} is up" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-token
+        description: the token from ${Q1_APP}-secret is readable at /etc/${Q1_APP}/token
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec deployment/${Q1_APP} -- cat /etc/${Q1_APP}/token
+        expect: { equals: "s3cr3t-${Q1_APP}" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-spec-volumes
+        description: the volumes still come from the ConfigMap and the Secret
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[*].configMap.name} {.spec.template.spec.volumes[*].secret.secretName}'
+        expect: { equals: "nginx:1.27-alpine ${Q1_APP}-content ${Q1_APP}-secret" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get pods -l app=${Q1_APP}: are the Pods Pending, ContainerCreating, crashing, or running but not ready?"
+      - "kubectl -n ${Q1_NS} describe pod <pod>: the Events name mount failures and container config errors."
+      - kubectl -n ${Q1_NS} logs <pod> (or --previous) shows why nginx exits or what it cannot find.
+      - Compare the volumes, volumeMounts and securityContext in kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml with the spec and with the ConfigMap and Secret keys.

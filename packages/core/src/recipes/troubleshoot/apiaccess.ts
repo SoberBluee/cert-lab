@@ -19,6 +19,14 @@ const setCa = (crt: string) => `for f in ${USER_KUBECONFIGS.join(' ')}; do
   kubectl config --kubeconfig "$f" set clusters.kubernetes.certificate-authority-data "$(base64 -w0 ${PKI}/${crt})" >/dev/null
 done`;
 
+const saveUserKubeconfigs = (state: string) => USER_KUBECONFIGS.map((f, i) => `cp -a ${f} "${state}.kubeconfig-${i}"`).join('\n');
+const restoreUserKubeconfigs = (state: string) => USER_KUBECONFIGS.map((f, i) => `cp -a "${state}.kubeconfig-${i}" ${f}`).join('\n');
+
+/** Runs `kubectl config <args>` against both user kubeconfigs; `$f` is the file. */
+const configBoth = (args: string) => `for f in ${USER_KUBECONFIGS.join(' ')}; do
+  kubectl config --kubeconfig "$f" ${args} >/dev/null
+done`;
+
 const serverPort = (from: number, to: number) =>
   USER_KUBECONFIGS.map((f) => edit(f, `s#^([[:space:]]*server: https://[^[:space:]]+):${from}$#\\1:${to}#`, `server: https://[^[:space:]]+:${to}$`)).join('\n');
 
@@ -123,7 +131,7 @@ EOF`,
       `If the API server is healthy, the kubeconfig is wrong: compare the server and certificate-authority-data in ~/.kube/config with /etc/kubernetes/admin.conf (kubectl config view --raw).`,
     ],
   }),
-  faults: ({ NS }) => [
+  faults: ({ NS }, state) => [
     {
       id: 'kubeconfig-server-port',
       label: 'User kubeconfigs point at the wrong port',
@@ -171,6 +179,37 @@ ${edit(APISERVER, 's#^    image: (registry\\.k8s\\.io/kube-apiserver:)#   image:
       fix: edit(APISERVER, 's#^   image: (registry\\.k8s\\.io/kube-apiserver:)#    image: \\1#', '^    image: registry.k8s.io/kube-apiserver:'),
       wait: waitHealthy(NS),
       explain: `The \`image:\` line in \`${APISERVER}\` is indented by three spaces instead of four, which makes the file invalid YAML. The kubelet cannot parse the manifest, so it drops the kube-apiserver static pod: no container at all in \`crictl ps -a\`, and \`journalctl -u kubelet\` reports the manifest it could not decode. Fix the indentation.`,
+    },
+    {
+      id: 'kubeconfig-current-context',
+      label: 'User kubeconfigs use a context that does not exist',
+      break: `${scaleUp(NS)}
+${configBoth('set current-context admin@production')}`,
+      settle: userKubectlDown,
+      fix: configBoth('use-context "$(kubectl config --kubeconfig "$f" get-contexts -o name | head -1)"'),
+      wait: waitHealthy(NS),
+      explain: `\`current-context\` in both user kubeconfigs is \`admin@production\`, which is not defined in them, so kubectl fails with "context was not found for specified context". The API server is healthy. \`kubectl config get-contexts\` lists the real context: switch back with \`kubectl config use-context <name>\` (as root and as ubuntu).`,
+    },
+    {
+      id: 'kubeconfig-client-key',
+      label: 'User kubeconfigs hold a key that does not match the certificate',
+      break: `${scaleUp(NS)}
+${saveUserKubeconfigs(state)}
+${configBoth(`set "users.$(kubectl config --kubeconfig "$f" view -o jsonpath='{.users[0].name}')".client-key-data "$(base64 -w0 ${PKI}/apiserver-kubelet-client.key)"`)}`,
+      settle: userKubectlDown,
+      fix: restoreUserKubeconfigs(state),
+      wait: waitHealthy(NS),
+      explain: `\`client-key-data\` of the user in both user kubeconfigs is the key of \`${PKI}/apiserver-kubelet-client.key\`, which does not belong to the user's \`client-certificate-data\`. kubectl fails before it sends anything ("tls: private key does not match public key"). The admin credentials are intact in \`/etc/kubernetes/admin.conf\`: copy it over \`/root/.kube/config\` and \`/home/ubuntu/.kube/config\` (keeping ubuntu as the owner), or copy its \`client-key-data\` into them.`,
+    },
+    {
+      id: 'apiserver-tls-cert-path',
+      label: 'API server serving certificate path is wrong',
+      break: `${scaleUp(NS)}
+${edit(APISERVER, `s#^([[:space:]]*- --tls-cert-file=${PKI}/apiserver)\\.crt$#\\1.cert#`, `- --tls-cert-file=${PKI}/apiserver.cert$`)}`,
+      settle: apiDown,
+      fix: edit(APISERVER, `s#^([[:space:]]*- --tls-cert-file=${PKI}/apiserver)\\.cert$#\\1.crt#`, `- --tls-cert-file=${PKI}/apiserver.crt$`),
+      wait: waitHealthy(NS),
+      explain: `\`--tls-cert-file\` in \`${APISERVER}\` points at \`${PKI}/apiserver.cert\`, which does not exist, so the API server cannot load its serving certificate and exits at startup; kubectl gets \`connection refused\`. \`crictl logs\` of the last kube-apiserver container names the file, and \`ls ${PKI}\` shows \`apiserver.crt\`.`,
     },
   ],
 };

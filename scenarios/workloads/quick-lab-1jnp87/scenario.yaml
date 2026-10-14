@@ -1,0 +1,166 @@
+id: quick-lab-1jnp87
+title: "Quick lab: Random"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 24
+points: 21
+tags: [ troubleshooting, cronjob, job, pods, deployment, hpa, autoscaling, metrics-server ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ batch, nightly, reports ] }
+  Q1_APP: { oneOf: [ report, cleanup, export ] }
+  Q1_FAULT: { oneOf: [ suspended, never-schedule, deadline, backoff-zero-command, image-registry ], hidden: true }
+  Q2_NS: { oneOf: [ retail, media, portal ] }
+  Q2_APP: { oneOf: [ storefront, ledger, checkout ] }
+  Q2_FAULT: { oneOf: [ oom-killed, image-pull, bad-command, configmap-key, liveness-port, readiness-path, requests-too-large, node-selector ], hidden: true }
+  Q3_NS: { oneOf: [ shop, storefront, media ] }
+  Q3_APP: { oneOf: [ web, api, frontend ] }
+  Q3_FAULT: { oneOf: [ no-cpu-request, target-name, target-kind, max-one, metrics-server-down, metrics-apiservice ], hidden: true }
+tasks:
+  - id: q1
+    title: CronJob ${Q1_APP} never succeeds
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-succeeded
+        description: a Job of ${Q1_APP} has completed
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get cronjob ${Q1_APP} -o jsonpath='{.status.lastSuccessfulTime}'
+        expect: { notEmpty: true }
+        weight: 3
+        retrySeconds: 150
+      - id: q1-spec
+        description: ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get cronjob ${Q1_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.backoffLimit}|{.spec.jobTemplate.spec.activeDeadlineSeconds}|{.spec.jobTemplate.spec.template.spec.containers[0].image}|{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}'
+        expect: { equals: "* * * * *|false|2||busybox:1.36|date; sleep 8; echo report done" }
+        weight: 2
+      - id: q1-same-cronjob
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get cronjob ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get cronjob ${Q1_APP}: look at SUSPEND, SCHEDULE and LAST SCHEDULE. Has it created any Job at all?"
+      - "kubectl -n ${Q1_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q1_NS} describe job <job> shows the reason (BackoffLimitExceeded, DeadlineExceeded, ...)."
+      - kubectl -n ${Q1_NS} logs <pod> and kubectl -n ${Q1_NS} describe pod <pod> show what the container did, or why it never started.
+      - "To test a fix without waiting for the next minute: kubectl -n ${Q1_NS} create job test-run --from=cronjob/${Q1_APP}"
+  - id: q2
+    title: Unhealthy Deployment ${Q2_APP}
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-ready
+        description: ${Q2_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q2-stable
+        description: ${Q2_APP}'s Pods do not restart over 20 seconds
+        type: kubectl
+        run: r() { kubectl -n ${Q2_NS} get pods -l app=${Q2_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 20; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 1
+        retrySeconds: 60
+      - id: q2-serves
+        description: ${Q2_APP} serves HTTP on port 80
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec deployment/${Q2_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: nginx }
+        weight: 1
+      - id: q2-spec-resources
+        description: image, requests and limits match the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        weight: 1
+      - id: q2-spec-probes
+        description: probes match the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
+        expect: { equals: / 80 80 }
+        weight: 1
+      - id: q2-spec-config
+        description: APP_MODE comes from key mode of ${Q2_APP}-config, set to production
+        type: kubectl
+        run: echo "$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q2_NS} get configmap ${Q2_APP}-config -o jsonpath='{.data.mode}')"
+        expect: { equals: "${Q2_APP}-config mode production" }
+        weight: 1
+      - id: q2-same-deployment
+        description: ${Q2_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q2.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} get pods -l app=${Q2_APP} -o wide: what state are the Pods in, and do they restart?"
+      - "kubectl -n ${Q2_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
+      - kubectl -n ${Q2_NS} logs <pod> --previous shows why a crashed container exited.
+      - Compare kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml (and the ConfigMap) against the spec, line by line.
+  - id: q3
+    title: Autoscaler ${Q3_APP} not working
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+        lane: q3
+    checks:
+      - id: q3-hpa-spec
+        description: the autoscaler targets Deployment ${Q3_APP} between 2 and 6 replicas at 50% CPU
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q3_APP}/2/6/50" }
+        weight: 1
+      - id: q3-hpa-active
+        description: the autoscaler reads current metrics (ScalingActive)
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_APP} -o jsonpath='{.status.conditions[?(@.type=="ScalingActive")].status}'
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 120
+      - id: q3-hpa-metric
+        description: it reports the current CPU utilization
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_APP} -o jsonpath='{.status.currentMetrics[?(@.resource.name=="cpu")].resource.current.averageUtilization}' | grep -qE '^[0-9]+$' && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 120
+      - id: q3-ready
+        description: ${Q3_APP} has at least 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.status.readyReplicas}'
+        expect: { gte: 2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q3-spec
+        description: image and requests match the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory}'
+        expect: { equals: nginx:1.27-alpine 50m 32Mi }
+        weight: 1
+      - id: q3-same-deployment
+        description: ${Q3_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q3.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q3_NS} get hpa ${Q3_APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics."
+      - "kubectl -n ${Q3_NS} describe hpa ${Q3_APP}: the Conditions and Events say why (FailedGetScale, FailedGetResourceMetric, ...)."
+      - "kubectl top pods -n ${Q3_NS}: if this fails, the problem is the metrics pipeline, not the autoscaler. Check kubectl get apiservice v1beta1.metrics.k8s.io and kubectl -n kube-system get deploy,svc metrics-server."

@@ -172,5 +172,39 @@ kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
       explain:
         'The readiness probe requests `/ready`, which returns 404, so the Pods never become ready and the Service has only not-ready endpoints. Point the probe back at `/`.',
     },
+    {
+      id: 'selector-extra-label',
+      label: 'Service selector requires an extra label',
+      break: `kubectl -n "${NS}" patch service "${APP}" -p '{"spec":{"selector":{"tier":"web"}}}'`,
+      fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"remove","path":"/spec/selector/tier"}]'`,
+      wait: waitServing(NS, APP),
+      explain: `The Service selects \`app=${APP}\` **and** \`tier=web\`. The Pods carry only \`app=${APP}\`, so nothing matches and the Service has no endpoints (\`kubectl -n ${NS} get endpointslices -l kubernetes.io/service-name=${APP}\`). Remove \`tier\` from the selector.`,
+    },
+    {
+      id: 'service-port',
+      label: 'Service listens on the wrong port',
+      break: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/port","value":8080}]'`,
+      fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/port","value":80}]'`,
+      wait: waitServing(NS, APP),
+      explain: `The Service listens on port \`8080\`, so \`http://${APP}\` (port 80) is refused even though the endpoints are fine. \`kubectl -n ${NS} get svc ${APP}\` shows \`8080/TCP\`: set \`port\` back to \`80\`.`,
+    },
+    {
+      id: 'service-protocol',
+      label: 'Service port uses UDP',
+      break: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/protocol","value":"UDP"}]'`,
+      fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/protocol","value":"TCP"}]'`,
+      wait: waitServing(NS, APP),
+      explain: `The Service port is \`80/UDP\`, but HTTP needs TCP, so TCP connections to the Service IP go nowhere. \`kubectl -n ${NS} get svc ${APP}\` shows the protocol: set it back to \`TCP\`.`,
+    },
+    {
+      id: 'kube-proxy-down',
+      label: 'kube-proxy runs on no node',
+      break: `kubectl -n kube-system patch daemonset kube-proxy -p '{"spec":{"template":{"spec":{"nodeSelector":{"kube-proxy":"disabled"}}}}}'
+kubectl -n kube-system wait --for=delete pod -l k8s-app=kube-proxy --timeout=180s >/dev/null 2>&1 || true`,
+      fix: `kubectl -n kube-system patch daemonset kube-proxy --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector/kube-proxy"}]'
+kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
+      wait: waitServing(NS, APP),
+      explain: `Service, endpoints and Pods all look right, and the client can reach a Pod IP directly, but not the Service IP. The \`kube-system/kube-proxy\` DaemonSet has a nodeSelector \`kube-proxy=disabled\` that no node matches, so no kube-proxy runs and the Service's new endpoints are never programmed into iptables (\`kubectl -n kube-system get ds kube-proxy\` shows 0 desired). Remove that nodeSelector entry.`,
+    },
   ],
 };

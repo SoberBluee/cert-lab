@@ -224,5 +224,34 @@ systemctl restart kubelet`,
       explain:
         '`/etc/default/kubelet` adds `--pod-max-pids-limit=100` to `KUBELET_EXTRA_ARGS`. No such flag exists (the real one is `--pod-max-pids`), so the kubelet exits with "unknown flag" right after start. `systemctl cat kubelet` shows the drop-in reads that file. Remove the flag and restart the kubelet.',
     },
+    {
+      id: 'cni-config-removed',
+      label: 'CNI configuration removed from the node',
+      nodeBreak: `mkdir -p /root/cni-backup
+mv /etc/cni/net.d/*.conflist /root/cni-backup/
+! ls /etc/cni/net.d/*.conflist >/dev/null 2>&1 || { echo "could not move the CNI config" >&2; exit 1; }`,
+      settle: waitNotReady(NODE),
+      nodeFix: `mv /root/cni-backup/*.conflist /etc/cni/net.d/
+systemctl restart containerd
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain:
+        'The Calico network config (`10-calico.conflist`) is gone from `/etc/cni/net.d`. containerd reports the network as not ready, so the node turns `NotReady` with "container runtime network not ready ... cni plugin not initialized" (`kubectl describe node`, `journalctl -u kubelet`). `ls /etc/cni/net.d` is empty; a copy of the file sits in `/root/cni-backup` (or copy it from a healthy worker). Put it back, then restart containerd and the kubelet.',
+    },
+    {
+      id: 'containerd-config-invalid',
+      label: 'containerd config does not parse',
+      nodeBreak: `cp -a /etc/containerd/config.toml "${state}.containerd"
+printf '\\n[plugins\\n' >> /etc/containerd/config.toml
+systemctl restart containerd || true
+systemctl restart kubelet || true`,
+      settle: waitNotReady(NODE),
+      nodeFix: `cp -a "${state}.containerd" /etc/containerd/config.toml
+systemctl restart containerd
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain:
+        'The last line of `/etc/containerd/config.toml` is an unclosed `[plugins` table, so containerd fails to start ("failed to load TOML"). The kubelet runs but cannot reach the runtime, and the node turns `NotReady`. `systemctl status containerd` and `journalctl -u containerd -n 20` point at the line. Remove it, then restart containerd and the kubelet.',
+    },
   ],
 };

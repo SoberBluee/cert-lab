@@ -27,6 +27,8 @@ CALICO_VERSION="$(cfg calicoVersion)"
 GATEWAY_API_VERSION="$(cfg gatewayApiVersion)"
 TRAEFIK_CHART_VERSION="$(cfg traefikChartVersion)"
 HELM_VERSION="$(cfg helmVersion)"
+METRICS_SERVER_CHART_VERSION="$(cfg metricsServerChartVersion)"
+VPA_CHART_VERSION="$(cfg vpaChartVersion)"
 UBUNTU="$(cfg ubuntuRelease)"
 POD_CIDR="$(cfg podCidr)"
 CPUS="$(cfg nodeCpus)"
@@ -221,6 +223,52 @@ on controlplane "helm repo add traefik https://traefik.github.io/charts >/dev/nu
   || die "Traefik install failed, see $BUILD_LOG-traefik.log"
 on controlplane "kubectl wait --for=condition=Programmed gateway/traefik-gateway -n traefik --timeout=180s >/dev/null" \
   || die "Gateway traefik/traefik-gateway was not programmed"
+
+# HPA and VPA questions need the metrics API. kubeadm kubelets serve self-signed certificates.
+log "Installing metrics-server (chart $METRICS_SERVER_CHART_VERSION)"
+on controlplane "cat > /root/metrics-server-values.yaml <<'EOF'
+args:
+  - --kubelet-insecure-tls
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+EOF"
+on controlplane "helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server >/dev/null && \
+  helm repo update metrics-server >/dev/null && \
+  helm install metrics-server metrics-server/metrics-server --version '$METRICS_SERVER_CHART_VERSION' -n kube-system \
+    -f /root/metrics-server-values.yaml --wait --timeout 5m >/dev/null" > "$BUILD_LOG-metrics-server.log" 2>&1 \
+  || die "metrics-server install failed, see $BUILD_LOG-metrics-server.log"
+on controlplane "for _ in \$(seq 1 60); do kubectl top nodes >/dev/null 2>&1 && exit 0; sleep 5; done; exit 1" \
+  || die "the metrics API did not answer (kubectl top nodes)"
+
+# VPA is not part of Kubernetes: CRDs, recommender, updater and admission controller (with its webhook certificate).
+log "Installing the Vertical Pod Autoscaler (Fairwinds chart $VPA_CHART_VERSION)"
+on controlplane "cat > /root/vpa-values.yaml <<'EOF'
+recommender:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+updater:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+admissionController:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+EOF"
+on controlplane "helm repo add fairwinds-stable https://charts.fairwinds.com/stable >/dev/null && \
+  helm repo update fairwinds-stable >/dev/null && \
+  helm install vpa fairwinds-stable/vpa --version '$VPA_CHART_VERSION' -n vpa --create-namespace \
+    -f /root/vpa-values.yaml --wait --timeout 5m >/dev/null" > "$BUILD_LOG-vpa.log" 2>&1 \
+  || die "VPA install failed, see $BUILD_LOG-vpa.log"
+on controlplane "kubectl get crd verticalpodautoscalers.autoscaling.k8s.io >/dev/null && \
+  kubectl -n vpa wait --for=condition=Available deployment/vpa-recommender deployment/vpa-updater deployment/vpa-admission-controller --timeout=180s >/dev/null" \
+  || die "the VPA components are not available"
 on controlplane "kubectl get nodes -o wide"
 
 log "Snapshotting 'cluster'"
@@ -240,9 +288,11 @@ cat > "$DATA_DIR/images-$DRIVER.json" <<EOF
   "driver": "$DRIVER",
   "kubernetesVersion": "$K8S_VERSION",
   "calicoVersion": "$CALICO_VERSION",
-  "addons": ["gateway-api", "traefik"],
+  "addons": ["gateway-api", "traefik", "metrics-server", "vpa"],
   "gatewayApiVersion": "$GATEWAY_API_VERSION",
   "traefikChartVersion": "$TRAEFIK_CHART_VERSION",
+  "metricsServerChartVersion": "$METRICS_SERVER_CHART_VERSION",
+  "vpaChartVersion": "$VPA_CHART_VERSION",
   "ubuntuRelease": "$UBUNTU",
   "instancePrefix": "$PREFIX",
   "ips": { ${IPS_JSON%, } },

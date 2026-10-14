@@ -1,0 +1,290 @@
+id: networking-ingress-and-dns
+title: Networking, Ingress and DNS
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 54
+points: 40
+tags: [ troubleshooting, service, endpoints, networkpolicy, ingress, gateway-api, httproute, dns, coredns ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ store, edge, api ] }
+  Q1_APP: { oneOf: [ web, backend, gateway ] }
+  Q1_FAULT: { oneOf: [ selector-mismatch, target-port, named-port, network-policy, not-ready ], hidden: true }
+  Q2_NS: { oneOf: [ shop, media, portal ] }
+  Q2_APP: { oneOf: [ web, store, blog ] }
+  Q2_FAULT: { oneOf: [ ingress-service-name, ingress-service-port, ingress-class, ingress-path, route-parent, route-section, route-backend-port ], hidden: true }
+  Q3_NS: { oneOf: [ shop, intranet, search ] }
+  Q3_FAULT: { oneOf: [ corefile-typo, scaled-to-zero, cluster-domain, kube-dns-selector, client-dns-policy, corefile-loop, coredns-rbac, kube-dns-target-port, corefile-key ], hidden: true }
+  Q4_NS: { oneOf: [ store, edge, api ] }
+  Q4_APP: { oneOf: [ web, backend, gateway ] }
+  Q4_FAULT: { oneOf: [ selector-mismatch, target-port, named-port, network-policy, not-ready ], hidden: true }
+  Q5_NS: { oneOf: [ secure, payments, vault ] }
+  Q5_APP: { oneOf: [ api, ledger, billing ] }
+  Q5_FAULT: { oneOf: [ dns-egress-port, dns-namespace-selector, ingress-port, ingress-from-label, egress-to-label ], hidden: true }
+  Q6_NS: { oneOf: [ shop, intranet, search ] }
+  Q6_FAULT: { oneOf: [ corefile-typo, scaled-to-zero, cluster-domain, kube-dns-selector, client-dns-policy, corefile-loop, coredns-rbac, kube-dns-target-port, corefile-key ], hidden: true }
+tasks:
+  - id: q1
+    title: Service ${Q1_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-reachable
+        description: client gets the nginx page from http://${Q1_APP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://${Q1_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-endpoints
+        description: Service ${Q1_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get endpointslices -l kubernetes.io/service-name=${Q1_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-spec-service
+        description: Service ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q1_APP} 80 http" }
+        weight: 1
+      - id: q1-spec-deployment
+        description: Deployment ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q1_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q1_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q1_NS} get networkpolicy: anything selecting the ${Q1_APP} Pods?"
+  - id: q2
+    title: ${Q2_APP} unreachable through the ingress
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-ingress-serves
+        description: www.${Q2_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: www.${Q2_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-route-serves
+        description: api.${Q2_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: api.${Q2_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-spec-ingress
+        description: Ingress ${Q2_APP} still serves host www.${Q2_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get ingress ${Q2_APP} -o jsonpath='{.spec.rules[0].host}'
+        expect: { equals: "www.${Q2_NS}.lab" }
+        weight: 1
+      - id: q2-spec-route
+        description: HTTPRoute ${Q2_APP} still serves host api.${Q2_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get httproute ${Q2_APP} -o jsonpath='{.spec.hostnames[0]}'
+        expect: { equals: "api.${Q2_NS}.lab" }
+        weight: 1
+      - id: q2-spec-backend
+        description: Deployment and Service ${Q2_APP} match the spec
+        type: kubectl
+        run: echo $(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
+        expect: { equals: "2 ${Q2_APP} ${Q2_APP} 80" }
+        weight: 1
+    hints:
+      - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
+      - "kubectl -n ${Q2_NS} describe ingress ${Q2_APP}: check the class, the path and the backend Service and port against kubectl -n ${Q2_NS} get svc ${Q2_APP}."
+      - "kubectl -n ${Q2_NS} describe httproute ${Q2_APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used."
+      - kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.
+  - id: q3
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q3-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q3-fqdn
+        description: client resolves web.${Q3_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q3_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q3_NS} exec client -- nslookup -type=a web.${Q3_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q3-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q3-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q3-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q3_NS} exec client -- nslookup web.${Q3_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q3_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q4
+    title: Service ${Q4_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+        lane: q4
+    checks:
+      - id: q4-reachable
+        description: client gets the nginx page from http://${Q4_APP}
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec client -- wget -qO- -T 3 http://${Q4_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q4-endpoints
+        description: Service ${Q4_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get endpointslices -l kubernetes.io/service-name=${Q4_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q4-spec-service
+        description: Service ${Q4_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get svc ${Q4_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q4_APP} 80 http" }
+        weight: 1
+      - id: q4-spec-deployment
+        description: Deployment ${Q4_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q4_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q4_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q4_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q4_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q4_NS} get networkpolicy: anything selecting the ${Q4_APP} Pods?"
+  - id: q5
+    title: Frontend cannot reach ${Q5_APP}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        timeoutSeconds: 400
+        lane: q5
+    checks:
+      - id: q5-reachable
+        description: client gets the nginx page from http://${Q5_APP}
+        type: kubectl
+        run: kubectl -n ${Q5_NS} exec client -- wget -qO- -T 3 http://${Q5_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q5-stranger-blocked
+        description: stranger still cannot reach ${Q5_APP}
+        type: kubectl
+        run: kubectl -n ${Q5_NS} exec stranger -- wget -qO- -T 3 http://${Q5_APP} >/dev/null 2>&1 && echo open || echo blocked
+        expect: { equals: blocked }
+        weight: 2
+      - id: q5-default-deny
+        description: default-deny still selects every Pod for ingress and egress
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get networkpolicy default-deny -o jsonpath='{.spec.podSelector.matchLabels}|{.spec.policyTypes[*]}|{.spec.ingress}{.spec.egress}'
+        expect: { equals: "|Ingress Egress|" }
+        weight: 1
+      - id: q5-ingress-rule
+        description: ${Q5_APP}-ingress allows role=frontend on port 80
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get networkpolicy ${Q5_APP}-ingress -o jsonpath='{.spec.ingress[0].from[0].podSelector.matchLabels.role} {.spec.ingress[0].ports[0].port}'
+        expect: { equals: frontend 80 }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q5_NS} get networkpolicy, then kubectl -n ${Q5_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?"
+      - "Separate DNS from the connection: kubectl -n ${Q5_NS} exec client -- nslookup ${Q5_APP}, then wget the Service IP or a Pod IP directly."
+      - "Compare every selector with the real labels: kubectl -n ${Q5_NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns."
+      - A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.
+  - id: q6
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q6.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q6-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q6_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q6-fqdn
+        description: client resolves web.${Q6_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q6_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q6_NS} exec client -- nslookup -type=a web.${Q6_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q6-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q6-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q6-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q6_NS} exec client -- nslookup web.${Q6_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q6_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.

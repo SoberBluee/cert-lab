@@ -159,7 +159,7 @@ EOF`,
       `If controlplane itself is NotReady, or no control plane container runs at all: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in ${KUBELET_CONF} and ${KUBELET_CONFIG} (staticPodPath).`,
     ],
   }),
-  faults: ({ NS }) => [
+  faults: ({ NS }, state) => [
     {
       id: 'apiserver-etcd-port',
       label: 'API server talks to the etcd peer port',
@@ -256,6 +256,59 @@ systemctl restart kubelet || true`,
 systemctl restart kubelet`,
       wait: waitHealthy(NS),
       explain: `\`staticPodPath\` in \`${KUBELET_CONFIG}\` is \`/etc/kubernetes/manifest\`, a directory that does not exist. The kubelet runs, but it finds no static pod manifests and stops etcd, the API server, the scheduler and the controller manager, so kubectl fails. \`crictl ps\` on controlplane shows no control plane containers, and \`journalctl -u kubelet\` mentions the missing path. Set it back to \`${M}\` and restart the kubelet.`,
+    },
+    {
+      id: 'scheduler-kubeconfig-path',
+      label: 'Scheduler kubeconfig path is wrong',
+      break: `${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/scheduler)\\.conf$#\\1.config#', '- --kubeconfig=/etc/kubernetes/scheduler.config$')}
+${componentDown('kube-scheduler')}
+kubectl -n "${NS}" scale deployment/web --replicas=2`,
+      settle: waitPending(NS),
+      fix: edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/scheduler)\\.config$#\\1.conf#', '- --kubeconfig=/etc/kubernetes/scheduler.conf$'),
+      wait: waitHealthy(NS),
+      explain: `\`--kubeconfig\` in \`${M}/kube-scheduler.yaml\` points at \`/etc/kubernetes/scheduler.config\` instead of \`scheduler.conf\`. The scheduler exits at startup, so the new \`web\` Pods stay \`Pending\` with no scheduling events. \`kubectl -n kube-system logs kube-scheduler-controlplane\` (or \`crictl logs\`) shows the missing file; \`ls /etc/kubernetes\` shows the real one.`,
+    },
+    {
+      id: 'scheduler-image-tag',
+      label: 'Scheduler image tag does not exist',
+      break: `grep -oE 'kube-scheduler:[^[:space:]"]+' ${M}/kube-scheduler.yaml | head -1 > "${state}.scheduler-image"
+${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*image: [^[:space:]]*kube-scheduler:)[^[:space:]]+$#\\1v0.0.0#', 'kube-scheduler:v0\\.0\\.0$')}
+${componentDown('kube-scheduler')}
+kubectl -n "${NS}" scale deployment/web --replicas=2`,
+      settle: waitPending(NS),
+      fix: `sed -i -E "s#kube-scheduler:v0\\.0\\.0#$(cat "${state}.scheduler-image")#" ${M}/kube-scheduler.yaml
+grep -q 'kube-scheduler:v0\\.0\\.0' ${M}/kube-scheduler.yaml && { echo "could not restore the scheduler image" >&2; exit 1; }`,
+      wait: waitHealthy(NS),
+      explain: `The image in \`${M}/kube-scheduler.yaml\` has tag \`v0.0.0\`, which does not exist. The kubelet cannot pull it (\`ErrImagePull\` in \`kubectl -n kube-system describe pod kube-scheduler-controlplane\`, or \`crictl ps -a\` shows no scheduler), so new Pods stay \`Pending\`. Use the same tag as the other control plane images (\`grep image: ${M}/*.yaml\`, or \`kubeadm config images list\`).`,
+    },
+    {
+      id: 'controller-manager-sa-key',
+      label: 'Controller manager service account key path is wrong',
+      break: `${edit(
+        `${M}/kube-controller-manager.yaml`,
+        's#^([[:space:]]*- --service-account-private-key-file=/etc/kubernetes/pki/sa)\\.key$#\\1.pem#',
+        '- --service-account-private-key-file=/etc/kubernetes/pki/sa.pem$',
+      )}
+${componentDown('kube-controller-manager')}
+kubectl -n "${NS}" scale deployment/web --replicas=2`,
+      settle: waitPending(NS),
+      fix: edit(
+        `${M}/kube-controller-manager.yaml`,
+        's#^([[:space:]]*- --service-account-private-key-file=/etc/kubernetes/pki/sa)\\.pem$#\\1.key#',
+        '- --service-account-private-key-file=/etc/kubernetes/pki/sa.key$',
+      ),
+      wait: waitHealthy(NS),
+      explain: `\`--service-account-private-key-file\` in \`${M}/kube-controller-manager.yaml\` points at \`/etc/kubernetes/pki/sa.pem\`, which does not exist. The controller manager exits at startup, so \`web\` is scaled to 2 but no ReplicaSet creates Pods. Its logs (\`crictl logs\`) name the missing key; \`ls /etc/kubernetes/pki\` shows \`sa.key\`.`,
+    },
+    {
+      id: 'apiserver-admission-plugin',
+      label: 'API server enables an admission plugin that does not exist',
+      break: `${scaleUp(NS)}
+${edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --enable-admission-plugins=[^[:space:]]+)$#\\1,PodSecurityPolicy#', '- --enable-admission-plugins=.*,PodSecurityPolicy$')}`,
+      settle: apiDown,
+      fix: edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --enable-admission-plugins=[^[:space:]]+),PodSecurityPolicy$#\\1#', '- --enable-admission-plugins=[^,[:space:]]+(,[^,[:space:]]+)*$'),
+      wait: waitHealthy(NS),
+      explain: `\`--enable-admission-plugins\` in \`${M}/kube-apiserver.yaml\` adds \`PodSecurityPolicy\`, a plugin that was removed from Kubernetes in 1.25. The API server exits at startup ("unknown admission plugins"), so kubectl gets \`connection refused\`. \`crictl ps -a\` and \`crictl logs\` of the last kube-apiserver container show the error. Remove the plugin from the list.`,
     },
   ],
 };

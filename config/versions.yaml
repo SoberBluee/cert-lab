@@ -7,6 +7,9 @@ calicoVersion: "v3.33.0"
 gatewayApiVersion: "v1.6.3"
 traefikChartVersion: "41.7.1"
 helmVersion: "v4.3.0"
+# HPA and VPA: metrics-server for the metrics API, Fairwinds chart for the Vertical Pod Autoscaler (VPA 1.7).
+metricsServerChartVersion: "3.14.0"
+vpaChartVersion: "5.1.0"
 ubuntuRelease: "24.04"
 # Must not overlap the Multipass network on macOS (192.168.64.0/24).
 # tartNetwork: Tart VMs share the same vmnet subnet (192.168.64.0/24 by default), so the same rule applies.

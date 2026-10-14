@@ -113,6 +113,19 @@ export const requireIngress = `kubectl get ingressclass traefik >/dev/null 2>&1 
   exit 1
 }`;
 
+/** First setup step of HPA questions: older cluster images have no metrics-server. */
+export const requireMetrics = `kubectl get apiservice v1beta1.metrics.k8s.io >/dev/null 2>&1 || {
+  echo "this cluster image has no metrics-server: rebuild images with ./cka images build --force" >&2
+  exit 1
+}`;
+
+/** First setup step of VPA questions: older cluster images have no Vertical Pod Autoscaler. */
+export const requireVpa = `${requireMetrics}
+kubectl get crd verticalpodautoscalers.autoscaling.k8s.io >/dev/null 2>&1 || {
+  echo "this cluster image has no Vertical Pod Autoscaler: rebuild images with ./cka images build --force" >&2
+  exit 1
+}`;
+
 /** Where Traefik serves both Ingress and Gateway API traffic: the web entrypoint's NodePort on every node. */
 export const INGRESS_URL = 'http://controlplane:30080';
 
