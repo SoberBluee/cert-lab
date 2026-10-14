@@ -23,15 +23,6 @@ variables:
   Q4_TAINT_TEAM: { oneOf: [ web, payments, search ] }
   Q4_TAINT_NODE: { oneOf: [ worker-1, worker-2 ] }
   Q4_HPA_CPU: { oneOf: [ 50, 70, 80 ] }
-setup:
-  - node: controlplane
-    script: setup/q1.sh
-    timeoutSeconds: 400
-  - node: controlplane
-    script: setup/q4.sh
-  - node: controlplane
-    script: setup/q2.sh
-    timeoutSeconds: 400
 solution:
   - node: controlplane
     script: setup/q2-solution.sh
@@ -42,6 +33,11 @@ tasks:
   - id: q1
     title: Deployment ${Q1_APP} not running
     points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
     checks:
       - id: q1-ready
         description: ${Q1_APP} has 2 ready replicas
@@ -70,6 +66,11 @@ tasks:
   - id: q2
     title: Control plane after maintenance
     points: 8
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+    setupStage: 2
     checks:
       - id: q2-api-ready
         description: the API server reports ready
@@ -152,6 +153,10 @@ tasks:
   - id: q4
     title: Deployment ${Q4_NAME}
     points: 11
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        lane: q4
     checks:
       - id: q4-ready
         description: Deployment ${Q4_NAME} has 3 ready replicas

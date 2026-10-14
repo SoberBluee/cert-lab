@@ -25,18 +25,6 @@ variables:
   Q5_NAME: { oneOf: [ gold, silver, bronze ] }
   Q5_RECLAIM: { oneOf: [ Retain, Delete ] }
   Q5_BINDING: { oneOf: [ Immediate, WaitForFirstConsumer ] }
-setup:
-  - node: controlplane
-    script: setup/q1.sh
-    timeoutSeconds: 400
-  - node: controlplane
-    script: setup/q2.sh
-  - node: controlplane
-    script: setup/q3.sh
-    timeoutSeconds: 400
-  - node: controlplane
-    script: setup/q4.sh
-    timeoutSeconds: 400
 solution:
   - node: controlplane
     script: setup/q4-solution.sh
@@ -47,6 +35,11 @@ tasks:
   - id: q1
     title: Deployment ${Q1_APP} not running
     points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
     checks:
       - id: q1-ready
         description: ${Q1_APP} has 2 ready replicas
@@ -75,6 +68,10 @@ tasks:
   - id: q2
     title: Deployment ${Q2_NAME}
     points: 8
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
     checks:
       - id: q2-ready
         description: Deployment ${Q2_NAME} has 3 ready replicas
@@ -115,6 +112,11 @@ tasks:
   - id: q3
     title: Name resolution broken
     points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+    setupStage: 1
     checks:
       - id: q3-short-name
         description: client gets the nginx page from http://web
@@ -157,6 +159,11 @@ tasks:
   - id: q4
     title: Control plane after maintenance
     points: 8
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+    setupStage: 2
     checks:
       - id: q4-api-ready
         description: the API server reports ready
