@@ -3,9 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { ScenarioSummary } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
-import { api, type ScenarioFilters } from '../api';
+import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
 import { isActive, sessionKey, useExamMode, useSession } from '../hooks';
+import { RANDOM_MAX, randomLab, toRequest, type LabKind } from '../quickRandom';
+
+const KIND_LABELS: Record<LabKind, string> = { create: 'Create', troubleshoot: 'Troubleshoot', random: 'Random' };
 
 const select = 'rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-200';
 
@@ -50,6 +53,31 @@ export function BrowserPage() {
       navigate('/session');
     },
   });
+
+  const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity });
+  const [labKind, setLabKind] = useState<LabKind>('random');
+  const [labCount, setLabCount] = useState('1');
+  const [labPhase, setLabPhase] = useState<'generating' | 'starting'>('generating');
+  const quickStart = useMutation({
+    mutationFn: async ({ kind, n }: { kind: LabKind; n: number }) => {
+      setLabPhase('generating');
+      const questions = await randomLab(catalog.data!, n, kind);
+      const id = `quick-lab-${Math.random().toString(36).slice(2, 8).padEnd(6, '0')}`;
+      await studioApi.quickCreate({ ...toRequest(questions, id, `Quick lab: ${KIND_LABELS[kind]}`), dryRun: false });
+      setLabPhase('starting');
+      qc.invalidateQueries({ queryKey: ['scenarios'] });
+      try {
+        return await api.start(id, exam ? 'mock' : 'practice');
+      } catch (e) {
+        throw new Error(`Created draft ${id} but could not start it: ${(e as Error).message}`);
+      }
+    },
+    onSuccess: (view) => {
+      qc.setQueryData(sessionKey, view);
+      navigate('/session');
+    },
+  });
+  const labN = Math.min(RANDOM_MAX, Math.max(1, Math.floor(Number(labCount)) || 1));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -139,6 +167,40 @@ export function BrowserPage() {
         <span className="ml-auto text-sm text-zinc-500">{filtered.data?.scenarios.length ?? 0} scenarios</span>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-zinc-300">Quick lab</span>
+        <select className={select} value={labKind} onChange={(e) => setLabKind(e.target.value as LabKind)} disabled={quickStart.isPending}>
+          {(Object.keys(KIND_LABELS) as LabKind[]).map((k) => (
+            <option key={k} value={k}>
+              {KIND_LABELS[k]}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1.5 text-sm text-zinc-400">
+          <input
+            type="number"
+            min={1}
+            max={RANDOM_MAX}
+            className={`${select} w-16`}
+            value={labCount}
+            onChange={(e) => setLabCount(e.target.value)}
+            disabled={quickStart.isPending}
+          />
+          question{labN === 1 ? '' : 's'}
+        </label>
+        <Button
+          variant="primary"
+          disabled={active || !catalog.data || quickStart.isPending || start.isPending}
+          title={active ? 'End the current session first' : catalog.error ? 'Could not load the recipe catalog' : undefined}
+          onClick={() => quickStart.mutate({ kind: labKind, n: labN })}
+        >
+          {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
+        </Button>
+        <span className="text-xs text-zinc-500">A random lab from the recipe catalog, saved as a hidden draft.</span>
+      </div>
+
+      <ErrorBanner error={quickStart.error} onDismiss={() => quickStart.reset()} />
+      <ErrorBanner error={catalog.error} />
       <ErrorBanner error={start.error} onDismiss={() => start.reset()} />
       <ErrorBanner error={filtered.error} />
       {all.data?.errors.map((e) => (
@@ -186,7 +248,7 @@ export function BrowserPage() {
               </span>
               <Button
                 variant="primary"
-                disabled={active || start.isPending}
+                disabled={active || start.isPending || quickStart.isPending}
                 title={active ? 'End the current session first' : undefined}
                 onClick={() => start.mutate(s.id)}
               >

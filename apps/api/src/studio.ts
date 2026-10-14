@@ -111,6 +111,7 @@ export function registerStudio(app: FastifyInstance, opts: StudioOptions): void 
       'studio: quick scenario created',
     );
     reply.status(201);
+    if (req.body.dryRun === false) return { id: bundle.id, job: null, jobError: null };
     try {
       return {
         id: bundle.id,

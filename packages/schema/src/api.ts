@@ -344,6 +344,8 @@ export interface QuickCreateRequest {
   /** Defaults to the first question's topic. */
   domain?: Domain;
   questions: QuickQuestion[];
+  /** Run a dry-run right after creating; defaults to true. */
+  dryRun?: boolean;
 }
 
 export interface QuickPreviewQuestion {

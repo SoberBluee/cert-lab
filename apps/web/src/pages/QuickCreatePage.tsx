@@ -2,37 +2,16 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { parseDocument } from 'yaml';
-import type { BuilderSummary, CategorySummary, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
+import type { BuilderSummary, CategorySummary, PartSummary, RecipeField } from '@cka/schema';
 import { api, studioApi, type StudioJob } from '../api';
 import { JobPanel } from '../components/JobPanel';
 import { Button, Card, Difficulty, DomainBadge, ErrorBanner, Markdown } from '../components/ui';
 import { useSession } from '../hooks';
+import { blocked, initialFields, newKey, newPart, RANDOM_MAX, randomLab, toRequest, type Fields, type Part, type Question } from '../quickRandom';
 import { getFile, SCENARIO_FILE, setFile, stringify } from '../studio/model';
 import { TRACKS, type TrackId } from '../studio/tracks';
 
 const input = 'w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600';
-
-interface Fields {
-  values: Record<string, string>;
-  /** Present for randomized fields: the values one is picked from at every start. */
-  pools: Record<string, string[]>;
-}
-
-interface Part extends Fields {
-  key: number;
-  part: PartSummary;
-}
-
-type Question =
-  | { key: number; type: 'create'; builder: BuilderSummary; fields: Fields; addons: Part[]; followUps: Part[] }
-  | {
-      key: number;
-      type: 'troubleshoot';
-      category: CategorySummary;
-      fields: Fields;
-      /** Fault ids to roll from; every fault when undefined. */
-      faults?: string[];
-    };
 
 const slugify = (s: string) =>
   s
@@ -40,13 +19,6 @@ const slugify = (s: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 48);
-
-let nextKey = 1;
-const initialFields = (fields: RecipeField[]): Fields => ({
-  values: Object.fromEntries(fields.map((f) => [f.key, f.default])),
-  pools: Object.fromEntries(fields.filter((f) => f.pool && f.randomizeByDefault).map((f) => [f.key, [...f.pool!]])),
-});
-const newPart = (part: PartSummary): Part => ({ key: nextKey++, part, ...initialFields(part.fields) });
 
 const questionMeta = (q: Question) =>
   q.type === 'create'
@@ -197,17 +169,6 @@ function FieldGrid({ fields, state, onChange }: { fields: RecipeField[]; state: 
       ))}
     </div>
   );
-}
-
-/** Why a part cannot be added right now, or undefined. */
-function blocked(part: PartSummary, chosen: Part[], all: PartSummary[]): string | undefined {
-  const ids = chosen.map((p) => p.part.id);
-  const name = (id: string) => all.find((p) => p.id === id)?.name ?? id;
-  if (ids.includes(part.id)) return 'already added';
-  const conflict = part.conflicts?.find((c) => ids.includes(c));
-  if (conflict) return `conflicts with ${name(conflict)}`;
-  const missing = part.requires?.find((r) => !ids.includes(r));
-  if (missing) return `needs ${name(missing)} first`;
 }
 
 function PartPicker({
@@ -498,107 +459,6 @@ function AddQuestion({
   );
 }
 
-function toQuestion(q: Question): QuickQuestion {
-  const part = (p: Part) => ({ id: p.part.id, values: p.values, randomize: p.pools });
-  return q.type === 'create'
-    ? {
-        type: 'create',
-        builder: q.builder.id,
-        values: q.fields.values,
-        randomize: q.fields.pools,
-        addons: q.addons.map(part),
-        followUps: q.followUps.map(part),
-      }
-    : { type: 'troubleshoot', category: q.category.id, values: q.fields.values, randomize: q.fields.pools, ...(q.faults ? { faults: q.faults } : {}) };
-}
-
-const toRequest = (questions: Question[], id: string, title: string): QuickCreateRequest => ({ id, title, questions: questions.map(toQuestion) });
-
-const RANDOM_MAX = 20;
-const RANDOM_TRIES = 5;
-
-function shuffle<T>(xs: T[]): T[] {
-  const out = [...xs];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
-
-/** Every field that can be randomized is, with all of its values to pick from; other dropdowns get a random option. */
-const randomFields = (fields: RecipeField[]): Fields => ({
-  values: Object.fromEntries(fields.map((f) => [f.key, !f.pool && f.options?.length ? shuffle(f.options)[0] : f.default])),
-  pools: Object.fromEntries(fields.filter((f) => f.pool).map((f) => [f.key, [...(f.options ?? f.pool!)]])),
-});
-
-/** A random number of parts from `available`, skipping any that `blocked` rules out given what is already chosen. */
-function randomParts(available: PartSummary[], chosen: Part[], all: PartSummary[]): Part[] {
-  const want = Math.floor(Math.random() * (available.length + 1));
-  const out: Part[] = [];
-  for (const p of shuffle(available)) {
-    if (out.length >= want) break;
-    if (blocked(p, [...chosen, ...out], all)) continue;
-    out.push({ ...newPart(p), ...randomFields(p.fields) });
-  }
-  return out;
-}
-
-type Item = { kind: 'create'; builder: BuilderSummary } | { kind: 'troubleshoot'; category: CategorySummary };
-
-function randomQuestion(item: Item, plain = false): Question {
-  const key = nextKey++;
-  if (item.kind === 'troubleshoot') {
-    const { category } = item;
-    return { key, type: 'troubleshoot', category, fields: plain ? initialFields(category.fields) : randomFields(category.fields) };
-  }
-  const { builder } = item;
-  if (plain) return { key, type: 'create', builder, fields: initialFields(builder.fields), addons: [], followUps: [] };
-  const all = [...builder.addons, ...builder.followUps];
-  const addons = randomParts(builder.addons, [], all);
-  const followUps = randomParts(builder.followUps, addons, all);
-  return { key, type: 'create', builder, fields: randomFields(builder.fields), addons, followUps };
-}
-
-/** `n` items from every track: distinct while the catalog lasts, no solo builder unless n is 1, at most one that breaks the API. */
-function pickItems(catalog: RecipeCatalog, n: number): Item[] {
-  const items: Item[] = [
-    ...catalog.builders.map((builder) => ({ kind: 'create' as const, builder })),
-    ...catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category })),
-  ];
-  const info = (i: Item) => (i.kind === 'create' ? i.builder : i.category);
-  const out: Item[] = [];
-  let apiTaken = false;
-  for (let pass = 0; out.length < n && pass < n; pass++) {
-    const before = out.length;
-    for (const item of shuffle(items)) {
-      if (out.length >= n) break;
-      const x = info(item);
-      if ('solo' in x && x.solo && n > 1) continue;
-      if (x.breaksApi && apiTaken) continue;
-      if (pass === 0 && out.some((o) => info(o).id === x.id)) continue;
-      apiTaken ||= x.breaksApi;
-      out.push(item);
-    }
-    if (out.length === before) break;
-  }
-  return out;
-}
-
-/** Rolls a question until the server accepts it; after a few rejected rolls, the plain question. */
-async function validRandomQuestion(item: Item): Promise<Question> {
-  for (let i = 0; i < RANDOM_TRIES; i++) {
-    const q = randomQuestion(item);
-    const preview = await studioApi.quickPreview({ id: 'random-check', title: 'Random check', questions: [toQuestion(q)] });
-    if (!preview.issues.some((x) => x.level === 'error')) return q;
-  }
-  return randomQuestion(item, true);
-}
-
-async function randomLab(catalog: RecipeCatalog, n: number): Promise<Question[]> {
-  return Promise.all(pickItems(catalog, n).map(validRandomQuestion));
-}
-
 function Created({ id, jobError, onAnother }: { id: string; jobError: string | null; onAnother: () => void }) {
   const qc = useQueryClient();
   const session = useSession().data;
@@ -721,7 +581,7 @@ export function QuickCreatePage() {
   const randomN = Math.min(RANDOM_MAX, Math.max(1, Math.floor(Number(randomCount)) || 0));
 
   const add = (t: TrackId, pickId: string) => {
-    const key = nextKey++;
+    const key = newKey();
     let q: Question | undefined;
     if (t === 'create') {
       const builder = catalog.data?.builders.find((b) => b.id === pickId);
