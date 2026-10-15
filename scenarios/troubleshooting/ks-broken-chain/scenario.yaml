@@ -1,0 +1,87 @@
+id: ks-broken-chain
+title: "Killer-style: trace a broken request chain end to end"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 20
+points: 11
+tags: [killer-style, multi-step, networkpolicy, dns, service, targetport, secret, crashloop, nodeport]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [shop, orders, billing] }
+  APP: { oneOf: [catalog, ledger, checkout] }
+  NODEPORT: { range: [30200, 30999] }
+  TOKEN: { random: 8 }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 400
+checks:
+  - id: end-to-end
+    description: http://<controlplane>:${NODEPORT}/ returns the API payload through ${APP}-web
+    type: kubectl
+    run: curl -s -m 5 "http://$(kubectl get node controlplane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}'):${NODEPORT}/"
+    expect: { contains: "api ok: ${TOKEN}" }
+    weight: 3
+    retrySeconds: 90
+  - id: policy-kept
+    description: ${APP}-web is ready and NetworkPolicy ${APP}-web-egress still selects it and restricts egress
+    type: kubectl
+    run: |
+      [ "$(kubectl -n ${NS} get deployment ${APP}-web -o jsonpath='{.status.readyReplicas}')" = 1 ] || exit 1
+      kubectl -n ${NS} get networkpolicy ${APP}-web-egress -o jsonpath='{.spec.podSelector.matchLabels.app}/{.spec.policyTypes[*]}'
+    expect: { equals: "${APP}-web/Egress" }
+    weight: 1
+    retrySeconds: 60
+  - id: egress-restricted
+    description: ${APP}-web is ready but still cannot reach ${APP}-admin
+    type: kubectl
+    run: |
+      [ "$(kubectl -n ${NS} get deployment ${APP}-web -o jsonpath='{.status.readyReplicas}')" = 1 ] || exit 1
+      kubectl -n ${NS} exec deploy/${APP}-web -- wget -qO- -T 3 http://${APP}-admin >/dev/null 2>&1 && echo reachable || echo blocked
+    expect: { equals: "blocked" }
+    weight: 2
+    retrySeconds: 60
+  - id: secret-unchanged
+    description: ${APP}-api is ready and Secret ${APP}-api-creds was not modified
+    type: kubectl
+    run: |
+      [ "$(kubectl -n ${NS} get deployment ${APP}-api -o jsonpath='{.status.readyReplicas}')" = 1 ] || exit 1
+      kubectl -n ${NS} get secret ${APP}-api-creds -o json | jq -r '(.data | keys | join(",")) + "/" + (.data.token | @base64d)'
+    expect: { equals: "token/${TOKEN}" }
+    retrySeconds: 60
+    weight: 1
+  - id: cause-netpol
+    description: causes.txt names the NetworkPolicy blocking DNS
+    type: ssh
+    node: controlplane
+    run: grep -Eiq '(networkpolicy|netpol|egress).*(dns|53)|(dns|53).*(networkpolicy|netpol|egress)' /opt/course/chain/causes.txt && echo found || echo missing
+    expect: { equals: "found" }
+    weight: 1
+  - id: cause-secret
+    description: causes.txt names the wrong Secret key
+    type: ssh
+    node: controlplane
+    run: grep -Eiq 'secret|secretKeyRef|api-token' /opt/course/chain/causes.txt && echo found || echo missing
+    expect: { equals: "found" }
+    weight: 1
+  - id: cause-port
+    description: causes.txt names the Service targetPort
+    type: ssh
+    node: controlplane
+    run: grep -Eiq 'targetport|target port|api-http' /opt/course/chain/causes.txt && echo found || echo missing
+    expect: { equals: "found" }
+    weight: 1
+  - id: causes-lines
+    description: causes.txt has exactly three non-empty lines
+    type: ssh
+    node: controlplane
+    run: grep -c . /opt/course/chain/causes.txt 2>/dev/null || echo 0
+    expect: { equals: "3" }
+    weight: 1
+hints:
+  - "Start at the edge and walk inwards: NodePort Service, frontend Pods and their logs, then the Service they call, its endpoints, and the Pods behind it."
+  - "nginx resolves proxy_pass hosts when it starts. 'host not found in upstream' with an existing Service means DNS itself is unreachable from that Pod. Which policies select it?"
+  - "Three fixes: allow UDP/TCP 53 egress in ${APP}-web-egress, point secretKeyRef at the key that exists in ${APP}-api-creds, and make the Service targetPort match the container port name."

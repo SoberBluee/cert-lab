@@ -1,0 +1,54 @@
+id: bp-rbac-sa-mixed
+title: ServiceAccount with namespaced and cluster-wide rights
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 10
+points: 8
+tags: [killer-style, rbac, serviceaccount, role, clusterrole, auth-can-i]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  NS: { oneOf: [ci, pipelines, builds] }
+  SA: { oneOf: [deployer, release-bot, ci-runner] }
+  CLUSTER_RES: { oneOf: [nodes, persistentvolumes, namespaces] }
+setup:
+  - node: controlplane
+    run: kubectl delete namespace "$NS" --ignore-not-found --wait=true && kubectl create namespace "$NS"
+checks:
+  - id: deploy-rights
+    description: ${SA} can create and patch Deployments in ${NS}
+    type: kubectl
+    run: echo "$(kubectl auth can-i create deployments.apps -n ${NS} --as=system:serviceaccount:${NS}:${SA}) $(kubectl auth can-i patch deployments.apps -n ${NS} --as=system:serviceaccount:${NS}:${SA})"
+    expect: { equals: "yes yes" }
+    weight: 2
+  - id: pods-read-only
+    description: ${SA} can list Pods in ${NS} but not delete them
+    type: kubectl
+    run: echo "$(kubectl auth can-i list pods -n ${NS} --as=system:serviceaccount:${NS}:${SA}) $(kubectl auth can-i delete pods -n ${NS} --as=system:serviceaccount:${NS}:${SA})"
+    expect: { equals: "yes no" }
+    weight: 1
+  - id: cluster-res
+    description: ${SA} can list ${CLUSTER_RES} cluster-wide
+    type: kubectl
+    run: kubectl auth can-i list ${CLUSTER_RES} --as=system:serviceaccount:${NS}:${SA}
+    expect: { equals: "yes" }
+    weight: 1
+  - id: guards
+    description: ${SA} cannot delete Deployments, read Secrets, or create Deployments in default
+    type: kubectl
+    run: kubectl -n ${NS} get serviceaccount ${SA} -o name >/dev/null && echo "$(kubectl auth can-i delete deployments.apps -n ${NS} --as=system:serviceaccount:${NS}:${SA}) $(kubectl auth can-i get secrets -n ${NS} --as=system:serviceaccount:${NS}:${SA}) $(kubectl auth can-i create deployments.apps -n default --as=system:serviceaccount:${NS}:${SA})"
+    expect: { equals: "no no no" }
+    weight: 2
+  - id: probe
+    description: Deployment ${SA}-probe runs one ready Pod as ${SA}
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${SA}-probe -o jsonpath='{.spec.template.spec.serviceAccountName}/{.status.readyReplicas}'
+    expect: { equals: "${SA}/1" }
+    weight: 2
+    retrySeconds: 60
+hints:
+  - "Namespaced rights: Role + RoleBinding. ${CLUSTER_RES} are cluster-scoped, so they need a ClusterRole + ClusterRoleBinding."
+  - "kubectl create role with two --resource flags gives both resources the same verbs. Pods need a separate, read-only rule."
+  - "kubectl auth can-i <verb> <resource> -n ${NS} --as=system:serviceaccount:${NS}:${SA} tests each requirement."

@@ -1,0 +1,99 @@
+id: quick-lab-e2330i
+title: Unreachable Services and blocked frontend traffic
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 18
+points: 13
+tags: [ troubleshooting, service, endpoints, networkpolicy, dns ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ store, edge, api ] }
+  Q1_APP: { oneOf: [ web, backend, gateway ] }
+  Q1_FAULT: { oneOf: [ selector-mismatch, target-port, named-port, network-policy, not-ready, selector-extra-label, service-port, service-protocol, kube-proxy-down ], hidden: true }
+  Q2_NS: { oneOf: [ secure, payments, vault ] }
+  Q2_APP: { oneOf: [ api, ledger, billing ] }
+  Q2_FAULT: { oneOf: [ dns-egress-port, dns-namespace-selector, ingress-port, ingress-from-label, egress-to-label, egress-port, ingress-namespace-and, ingress-pod-selector ], hidden: true }
+tasks:
+  - id: q1
+    title: Service ${Q1_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-reachable
+        description: client gets the nginx page from http://${Q1_APP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://${Q1_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-endpoints
+        description: Service ${Q1_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get endpointslices -l kubernetes.io/service-name=${Q1_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-spec-service
+        description: Service ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q1_APP} 80 http" }
+        weight: 1
+      - id: q1-spec-deployment
+        description: Deployment ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q1_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q1_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q1_NS} get networkpolicy: anything selecting the ${Q1_APP} Pods?"
+  - id: q2
+    title: Frontend cannot reach ${Q2_APP}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-reachable
+        description: client gets the nginx page from http://${Q2_APP}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec client -- wget -qO- -T 3 http://${Q2_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q2-stranger-blocked
+        description: stranger still cannot reach ${Q2_APP}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec stranger -- wget -qO- -T 3 http://${Q2_APP} >/dev/null 2>&1 && echo open || echo blocked
+        expect: { equals: blocked }
+        weight: 2
+      - id: q2-default-deny
+        description: default-deny still selects every Pod for ingress and egress
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get networkpolicy default-deny -o jsonpath='{.spec.podSelector.matchLabels}|{.spec.policyTypes[*]}|{.spec.ingress}{.spec.egress}'
+        expect: { equals: "|Ingress Egress|" }
+        weight: 1
+      - id: q2-ingress-rule
+        description: ${Q2_APP}-ingress allows role=frontend on port 80
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get networkpolicy ${Q2_APP}-ingress -o jsonpath='{.spec.ingress[0].from[0].podSelector.matchLabels.role} {.spec.ingress[0].ports[0].port}'
+        expect: { equals: frontend 80 }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} get networkpolicy, then kubectl -n ${Q2_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?"
+      - "Separate DNS from the connection: kubectl -n ${Q2_NS} exec client -- nslookup ${Q2_APP}, then wget the Service IP or a Pod IP directly."
+      - "Compare every selector with the real labels: kubectl -n ${Q2_NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns."
+      - A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.

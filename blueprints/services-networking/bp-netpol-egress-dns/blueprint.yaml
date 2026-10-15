@@ -1,0 +1,11 @@
+name: Egress allow-list that keeps DNS working
+description: Killer-style egress task. The learner restricts one Pod's egress to a database port plus DNS. An existing allow-all egress policy silently overrides any restriction until it is narrowed, and forgetting DNS breaks the Service name.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: CLIENT
+    label: Client roles
+  - variable: DB
+    label: Database roles
+  - variable: DB_PORT
+    label: Database ports

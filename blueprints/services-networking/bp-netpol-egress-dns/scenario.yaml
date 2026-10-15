@@ -1,0 +1,51 @@
+id: bp-netpol-egress-dns
+title: Egress allow-list that keeps DNS working
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 10
+points: 6
+tags: [killer-style, networkpolicy, egress, dns]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [app-net, secure-net, zone-a] }
+  CLIENT: { oneOf: [client, web, worker] }
+  DB: { oneOf: [db, postgres, store] }
+  DB_PORT: { oneOf: [5432, 3306, 6379] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: db-allowed
+    description: ${CLIENT} reaches ${DB} by Service name on port ${DB_PORT}
+    type: kubectl
+    run: kubectl -n ${NS} get networkpolicy ${CLIENT}-egress -o name >/dev/null && kubectl -n ${NS} exec ${CLIENT} -- wget -qO- -T 3 http://${DB}:${DB_PORT}/
+    expect: { contains: "${DB} ok" }
+    weight: 2
+    retrySeconds: 30
+  - id: others-blocked
+    description: ${CLIENT} can no longer reach cache
+    type: kubectl
+    run: kubectl -n ${NS} exec ${CLIENT} -- true && (kubectl -n ${NS} exec ${CLIENT} -- wget -qO- -T 3 http://cache/ >/dev/null 2>&1 && echo open || echo blocked)
+    expect: { equals: "blocked" }
+    weight: 2
+    retrySeconds: 30
+  - id: others-unaffected
+    description: the egress of cache is not restricted
+    type: kubectl
+    run: kubectl -n ${NS} get networkpolicy ${CLIENT}-egress -o name >/dev/null && kubectl -n ${NS} exec cache -- wget -qO- -T 3 http://${DB}:${DB_PORT}/
+    expect: { contains: "${DB} ok" }
+    weight: 1
+    retrySeconds: 30
+  - id: policies-kept
+    description: allow-all-egress and ${CLIENT}-egress both exist
+    type: kubectl
+    run: kubectl -n ${NS} get networkpolicy allow-all-egress ${CLIENT}-egress -o name | wc -l
+    expect: { equals: "2" }
+    weight: 1
+hints:
+  - "NetworkPolicies only ever add allowed traffic. Which existing policy also selects ${CLIENT}?"
+  - "Narrow allow-all-egress with podSelector.matchExpressions role NotIn [${CLIENT}] so cache keeps open egress."
+  - "${CLIENT}-egress: one rule to podSelector role=${DB} on TCP ${DB_PORT}, one rule to UDP and TCP 53 for DNS."

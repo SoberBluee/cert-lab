@@ -1,0 +1,236 @@
+id: ks-mock-cluster-ops
+title: "Killer-style mock: cluster operations"
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 40
+points: 28
+tags: [killer-style, multi-task, kubeconfig, certificates, openssl, rbac, serviceaccount, etcd, drain, taints, pdb, context-switch]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_USER: { oneOf: [auditor, ops-lead, sre-oncall] }
+  Q2_NS: { oneOf: [ci, pipelines, builds] }
+  Q2_SA: { oneOf: [deployer, release-bot, ci-runner] }
+  Q4_NODE: { node: workers }
+  Q5_NODE: { node: workers }
+  Q5_NS: { oneOf: [payments, inventory, ledger] }
+  Q5_APP: { oneOf: [api, worker, processor] }
+  Q5_TAINT: { oneOf: [gpu, batch, storage] }
+  Q5_POD: { oneOf: [maintenance, node-debug, dedicated-job] }
+setup:
+  - node: controlplane
+    script: setup/common.sh
+tasks:
+  - id: q1
+    title: Kubeconfig forensics
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-contexts
+        description: /opt/course/q1/contexts lists every context of the ubuntu kubeconfig, one per line
+        type: ssh
+        node: controlplane
+        run: diff <(sort /opt/course/q1/contexts 2>/dev/null | sed '/^\s*$/d') <(KUBECONFIG=/home/ubuntu/.kube/config kubectl config get-contexts -o name | sort) >/dev/null && echo same || echo different
+        expect: { equals: "same" }
+        weight: 1
+      - id: q1-current-script
+        description: /opt/course/q1/current-context.sh prints the current context without using kubectl
+        type: ssh
+        node: controlplane
+        run: |
+          f=/opt/course/q1/current-context.sh
+          if [ ! -s "$f" ] || grep -q kubectl "$f"; then echo invalid; exit 0; fi
+          want=$(awk '/^current-context:/ {print $2}' /home/ubuntu/.kube/config | tr -d '"')
+          have=$(sudo -u ubuntu -H bash "$f" 2>/dev/null | tr -d '[:space:]')
+          [ -n "$want" ] && [ "$have" = "$want" ] && echo ok || echo "have=$have want=$want"
+        expect: { equals: "ok" }
+        weight: 2
+      - id: q1-cert
+        description: /opt/course/q1/${Q1_USER}.crt is the decoded client certificate of user ${Q1_USER}
+        type: ssh
+        node: controlplane
+        run: openssl x509 -in /opt/course/q1/${Q1_USER}.crt -noout -subject 2>/dev/null || echo invalid
+        expect: { matches: "CN ?= ?${Q1_USER}" }
+        weight: 2
+    hints:
+      - "kubectl config get-contexts -o name prints only the names."
+      - "The kubeconfig is plain YAML: grep or awk the current-context line of ~/.kube/config."
+      - "kubectl config view --raw -o jsonpath='{.users[?(@.name==\"${Q1_USER}\")].user.client-certificate-data}' | base64 -d > /opt/course/q1/${Q1_USER}.crt"
+
+  - id: q2
+    title: Least-privilege ServiceAccount
+    points: 7
+    setup:
+      - node: controlplane
+        run: kubectl delete namespace ${Q2_NS} --ignore-not-found --wait=true && kubectl create namespace ${Q2_NS}
+        lane: q2
+    checks:
+      - id: q2-deploy-rights
+        description: ${Q2_SA} can create and patch Deployments in ${Q2_NS}
+        type: kubectl
+        run: echo "$(kubectl auth can-i create deployments.apps -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}) $(kubectl auth can-i patch deployments.apps -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA})"
+        expect: { equals: "yes yes" }
+        weight: 2
+      - id: q2-nodes
+        description: ${Q2_SA} can list nodes cluster-wide
+        type: kubectl
+        run: kubectl auth can-i list nodes --as=system:serviceaccount:${Q2_NS}:${Q2_SA}
+        expect: { equals: "yes" }
+        weight: 1
+      - id: q2-no-delete
+        description: ${Q2_SA} cannot delete Deployments
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get serviceaccount ${Q2_SA} -o name >/dev/null && kubectl auth can-i delete deployments.apps -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}
+        expect: { equals: "no" }
+        weight: 1
+      - id: q2-namespaced
+        description: ${Q2_SA} cannot create Deployments outside ${Q2_NS}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get serviceaccount ${Q2_SA} -o name >/dev/null && kubectl auth can-i create deployments.apps -n default --as=system:serviceaccount:${Q2_NS}:${Q2_SA}
+        expect: { equals: "no" }
+        weight: 1
+      - id: q2-no-secrets
+        description: ${Q2_SA} cannot read Secrets
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get serviceaccount ${Q2_SA} -o name >/dev/null && kubectl auth can-i get secrets -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}
+        expect: { equals: "no" }
+        weight: 1
+      - id: q2-probe
+        description: Deployment ${Q2_SA}-probe runs one ready Pod as ServiceAccount ${Q2_SA}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_SA}-probe -o jsonpath='{.spec.template.spec.serviceAccountName}/{.status.readyReplicas}'
+        expect: { equals: "${Q2_SA}/1" }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - "Namespaced rights need a Role and RoleBinding; nodes are cluster-scoped, so they need a ClusterRole and ClusterRoleBinding."
+      - "Binding the deployment rights with a ClusterRoleBinding would grant them in every namespace."
+      - "kubectl -n ${Q2_NS} create role ${Q2_SA}-role --verb=get,list,watch,create,update,patch --resource=deployments.apps,pods; kubectl create clusterrole ${Q2_SA}-nodes --verb=get,list --resource=nodes"
+
+  - id: q3
+    title: etcd snapshot
+    points: 4
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - id: q3-valid
+        description: /opt/course/q3/etcd-snapshot.db is a valid etcd snapshot
+        type: ssh
+        node: controlplane
+        run: ETCDCTL_API=3 etcdctl snapshot status /opt/course/q3/etcd-snapshot.db -w json 2>/dev/null | jq -r '.totalKey > 0'
+        expect: { equals: "true" }
+        weight: 2
+      - id: q3-fresh
+        description: the snapshot was taken after the lab started
+        type: ssh
+        node: controlplane
+        run: |
+          rev=$(ETCDCTL_API=3 etcdctl snapshot status /opt/course/q3/etcd-snapshot.db -w json 2>/dev/null | jq -r .revision)
+          [ -n "$rev" ] && [ "$rev" -ge "$(cat /root/.cka/q3-etcd-rev)" ] && echo fresh || echo stale
+        expect: { equals: "fresh" }
+        weight: 1
+      - id: q3-status
+        description: /opt/course/q3/snapshot-status.txt holds the status of that snapshot
+        type: ssh
+        node: controlplane
+        run: |
+          rev=$(ETCDCTL_API=3 etcdctl snapshot status /opt/course/q3/etcd-snapshot.db -w json 2>/dev/null | jq -r .revision)
+          [ -n "$rev" ] && grep -qw "$rev" /opt/course/q3/snapshot-status.txt 2>/dev/null && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 1
+    hints:
+      - "The etcd static Pod manifest shows the endpoint and certificate files."
+      - "sudo ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/course/q3/etcd-snapshot.db"
+      - "etcdctl snapshot status <file> -w table (or etcdutl) prints hash, revision, keys and size."
+
+  - id: q4
+    title: Certificate investigation
+    points: 4
+    checks:
+      - id: q4-apiserver-expiry
+        description: /opt/course/q4/apiserver-expiry holds the expiry date of the API server certificate
+        type: ssh
+        node: controlplane
+        run: |
+          want=$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2)
+          grep -qF "$want" /opt/course/q4/apiserver-expiry 2>/dev/null && echo ok || echo "missing $want"
+        expect: { equals: "ok" }
+        weight: 1
+      - id: q4-renew
+        description: /opt/course/q4/renew.sh holds the kubeadm command that renews only the API server certificate
+        type: ssh
+        node: controlplane
+        run: grep -Eq 'kubeadm +certs +renew +apiserver( |$)' /opt/course/q4/renew.sh 2>/dev/null && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 1
+      - id: q4-kubelet-client
+        description: /opt/course/q4/kubelet-certs names issuer and usage of ${Q4_NODE}'s kubelet client certificate
+        type: ssh
+        node: controlplane
+        run: grep -q 'CN *= *kubernetes' /opt/course/q4/kubelet-certs 2>/dev/null && grep -q 'TLS Web Client Authentication' /opt/course/q4/kubelet-certs && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 1
+      - id: q4-kubelet-server
+        description: /opt/course/q4/kubelet-certs names issuer and usage of ${Q4_NODE}'s kubelet serving certificate
+        type: ssh
+        node: controlplane
+        run: grep -q -- '${Q4_NODE}-ca@' /opt/course/q4/kubelet-certs 2>/dev/null && grep -q 'TLS Web Server Authentication' /opt/course/q4/kubelet-certs && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 1
+    hints:
+      - "openssl x509 -in <file> -noout -enddate | -issuer | -ext extendedKeyUsage (or -text and read it)."
+      - "The kubelet's certificates live on ${Q4_NODE} in /var/lib/kubelet/pki: kubelet-client-current.pem (client) and kubelet.crt (serving)."
+      - "kubeadm certs renew --help lists the certificate names."
+
+  - id: q5
+    title: Drain a node and dedicate it
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        timeoutSeconds: 400
+        lane: q5
+    checks:
+      - id: q5-drained
+        description: no Pod of ${Q5_APP} runs on ${Q5_NODE}, and all 4 replicas are ready elsewhere
+        type: kubectl
+        run: echo "$(kubectl -n ${Q5_NS} get pods -l app=${Q5_APP} --field-selector spec.nodeName=${Q5_NODE} -o name | wc -l)/$(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.status.readyReplicas}')"
+        expect: { equals: "0/4" }
+        weight: 2
+        retrySeconds: 60
+      - id: q5-scratch-gone
+        description: the unmanaged Pod scratch is gone
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get pod scratch --ignore-not-found -o name
+        expect: { equals: "" }
+        weight: 1
+      - id: q5-pdb-kept
+        description: ${Q5_NODE} is cordoned or tainted, and PDB ${Q5_APP}-pdb still exists unchanged
+        type: kubectl
+        run: kubectl get node ${Q5_NODE} -o jsonpath='{.spec.unschedulable}{.spec.taints[?(@.key=="dedicated")].key}' | grep -q . && kubectl -n ${Q5_NS} get pdb ${Q5_APP}-pdb -o jsonpath='{.spec.minAvailable}'
+        expect: { equals: "3" }
+        weight: 1
+      - id: q5-taint
+        description: ${Q5_NODE} is schedulable again and tainted dedicated=${Q5_TAINT}:NoSchedule
+        type: kubectl
+        run: kubectl get node ${Q5_NODE} -o jsonpath='{.spec.unschedulable}/{.spec.taints[?(@.key=="dedicated")].value}:{.spec.taints[?(@.key=="dedicated")].effect}'
+        expect: { equals: "/${Q5_TAINT}:NoSchedule" }
+        weight: 2
+      - id: q5-pod
+        description: Pod ${Q5_POD} runs on ${Q5_NODE}, pinned by nodeSelector and tolerating the taint
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get pod ${Q5_POD} -o json | jq -r '"\(.status.phase)/\(.spec.nodeName)/\(.spec.nodeSelector["kubernetes.io/hostname"] // "")/\([.spec.tolerations[]? | select(.key == "dedicated")] | length)"'
+        expect: { equals: "Running/${Q5_NODE}/${Q5_NODE}/1" }
+        weight: 2
+        retrySeconds: 60
+    hints:
+      - "kubectl drain refuses to delete unmanaged Pods and DaemonSet Pods without flags. Read its error messages."
+      - "kubectl drain ${Q5_NODE} --ignore-daemonsets --force. Evictions respect the PDB, so the drain waits for replacements to become ready."
+      - "kubectl taint node ${Q5_NODE} dedicated=${Q5_TAINT}:NoSchedule; kubectl uncordon ${Q5_NODE}; the Pod needs nodeSelector kubernetes.io/hostname: ${Q5_NODE} and a toleration for key dedicated."

@@ -1,0 +1,60 @@
+id: bp-spread-sidecar
+title: Init container, log sidecar and one Pod per node
+domain: workloads
+difficulty: 3
+estimatedMinutes: 12
+points: 9
+tags: [killer-style, init-container, sidecar, emptydir, anti-affinity, resources]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [web-tier, frontline, edge-apps] }
+  DEPLOY: { oneOf: [ledger-ui, portal, dashboard] }
+  SIDECAR_IMAGE: { oneOf: ["busybox:1.36", "busybox:1.37", "alpine:3.21"] }
+setup:
+  - node: controlplane
+    run: kubectl delete namespace "$NS" --ignore-not-found --wait=true && kubectl create namespace "$NS" && mkdir -p /opt/course && rm -f /opt/course/pending-reason.txt && chown ubuntu:ubuntu /opt/course
+checks:
+  - id: replicas
+    description: ${DEPLOY} wants 3 replicas and exactly 2 are ready, on different nodes
+    type: kubectl
+    run: echo "$(kubectl -n ${NS} get deployment ${DEPLOY} -o jsonpath='{.spec.replicas}/{.status.readyReplicas}')/$(kubectl -n ${NS} get pods -l app=${DEPLOY} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l | tr -d ' ')"
+    expect: { equals: "3/2/2" }
+    weight: 2
+    retrySeconds: 90
+  - id: anti-affinity
+    description: ${DEPLOY} uses required podAntiAffinity on kubernetes.io/hostname
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${DEPLOY} -o jsonpath='{.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey}'
+    expect: { equals: "kubernetes.io/hostname" }
+    weight: 1
+  - id: page
+    description: nginx serves the page written by the init container
+    type: kubectl
+    run: kubectl -n ${NS} exec deploy/${DEPLOY} -c web -- wget -qO- -T 3 http://localhost/
+    expect: { contains: "<h1>${DEPLOY}</h1>" }
+    weight: 2
+    retrySeconds: 60
+  - id: sidecar
+    description: sidecar log-tail (${SIDECAR_IMAGE}) prints the nginx access log
+    type: kubectl
+    run: |
+      img=$(kubectl -n ${NS} get deployment ${DEPLOY} -o json | jq -r '[.spec.template.spec.containers[], (.spec.template.spec.initContainers // [])[]] | map(select(.name == "log-tail")) | .[0].image')
+      kubectl -n ${NS} exec deploy/${DEPLOY} -c web -- wget -qO- -T 3 http://localhost/ >/dev/null 2>&1; sleep 2
+      kubectl -n ${NS} logs deploy/${DEPLOY} -c log-tail --tail=50 | grep -q 'GET / ' && echo "$img" || echo no-log
+    expect: { equals: "${SIDECAR_IMAGE}" }
+    weight: 2
+    retrySeconds: 60
+  - id: reason
+    description: /opt/course/pending-reason.txt holds the scheduler's reason
+    type: ssh
+    node: controlplane
+    run: grep -Eiq 'anti-affinity|antiaffinity' /opt/course/pending-reason.txt && echo found || echo missing
+    expect: { equals: "found" }
+    weight: 2
+hints:
+  - "Two emptyDir volumes: the init container writes the page into one, and nginx and the sidecar share the other at /var/log/nginx."
+  - "Mounting a volume over /var/log/nginx hides the image's stdout symlinks, so nginx writes a real access.log the sidecar can tail -F."
+  - "podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution with topologyKey kubernetes.io/hostname; kubectl -n ${NS} describe pod <pending pod> shows the reason."

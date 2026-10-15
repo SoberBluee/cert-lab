@@ -1,0 +1,10 @@
+name: ServiceAccount with namespaced and cluster-wide rights
+description: Killer-style RBAC task. The learner combines a Role and RoleBinding with a ClusterRole and ClusterRoleBinding for one ServiceAccount, keeps Pods read-only with a separate rule, and runs a Deployment as that ServiceAccount. Guard checks catch over-broad bindings.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: SA
+    label: ServiceAccount names
+  - variable: CLUSTER_RES
+    label: Cluster-scoped resources
+    help: The cluster-scoped resource the ServiceAccount may get and list.

@@ -1,0 +1,249 @@
+id: ks-mock-workloads
+title: "Killer-style mock: workloads and scheduling"
+domain: workloads
+difficulty: 3
+estimatedMinutes: 40
+points: 32
+tags: [killer-style, multi-task, init-container, sidecar, anti-affinity, rollout, rollback, hpa, pdb, static-pod, daemonset, priorityclass, context-switch]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  CTX_OPS: { oneOf: [ops-east, ops-west, ops-central] }
+  Q1_NS: { oneOf: [web-tier, frontline, edge-apps] }
+  Q1_DEPLOY: { oneOf: [ledger-ui, portal, dashboard] }
+  Q2_NS: { oneOf: [releases, deploys, rollouts] }
+  Q2_DEPLOY: { oneOf: [api, worker, gateway] }
+  Q2_TARGET: { oneOf: [1, 2], hidden: true }
+  Q3_NS: { oneOf: [scaling, elastic, burst] }
+  Q3_DEPLOY: { oneOf: [checkout, search, render] }
+  Q4_NODE: { node: workers }
+  Q4_POD: { oneOf: [static-web, node-probe, edge-cache] }
+  Q4_NODEPORT: { range: [31000, 31500] }
+  Q5_NS: { oneOf: [monitoring, observability, node-agents] }
+  Q5_DS: { oneOf: [node-exporter, log-agent, net-probe] }
+  Q5_PC: { oneOf: [agent-critical, node-high, infra-priority] }
+  Q5_VALUE: { range: [900000, 999999] }
+setup:
+  - node: controlplane
+    script: setup/contexts.sh
+solution:
+  - node: ${Q4_NODE}
+    script: solution-q4-node.sh
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 600
+tasks:
+  - id: q1
+    title: Deployment with init container, sidecar and one Pod per node
+    points: 9
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-replicas
+        description: ${Q1_DEPLOY} wants 3 replicas and exactly 2 are ready
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_DEPLOY} -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: "3/2" }
+        weight: 2
+        retrySeconds: 90
+      - id: q1-spread
+        description: the running Pods of ${Q1_DEPLOY} are on two different nodes
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pods -l app=${Q1_DEPLOY} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-anti-affinity
+        description: ${Q1_DEPLOY} uses required podAntiAffinity on kubernetes.io/hostname
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_DEPLOY} -o jsonpath='{.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey}'
+        expect: { equals: "kubernetes.io/hostname" }
+        weight: 1
+      - id: q1-page
+        description: nginx serves the page written by the init container
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec deploy/${Q1_DEPLOY} -c web -- wget -qO- -T 3 http://localhost/
+        expect: { contains: "<h1>${Q1_DEPLOY}</h1>" }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-sidecar
+        description: sidecar log-tail prints the nginx access log
+        type: kubectl
+        run: |
+          kubectl -n ${Q1_NS} exec deploy/${Q1_DEPLOY} -c web -- wget -qO- -T 3 http://localhost/ >/dev/null 2>&1; sleep 2
+          kubectl -n ${Q1_NS} logs deploy/${Q1_DEPLOY} -c log-tail --tail=50
+        expect: { contains: "GET / " }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-resources
+        description: container web requests 50m CPU and 64Mi memory, limited to 128Mi
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_DEPLOY} -o jsonpath='{.spec.template.spec.containers[?(@.name=="web")].resources.requests.cpu}/{.spec.template.spec.containers[?(@.name=="web")].resources.requests.memory}/{.spec.template.spec.containers[?(@.name=="web")].resources.limits.memory}'
+        expect: { equals: "50m/64Mi/128Mi" }
+        weight: 1
+      - id: q1-reason
+        description: /opt/course/q1/pending-reason.txt holds the scheduler's reason for the Pending Pod
+        type: ssh
+        node: controlplane
+        run: grep -Eiq 'anti-affinity|antiaffinity' /opt/course/q1/pending-reason.txt && echo found || echo missing
+        expect: { equals: "found" }
+        weight: 1
+    hints:
+      - "Generate a skeleton with kubectl create deployment --dry-run=client -o yaml, then add initContainers, a second container, volumes and affinity by hand."
+      - "Two emptyDir volumes: one for the page (init writes, nginx reads) and one mounted at /var/log/nginx in both nginx and the sidecar, so nginx writes real files instead of its stdout symlinks."
+      - "affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution: [{labelSelector: {matchLabels: {app: ${Q1_DEPLOY}}}, topologyKey: kubernetes.io/hostname}]. The control plane is tainted, so the third replica stays Pending: kubectl describe pod shows why."
+
+  - id: q2
+    title: Roll back to the approved revision
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-rollback
+        description: ${Q2_DEPLOY} runs the image of the security-approved revision, fully rolled out
+        type: script
+        script: checks/q2-rollback.sh
+        expect: { equals: "ok" }
+        weight: 3
+        retrySeconds: 90
+      - id: q2-strategy
+        description: ${Q2_DEPLOY} rolls with maxSurge 0 and maxUnavailable 1
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_DEPLOY} -o jsonpath='{.spec.strategy.type}/{.spec.strategy.rollingUpdate.maxSurge}/{.spec.strategy.rollingUpdate.maxUnavailable}'
+        expect: { equals: "RollingUpdate/0/1" }
+        weight: 1
+      - id: q2-image-file
+        description: /opt/course/q2/image.txt holds the approved image
+        type: script
+        script: checks/q2-image-file.sh
+        expect: { equals: "ok" }
+        weight: 1
+    hints:
+      - "kubectl rollout history shows a CHANGE-CAUSE column. Read every line: not every revision that mentions security is approved."
+      - "kubectl -n ${Q2_NS} rollout undo deployment/${Q2_DEPLOY} --to-revision=<N>. 'kubectl rollout history --revision=N' prints that revision's image."
+      - "Set the strategy with kubectl edit or kubectl patch: spec.strategy.rollingUpdate.maxSurge: 0, maxUnavailable: 1."
+
+  - id: q3
+    title: Autoscale and protect a Deployment
+    points: 6
+    context: ${CTX_OPS}
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - id: q3-hpa-spec
+        description: HPA ${Q3_DEPLOY} scales Deployment ${Q3_DEPLOY} between 2 and 5 on 60% CPU
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_DEPLOY} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[0].resource.name}/{.spec.metrics[0].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q3_DEPLOY}/2/5/cpu/60" }
+        weight: 2
+      - id: q3-hpa-behavior
+        description: HPA ${Q3_DEPLOY} scales down after a 30 second stabilization window
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_DEPLOY} -o jsonpath='{.spec.behavior.scaleDown.stabilizationWindowSeconds}'
+        expect: { equals: "30" }
+        weight: 1
+      - id: q3-hpa-active
+        description: HPA ${Q3_DEPLOY} can read CPU utilization (ScalingActive)
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_DEPLOY} -o jsonpath='{.status.conditions[?(@.type=="ScalingActive")].status}'
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 150
+      - id: q3-pdb
+        description: PDB ${Q3_DEPLOY}-pdb keeps 1 Pod of ${Q3_DEPLOY} available
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get pdb ${Q3_DEPLOY}-pdb -o jsonpath='{.spec.minAvailable}/{.status.expectedPods}'
+        expect: { matches: "^1/[2-5]$" }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - "kubectl autoscale creates autoscaling/v2 HPAs; behavior needs kubectl edit or a manifest."
+      - "kubectl describe hpa ${Q3_DEPLOY}: an HPA cannot compute utilization for containers without a CPU request."
+      - "kubectl -n ${Q3_NS} set resources deployment ${Q3_DEPLOY} --requests=cpu=50m, then kubectl create pdb ${Q3_DEPLOY}-pdb --selector=app=${Q3_DEPLOY} --min-available=1."
+
+  - id: q4
+    title: Static Pod on a worker, exposed on a NodePort
+    points: 6
+    checks:
+      - id: q4-mirror
+        description: mirror Pod ${Q4_POD}-${Q4_NODE} is Running on ${Q4_NODE} from a manifest file
+        type: kubectl
+        run: kubectl -n default get pod ${Q4_POD}-${Q4_NODE} -o jsonpath='{.status.phase}/{.spec.nodeName}/{.metadata.annotations.kubernetes\.io/config\.source}'
+        expect: { equals: "Running/${Q4_NODE}/file" }
+        weight: 2
+        retrySeconds: 60
+      - id: q4-resources
+        description: the static Pod requests 10m CPU and 20Mi memory
+        type: kubectl
+        run: kubectl -n default get pod ${Q4_POD}-${Q4_NODE} -o jsonpath='{.spec.containers[0].image}/{.spec.containers[0].resources.requests.cpu}/{.spec.containers[0].resources.requests.memory}'
+        expect: { equals: "nginx:1.27-alpine/10m/20Mi" }
+        weight: 1
+      - id: q4-service
+        description: Service ${Q4_POD}-svc is a NodePort on ${Q4_NODEPORT} with the static Pod as endpoint
+        type: kubectl
+        run: kubectl -n default get service ${Q4_POD}-svc -o jsonpath='{.spec.type}/{.spec.ports[0].nodePort}' && echo -n / && kubectl -n default get endpointslices -l kubernetes.io/service-name=${Q4_POD}-svc -o jsonpath='{.items[*].endpoints[*].targetRef.name}'
+        expect: { equals: "NodePort/${Q4_NODEPORT}/${Q4_POD}-${Q4_NODE}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q4-reachable
+        description: http://${Q4_NODE}:${Q4_NODEPORT} answers with the nginx page
+        type: kubectl
+        run: curl -s -m 5 "http://$(kubectl get node ${Q4_NODE} -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}'):${Q4_NODEPORT}/"
+        expect: { contains: "Welcome to nginx" }
+        weight: 1
+        retrySeconds: 30
+    hints:
+      - "The kubelet on ${Q4_NODE} watches the staticPodPath from /var/lib/kubelet/config.yaml (usually /etc/kubernetes/manifests)."
+      - "Write the Pod manifest with kubectl run ${Q4_POD} --image=nginx:1.27-alpine $do on controlplane, add resources and a label, copy it to ${Q4_NODE}. The mirror Pod gets the node name as suffix."
+      - "kubectl expose pod ${Q4_POD}-${Q4_NODE} --name=${Q4_POD}-svc --type=NodePort --port=80 $do, then set nodePort: ${Q4_NODEPORT}."
+
+  - id: q5
+    title: DaemonSet on every node with its own priority
+    points: 6
+    context: ${CTX_OPS}
+    checks:
+      - id: q5-priorityclass
+        description: PriorityClass ${Q5_PC} has value ${Q5_VALUE}, never preempts and is not the global default
+        type: kubectl
+        run: kubectl get priorityclass ${Q5_PC} -o json | jq -r '"\(.value)/\(.preemptionPolicy)/\(.globalDefault // false)"'
+        expect: { equals: "${Q5_VALUE}/Never/false" }
+        weight: 1
+      - id: q5-everywhere
+        description: DaemonSet ${Q5_DS} has a ready Pod on all 3 nodes, control plane included
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get daemonset ${Q5_DS} -o jsonpath='{.status.desiredNumberScheduled}/{.status.numberReady}'
+        expect: { equals: "3/3" }
+        weight: 2
+        retrySeconds: 90
+      - id: q5-pc-used
+        description: the DaemonSet template uses PriorityClass ${Q5_PC}
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get daemonset ${Q5_DS} -o jsonpath='{.spec.template.spec.priorityClassName}'
+        expect: { equals: "${Q5_PC}" }
+        weight: 1
+      - id: q5-pod-priority
+        description: the running ${Q5_DS} Pods carry priority ${Q5_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get pods -o json | jq -r '[.items[] | select(.metadata.ownerReferences[0].name == "${Q5_DS}") | .spec.priority] | unique | map(tostring) | join(",")'
+        expect: { equals: "${Q5_VALUE}" }
+        weight: 1
+        retrySeconds: 60
+      - id: q5-taint-kept
+        description: the control plane still carries its NoSchedule taint
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get daemonset ${Q5_DS} -o name >/dev/null && kubectl get node controlplane -o jsonpath='{.spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].effect}'
+        expect: { equals: "NoSchedule" }
+        weight: 1
+    hints:
+      - "There is no kubectl create daemonset: create a Deployment with $do, change the kind and delete replicas and strategy."
+      - "kubectl create priorityclass ${Q5_PC} --value=${Q5_VALUE} --preemption-policy=Never"
+      - "The control plane carries the taint node-role.kubernetes.io/control-plane:NoSchedule; add a toleration with operator Exists for it."

@@ -1,0 +1,103 @@
+id: ks-hardened-stateful
+title: "Killer-style: hardened stateful workload on a pinned volume"
+domain: storage
+difficulty: 3
+estimatedMinutes: 20
+points: 17
+tags: [killer-style, multi-step, pv, pvc, node-affinity, hostpath, security-context, context-switch]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: ${CTX}
+settleSeconds: 30
+variables:
+  CTX: { oneOf: [prod-admin, ops-prod, k8s-prod] }
+  DECOY_NS: { oneOf: [staging, sandbox, scratch] }
+  NS: { oneOf: [secure-ops, vault-ops, audit-ops] }
+  NODE: { node: workers }
+  RUN_UID: { oneOf: [10001, 10500, 20001] }
+  FS_GID: { oneOf: [2000, 3000, 4000] }
+setup:
+  - node: ${NODE}
+    run: rm -rf /mnt/sec-data
+  - node: controlplane
+    script: setup/contexts.sh
+solution:
+  - node: ${NODE}
+    run: mkdir -p /mnt/sec-data && chown "$RUN_UID:$FS_GID" /mnt/sec-data && chmod 0770 /mnt/sec-data
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 300
+checks:
+  - id: pv-spec
+    description: PV sec-pv is 3Gi, ReadWriteOnce, Retain, hostPath /mnt/sec-data (DirectoryOrCreate)
+    type: kubectl
+    run: kubectl get pv sec-pv -o jsonpath='{.spec.capacity.storage}/{.spec.accessModes[0]}/{.spec.persistentVolumeReclaimPolicy}/{.spec.hostPath.path}/{.spec.hostPath.type}'
+    expect: { equals: "3Gi/ReadWriteOnce/Retain//mnt/sec-data/DirectoryOrCreate" }
+    weight: 2
+  - id: pv-affinity
+    description: sec-pv can only be used on ${NODE}
+    type: kubectl
+    run: kubectl get pv sec-pv -o jsonpath='{.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].key}={.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[*]}'
+    expect: { equals: "kubernetes.io/hostname=${NODE}" }
+    weight: 1
+  - id: pvc-bound
+    description: PVC sec-pvc in ${NS} requests 2Gi and is Bound to sec-pv
+    type: kubectl
+    run: kubectl -n ${NS} get pvc sec-pvc -o jsonpath='{.status.phase}/{.spec.volumeName}/{.spec.resources.requests.storage}'
+    expect: { equals: "Bound/sec-pv/2Gi" }
+    weight: 2
+    retrySeconds: 30
+  - id: pod-running
+    description: Pod sec-vault in ${NS} is Running on ${NODE}
+    type: kubectl
+    run: kubectl -n ${NS} get pod sec-vault -o jsonpath='{.status.phase}/{.spec.nodeName}'
+    expect: { equals: "Running/${NODE}" }
+    weight: 2
+    retrySeconds: 60
+  - id: pod-mount
+    description: sec-vault mounts sec-pvc at /secure/vault
+    type: kubectl
+    run: |
+      kubectl -n ${NS} get pod sec-vault -o json | jq -r '
+        (.spec.volumes[] | select(.persistentVolumeClaim.claimName == "sec-pvc") | .name) as $v
+        | [.spec.containers[0].volumeMounts[] | select(.name == $v) | .mountPath] | join(",")'
+    expect: { equals: "/secure/vault" }
+    weight: 1
+  - id: pod-security
+    description: Pod securityContext is runAsNonRoot, runAsUser ${RUN_UID}, fsGroup ${FS_GID}
+    type: kubectl
+    run: kubectl -n ${NS} get pod sec-vault -o jsonpath='{.spec.securityContext.runAsNonRoot}/{.spec.securityContext.runAsUser}/{.spec.securityContext.fsGroup}'
+    expect: { equals: "true/${RUN_UID}/${FS_GID}" }
+    weight: 2
+  - id: container-security
+    description: the container has a read-only root filesystem and drops ALL capabilities
+    type: kubectl
+    run: kubectl -n ${NS} get pod sec-vault -o jsonpath='{.spec.containers[0].image}/{.spec.containers[0].securityContext.readOnlyRootFilesystem}/{.spec.containers[0].securityContext.capabilities.drop[*]}'
+    expect: { matches: "^busybox[^/]*/true/ALL$" }
+    weight: 2
+  - id: heartbeat
+    description: sec-vault keeps writing /secure/vault/heartbeat, owned by UID ${RUN_UID}, onto ${NODE}:/mnt/sec-data
+    type: ssh
+    node: ${NODE}
+    run: |
+      f=/mnt/sec-data/heartbeat
+      if [ -s "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 60 ]; then stat -c %u "$f"; else echo missing-or-stale; fi
+    expect: { equals: "${RUN_UID}" }
+    weight: 3
+    retrySeconds: 60
+  - id: no-user-override
+    description: no container overrides the Pod-level user settings
+    type: kubectl
+    run: kubectl -n ${NS} get pod sec-vault -o jsonpath='{.metadata.name}:{.spec.initContainers[*].securityContext.runAsUser}{.spec.initContainers[*].securityContext.runAsNonRoot}{.spec.containers[*].securityContext.runAsUser}{.spec.containers[*].securityContext.runAsNonRoot}'
+    expect: { equals: "sec-vault:" }
+    weight: 1
+  - id: decoy-clean
+    description: nothing was created in namespace ${DECOY_NS} by mistake
+    type: kubectl
+    run: kubectl -n ${NS} get pod sec-vault -o name >/dev/null && kubectl -n ${DECOY_NS} get pods,pvc -o name | wc -l
+    expect: { equals: "0" }
+    weight: 1
+hints:
+  - "Read the task top to bottom first. Check which namespace the context you switched to defaults to: kubectl config get-contexts."
+  - "A hostPath directory created by the kubelet is owned by root with mode 0755, and fsGroup is not applied to hostPath volumes. A non-root user cannot write there."
+  - "ssh ${NODE}, then: sudo mkdir -p /mnt/sec-data && sudo chown ${RUN_UID}:${FS_GID} /mnt/sec-data. The PV needs storageClassName set to the same value on the PV and the PVC (or empty on both)."

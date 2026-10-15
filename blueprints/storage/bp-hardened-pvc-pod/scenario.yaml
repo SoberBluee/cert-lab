@@ -1,0 +1,68 @@
+id: bp-hardened-pvc-pod
+title: Hardened Pod on a node-pinned hostPath volume
+domain: storage
+difficulty: 3
+estimatedMinutes: 15
+points: 12
+tags: [killer-style, pv, pvc, node-affinity, hostpath, security-context]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [secure-ops, vault-ops, audit-ops] }
+  VOL: { oneOf: [sec, vault, backup] }
+  NODE: { node: workers }
+  RUN_UID: { oneOf: [10001, 10500, 20001] }
+  FS_GID: { oneOf: [2000, 3000, 4000] }
+setup:
+  - node: ${NODE}
+    run: rm -rf "/mnt/$VOL-data"
+  - node: controlplane
+    run: kubectl delete namespace "$NS" --ignore-not-found --wait=true && kubectl create namespace "$NS"
+solution:
+  - node: ${NODE}
+    run: mkdir -p "/mnt/$VOL-data" && chown "$RUN_UID:$FS_GID" "/mnt/$VOL-data" && chmod 0770 "/mnt/$VOL-data"
+  - node: controlplane
+    script: solution.sh
+checks:
+  - id: pv-spec
+    description: PV ${VOL}-pv is 1Gi, ReadWriteOnce, Retain, hostPath /mnt/${VOL}-data, pinned to ${NODE}
+    type: kubectl
+    run: kubectl get pv ${VOL}-pv -o jsonpath='{.spec.capacity.storage}/{.spec.accessModes[0]}/{.spec.persistentVolumeReclaimPolicy}/{.spec.hostPath.path}/{.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[*]}'
+    expect: { equals: "1Gi/ReadWriteOnce/Retain//mnt/${VOL}-data/${NODE}" }
+    weight: 2
+  - id: pvc-bound
+    description: PVC ${VOL}-pvc is Bound to ${VOL}-pv
+    type: kubectl
+    run: kubectl -n ${NS} get pvc ${VOL}-pvc -o jsonpath='{.status.phase}/{.spec.volumeName}'
+    expect: { equals: "Bound/${VOL}-pv" }
+    weight: 2
+    retrySeconds: 30
+  - id: pod-running
+    description: Pod ${VOL}-app is Running on ${NODE}
+    type: kubectl
+    run: kubectl -n ${NS} get pod ${VOL}-app -o jsonpath='{.status.phase}/{.spec.nodeName}'
+    expect: { equals: "Running/${NODE}" }
+    weight: 2
+    retrySeconds: 60
+  - id: pod-security
+    description: ${VOL}-app runs as non-root UID ${RUN_UID}, fsGroup ${FS_GID}, read-only root, no capabilities
+    type: kubectl
+    run: kubectl -n ${NS} get pod ${VOL}-app -o jsonpath='{.spec.securityContext.runAsNonRoot}/{.spec.securityContext.runAsUser}/{.spec.securityContext.fsGroup}/{.spec.containers[0].securityContext.readOnlyRootFilesystem}/{.spec.containers[0].securityContext.capabilities.drop[*]}'
+    expect: { equals: "true/${RUN_UID}/${FS_GID}/true/ALL" }
+    weight: 3
+  - id: heartbeat
+    description: a fresh /mnt/${VOL}-data/heartbeat owned by UID ${RUN_UID} exists on ${NODE}
+    type: ssh
+    node: ${NODE}
+    run: |
+      f=/mnt/${VOL}-data/heartbeat
+      if [ -s "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 60 ]; then stat -c %u "$f"; else echo missing-or-stale; fi
+    expect: { equals: "${RUN_UID}" }
+    weight: 3
+    retrySeconds: 60
+hints:
+  - "There is no default StorageClass: give the PV and the PVC the same storageClassName."
+  - "The PV's node affinity is enough to land the Pod on ${NODE}. If the Pod runs but no heartbeat appears, check who owns the host directory."
+  - "fsGroup is not applied to hostPath volumes. ssh ${NODE} and sudo chown ${RUN_UID}:${FS_GID} /mnt/${VOL}-data."

@@ -1,0 +1,10 @@
+name: Init container, log sidecar and one Pod per node
+description: Killer-style multi-container Deployment. An init container seeds the web content, a sidecar follows nginx's access log through a shared emptyDir, and required pod anti-affinity leaves one replica Pending. The learner records the scheduler's reason.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: DEPLOY
+    label: Deployment names
+  - variable: SIDECAR_IMAGE
+    label: Sidecar images
+    help: Any image with a POSIX shell and tail.

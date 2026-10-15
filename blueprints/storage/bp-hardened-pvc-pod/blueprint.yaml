@@ -1,0 +1,12 @@
+name: Hardened Pod on a node-pinned hostPath volume
+description: Killer-style multi-step task. The learner creates a hostPath PV pinned to one worker, a PVC, and a non-root Pod with a read-only root filesystem and no capabilities that must write to the volume. The trap is that fsGroup does not apply to hostPath, so the directory on the node needs the right owner.
+knobs:
+  - variable: NS
+    label: Namespace names
+  - variable: VOL
+    label: Volume name prefixes
+    help: Used for the PV (<prefix>-pv), PVC (<prefix>-pvc), Pod (<prefix>-app) and the host directory /mnt/<prefix>-data.
+  - variable: RUN_UID
+    label: User IDs
+  - variable: FS_GID
+    label: fsGroup IDs
