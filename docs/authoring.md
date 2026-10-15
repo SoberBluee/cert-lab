@@ -81,6 +81,32 @@ tasks:
 
 Top-level `setup` and tasks with `setupStage: 0` run when the session starts. A task with a higher stage is set up the first time the learner opens it, after every unopened task with a lower non-zero stage. Quick Create uses stage 1 for questions that break a node and stage 2 for questions that may take the API server down, so a broken control plane does not block the other questions. A question that was never opened scores 0 and its checks are reported as not attempted. `dry-run` and `verify` set up every task at start, in stage order.
 
+#### Task variants
+
+A question slot can hold several sibling questions, of which one is rolled per start. Name a visible `oneOf` variable in `variant`, and give `variants` one entry per value (the keys must equal the values exactly):
+
+```yaml
+variables:
+  Q5_KIND: { oneOf: [drain-dedicate, noexecute-evict] }
+tasks:
+  - id: q5
+    title: Node maintenance
+    points: 8                  # shared by every variant: each variant's check weights must add up to it
+    setup: [...]               # optional; runs for every variant, before the variant's own setup
+    variant: Q5_KIND
+    variants:
+      drain-dedicate:
+        title: Drain a node and dedicate it     # optional; replaces the task title
+        setup: [...]                             # optional; context and setupStage too
+        checks: [...]                            # required
+        hints: [...]                             # replace the task's hints
+      noexecute-evict: { ... }
+```
+
+The text of each variant lives in `tasks/<id>.<value>.md` (for example `tasks/q5.noexecute-evict.md`). Check ids must be unique across all variants. Solution scripts read the variable from the environment and branch on it. In `solution.md`, wrap each variant's section in `<!-- fault Q5_KIND=noexecute-evict -->` ... `<!-- /fault -->`, the same markers used for hidden faults, so the learner only sees the rolled one.
+
+For single-question scenarios, use hidden `oneOf` variables instead: one per fault layer, with a `case` on each in the setup script, the solution script and any `script` checks that depend on the fault. Keep the task text symptom-based. Lint warns when a hidden variable's values show up in the scripts or `solution.md` only partly, which usually means a missing branch.
+
 Every setup step, solution step and check runs as **root** with `KUBECONFIG=/etc/kubernetes/admin.conf` exported. On workers that file does not exist, so run kubectl steps on `controlplane`. Nodes are named `controlplane`, `worker-1` and `worker-2`; `/etc/hosts` resolves these names on every node, and `ubuntu@controlplane` can `ssh worker-1` without a password.
 
 ### Checks

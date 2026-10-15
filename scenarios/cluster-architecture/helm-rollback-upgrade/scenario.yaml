@@ -1,0 +1,63 @@
+id: helm-rollback-upgrade
+title: "Killer-style: roll back a broken Helm upgrade, then upgrade properly"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 10
+points: 9
+tags: [killer-style, helm, helm-rollback, helm-upgrade, helm-history, reuse-values, re-rollable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [billing, payments, orders] }
+  REL: { oneOf: [checkout, invoice, portal] }
+  TEAM: { oneOf: [red, blue, green] }
+  TARGET: { oneOf: [1.1.0, 2.0.0] }
+  BREAK: { oneOf: [image-tag, readiness-path, resources], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/chartrepo.sh
+    timeoutSeconds: 180
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: release
+    description: release ${REL} is deployed from chart webapp-${TARGET}
+    type: kubectl
+    run: helm -n ${NS} list -a -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
+    expect: { equals: "deployed/webapp-${TARGET}" }
+    weight: 3
+  - id: values-kept
+    description: the release still has its install values (replicaCount 2, podAnnotations.team ${TEAM}) and none of the broken revision's values
+    type: kubectl
+    run: |
+      helm -n ${NS} get values ${REL} -o json | jq -r '[(.replicaCount | tostring), (.podAnnotations.team // ""),
+        (.image.tag // "default"), (.readinessProbe.httpGet.path // "default"), (.resources.requests.cpu // "default")] | join(" ")'
+    expect: { matches: "^2 ${TEAM} (default|1\\.2[78]-alpine) (default|/) default$" }
+    weight: 2
+  - id: running
+    description: 2 ready replicas run the nginx image of chart ${TARGET}
+    type: kubectl
+    run: kubectl -n ${NS} get deployment -l app.kubernetes.io/instance=${REL} -o jsonpath='{.items[0].status.readyReplicas}/{.items[0].spec.template.spec.containers[0].image}'
+    expect: { matches: "^2/nginx:1\\.2[78]-alpine$" }
+    weight: 2
+    retrySeconds: 90
+  - id: rolled-back
+    description: the history shows a rollback to revision 1
+    type: kubectl
+    run: helm -n ${NS} history ${REL} -o json | jq -r '[.[] | select(.description | test("Rollback to 1"))] | length'
+    expect: { gte: 1 }
+    weight: 1
+  - id: broken-revision
+    description: /opt/course/helm/broken-revision.txt holds the number of the broken revision
+    type: ssh
+    node: controlplane
+    run: tr -d '[:space:]' < /opt/course/helm/broken-revision.txt 2>/dev/null || echo missing
+    expect: { equals: "2" }
+    weight: 1
+hints:
+  - "helm -n ${NS} history ${REL} lists every revision with its chart and description. helm -n ${NS} get values ${REL} --revision <n> shows what each one set. kubectl describe on a new Pod tells you why it never becomes ready."
+  - "helm rollback <release> <revision> creates a NEW revision with the old configuration."
+  - "helm upgrade --reuse-values keeps the values of the current revision. That is why you roll back first: reusing the broken revision's values would keep the bad value."

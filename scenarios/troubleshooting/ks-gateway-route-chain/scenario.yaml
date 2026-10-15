@@ -1,0 +1,60 @@
+id: ks-gateway-route-chain
+title: "Killer-style: Gateway route broken at every hop"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 15
+points: 9
+tags: [killer-style, gateway-api, httproute, traefik, readinessprobe, endpoints, service, re-rollable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [shop, media, docs] }
+  APP: { oneOf: [catalog, gallery, wiki] }
+  HOST: { oneOf: [portal.example.local, store.example.local, app.example.local] }
+  TOKEN: { random: 8 }
+  PARENT_FAULT: { oneOf: [section-name, namespace, gateway-name], hidden: true }
+  ROUTE_FAULT: { oneOf: [hostname, backend-port, path], hidden: true }
+  BACKEND_FAULT: { oneOf: [probe-path, probe-port, port-name], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: end-to-end
+    description: "curl -H 'Host: ${HOST}' http://controlplane:30080/ returns the ${APP} page"
+    type: kubectl
+    run: "curl -s -m 5 -H 'Host: ${HOST}' http://controlplane:30080/"
+    expect: { contains: "${APP} ok ${TOKEN}" }
+    weight: 4
+    retrySeconds: 60
+  - id: route-attached
+    description: HTTPRoute ${APP} is attached to listener web of Gateway traefik/traefik-gateway and serves only ${HOST}
+    type: kubectl
+    run: kubectl -n ${NS} get httproute ${APP} -o jsonpath='{.spec.parentRefs[0].namespace}/{.spec.parentRefs[0].name}/{.spec.parentRefs[0].sectionName}/{.spec.hostnames[*]}'
+    expect: { equals: "traefik/traefik-gateway/web/${HOST}" }
+    weight: 1
+  - id: probe-kept
+    description: ${APP} keeps an HTTP readiness probe on the nginx port, and all 2 replicas are ready
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port}/{.status.readyReplicas}'
+    expect: { matches: "^(80|http)/2$" }
+    weight: 2
+    retrySeconds: 60
+  - id: gateway-unchanged
+    description: Gateway traefik-gateway still has its single listener web on port 8000
+    type: kubectl
+    run: kubectl -n traefik get gateway traefik-gateway -o jsonpath='{range .spec.listeners[*]}{.name}:{.port}{" "}{end}'
+    expect: { equals: "web:8000" }
+    weight: 1
+  - id: service-unchanged
+    description: Service ${APP} still selects app=${APP} on port 80, target port http
+    type: kubectl
+    run: kubectl -n ${NS} get service ${APP} -o jsonpath='{.spec.selector.app}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+    expect: { equals: "${APP}/80/http" }
+    weight: 1
+hints:
+  - "A 404 from Traefik means no route matched the request: kubectl describe httproute shows Accepted and ResolvedRefs per parent. Compare parentRefs with the Gateway, and the hostnames and path matches with your request."
+  - "kubectl -n traefik get gateway traefik-gateway -o yaml shows its name and listeners. A parentRef without a namespace means the route's own namespace. backendRefs name a Service and its port, not the container port."
+  - "A 503 (or 500) means the route matched but the backend has no usable endpoints. kubectl get endpointslices, then describe a Pod: is it Ready, and does it have the port the Service targets?"

@@ -100,8 +100,10 @@ export interface SessionView {
   connection?: ConnectionInfo;
   context?: string;
   tasks: SessionTask[];
-  /** Values chosen for the scenario's variables at start; kept on Reset. */
+  /** Values chosen for the scenario's variables at start; kept on Reset, rolled again by a re-roll. */
   vars: Record<string, string>;
+  /** Practice session whose scenario rolls variables, so "New variant" can set up a different question. */
+  rerollable: boolean;
   /** All revealed hints across tasks, in task order. */
   hintsRevealed: string[];
   hintsTotal: number;

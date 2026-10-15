@@ -3,6 +3,7 @@ import { hpaBuilder, vpaBuilder } from './autoscaling';
 import { certificatesBuilder, etcdBackupBuilder, etcdRestoreBuilder, installClusterBuilder } from './cluster';
 import { cronJobBuilder } from './cronjob';
 import { deploymentBuilder } from './deployment';
+import { helmBuilder } from './helm';
 import { podBuilder } from './pod';
 import { pvBuilder } from './pv';
 import { pvcBuilder } from './pvc';
@@ -23,6 +24,7 @@ export const BUILDERS: Builder[] = [
   storageClassBuilder,
   hpaBuilder,
   vpaBuilder,
+  helmBuilder,
   etcdBackupBuilder,
   etcdRestoreBuilder,
   certificatesBuilder,

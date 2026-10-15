@@ -153,6 +153,7 @@ const SESSION_COLUMNS: Record<string, string> = {
   tasksReady: 'tasks_ready',
   preparingTask: 'preparing_task',
   learnProgress: 'learn_progress',
+  vars: 'vars',
 };
 
 const ATTEMPT_COLUMNS: Record<string, string> = {

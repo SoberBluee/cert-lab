@@ -1,0 +1,66 @@
+id: ks-apiserver-crash-log
+title: "Killer-style: kube-apiserver crashes after a config change"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 15
+points: 9
+tags: [killer-style, kube-apiserver, static-pod, control-plane, etcd, logs, crictl, re-rollable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  API_FAULT: { oneOf: [authz-mode, admission-plugin, unknown-flag], hidden: true }
+  ETCD_FAULT: { oneOf: [port, certfile, cafile], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+solution:
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 600
+checks:
+  - id: api-ready
+    description: the API server reports ready
+    type: kubectl
+    run: kubectl get --raw /readyz
+    expect: { equals: "ok" }
+    weight: 2
+    retrySeconds: 180
+  - id: components
+    description: etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready on controlplane
+    type: kubectl
+    run: kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort | xargs
+    expect: { equals: "etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True" }
+    weight: 2
+    retrySeconds: 180
+  - id: startup-flags
+    description: the API server keeps authorization mode Node,RBAC and the kubeadm admission and bootstrap token flags
+    type: script
+    node: controlplane
+    script: checks/flags.sh
+    expect: { equals: "ok" }
+    weight: 1
+  - id: etcd-flags
+    description: the API server talks to etcd on 127.0.0.1:2379 with the apiserver-etcd-client certificate and the etcd CA
+    type: ssh
+    node: controlplane
+    run: |
+      m=/etc/kubernetes/manifests/kube-apiserver.yaml
+      grep -qE -- '- --etcd-servers=https://127.0.0.1:2379$' $m \
+        && grep -qE -- '- --etcd-certfile=/etc/kubernetes/pki/apiserver-etcd-client.crt$' $m \
+        && grep -qE -- '- --etcd-cafile=/etc/kubernetes/pki/etcd/ca.crt$' $m && echo ok || echo wrong
+    expect: { equals: "ok" }
+    weight: 2
+  - id: error-log
+    description: /opt/course/1/apiserver-error.log holds the error that stopped the kube-apiserver at startup
+    type: script
+    node: controlplane
+    script: checks/error-log.sh
+    expect: { equals: "found" }
+    weight: 2
+hints:
+  - "kubectl fails, so work on controlplane directly: sudo crictl ps -a | grep kube-apiserver, then sudo crictl logs <container-id>."
+  - "Container logs also stay on disk after the container exits: sudo ls /var/log/pods/ and look inside the kube-apiserver directory. The first error is about a startup flag; compare the flag with kube-apiserver --help or the kubeadm defaults."
+  - "Fix /etc/kubernetes/manifests/kube-apiserver.yaml one error at a time. After the first fix the API server gets further and may fail for a second reason: compare its etcd flags with /etc/kubernetes/manifests/etcd.yaml and ls /etc/kubernetes/pki /etc/kubernetes/pki/etcd."

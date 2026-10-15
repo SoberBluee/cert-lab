@@ -307,6 +307,7 @@ export function SessionPage() {
   const hint = useMutation({ mutationFn: api.hint, onSuccess: setSession });
   const solution = useMutation({ mutationFn: api.solution, onSuccess: setSession });
   const reset = useMutation({ mutationFn: api.reset, onSuccess: setSession });
+  const reroll = useMutation({ mutationFn: api.reroll, onSuccess: setSession });
   const end = useMutation({
     mutationFn: api.end,
     onSuccess: (v) => {
@@ -323,7 +324,7 @@ export function SessionPage() {
   });
   const openTask = useMutation({ mutationFn: api.openTask, onSuccess: setSession });
   const skip = useMutation({ mutationFn: api.skipStep, onSuccess: setSession });
-  const mutations = [grade, hint, solution, reset, end, submit, openTask, skip];
+  const mutations = [grade, hint, solution, reset, reroll, end, submit, openTask, skip];
   const error = mutations.find((m) => m.error)?.error;
 
   const [activeTask, setActiveTask] = useState(0);
@@ -347,6 +348,10 @@ export function SessionPage() {
 
   const doReset = () => {
     if (canReset && confirm('Reset the lab? The snapshot is restored and your changes are lost.')) reset.mutate();
+  };
+  const canReroll = !!session?.rerollable && (state === 'running' || state === 'failed') && !reroll.isPending && !reset.isPending;
+  const doReroll = () => {
+    if (canReroll && confirm('Roll a new variant? The snapshot is restored and a different version of the question is set up.')) reroll.mutate();
   };
   const doSolution = () => {
     if (canSolution && confirm('Reveal the solution? This attempt will be marked as assisted.')) solution.mutate();
@@ -465,6 +470,11 @@ export function SessionPage() {
           {!exam && (
             <Button shortcut="r" disabled={!canReset || reset.isPending} onClick={doReset}>
               Reset
+            </Button>
+          )}
+          {session.rerollable && (
+            <Button disabled={!canReroll} onClick={doReroll} title="Restore the snapshot and set up a different variant of this question">
+              {reroll.isPending ? 'Rolling…' : 'New variant'}
             </Button>
           )}
           {!playground && !learn && !exam && (

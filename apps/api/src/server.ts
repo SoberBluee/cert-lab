@@ -130,8 +130,8 @@ app.get('/api/sessions/current/events', (req, reply) => {
   });
 });
 
-app.post('/api/sessions/current/reset', async (_req, reply) => {
-  const { view } = await sessions.reset();
+app.post<{ Body: { reroll?: boolean } | undefined }>('/api/sessions/current/reset', async (req, reply) => {
+  const { view } = await sessions.reset({ reroll: req.body?.reroll === true });
   reply.status(202);
   return view;
 });

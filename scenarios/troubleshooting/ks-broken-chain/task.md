@@ -15,4 +15,4 @@ Constraints:
 - Do not delete or recreate NetworkPolicy `${APP}-web-egress`. `${APP}-web` may only talk to `${APP}-api` and to cluster DNS. It must still be blocked from reaching `${APP}-admin`.
 - Do not modify Secret `${APP}-api-creds`.
 
-Then write each root cause you fixed to `/opt/course/chain/causes.txt` on `controlplane`: one line per cause, naming the resource and the field that was wrong (for example `deployment/foo: image tag does not exist`). The file must contain exactly one line per cause.
+Then write each root cause you fixed to `/opt/course/chain/causes.txt` on `controlplane`: one line per cause, naming the resource and the field that was wrong (for example `configmap/foo: key index.html is missing`). The file must contain exactly one line per cause.

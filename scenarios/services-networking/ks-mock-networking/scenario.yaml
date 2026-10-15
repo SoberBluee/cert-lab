@@ -4,188 +4,524 @@ domain: services-networking
 difficulty: 3
 estimatedMinutes: 35
 points: 22
-tags: [killer-style, multi-task, networkpolicy, egress, dns, gateway-api, httproute, named-port, headless, statefulset, cidr, kube-proxy]
+tags: [killer-style, multi-task, networkpolicy, egress, dns, gateway-api, httproute, named-port, headless, statefulset, cidr, kube-proxy, re-rollable]
 base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 30
 variables:
+  Q1_KIND: { oneOf: [client-egress, db-ingress, ns-isolation] }
   Q1_NS: { oneOf: [app-net, secure-net, zone-a] }
+  Q2_KIND: { oneOf: [path-split, header-match, two-hosts] }
   Q2_NS: { oneOf: [storefront, media, portal] }
+  Q3_KIND: { oneOf: [headless-sts, pod-subdomain, sts-scale] }
   Q3_NS: { oneOf: [data, records, store] }
   Q3_STS: { oneOf: [kv, ledger-db, cache-db] }
+  Q4_KIND: { oneOf: [cidrs-proxy-dns, node-cidrs-cni, nodeport-coredns] }
 setup:
   - node: controlplane
     run: rm -rf /opt/course && mkdir -p /opt/course/q3 /opt/course/q4 && chown -R ubuntu:ubuntu /opt/course
 tasks:
   - id: q1
-    title: Lock down egress of one Pod
+    title: NetworkPolicy
     points: 6
     setup:
       - node: controlplane
         script: setup/q1.sh
         timeoutSeconds: 300
         lane: q1
-    checks:
-      - id: q1-db-allowed
-        description: client reaches db by Service name on port 5432
-        type: kubectl
-        run: kubectl -n ${Q1_NS} get networkpolicy client-egress -o name >/dev/null && kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://db:5432/
-        expect: { contains: "db ok" }
-        weight: 2
-        retrySeconds: 30
-      - id: q1-others-blocked
-        description: client can no longer reach cache or the API server
-        type: kubectl
-        run: |
-          kubectl -n ${Q1_NS} exec client -- true || exit 1
-          a=$(kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://cache/ >/dev/null 2>&1 && echo open || echo blocked)
-          b=$(kubectl -n ${Q1_NS} exec client -- sh -c 'wget -qO- -T 3 --no-check-certificate https://kubernetes.default.svc/ 2>&1; true' | grep -qi 'timed out' && echo blocked || echo open)
-          echo "$a/$b"
-        expect: { equals: "blocked/blocked" }
-        weight: 2
-        retrySeconds: 30
-      - id: q1-others-unaffected
-        description: the egress of cache is not restricted
-        type: kubectl
-        run: kubectl -n ${Q1_NS} get networkpolicy client-egress -o name >/dev/null && kubectl -n ${Q1_NS} exec cache -- wget -qO- -T 3 http://db:5432/
-        expect: { contains: "db ok" }
-        weight: 1
-        retrySeconds: 30
-      - id: q1-policy
-        description: NetworkPolicy client-egress selects role=client for Egress
-        type: kubectl
-        run: kubectl -n ${Q1_NS} get networkpolicy client-egress -o jsonpath='{.spec.podSelector.matchLabels.role}/{.spec.policyTypes[*]}'
-        expect: { equals: "client/Egress" }
-        weight: 1
-    hints:
-      - "NetworkPolicies are additive. If any policy that selects client allows some egress, a stricter policy cannot take it away again."
-      - "allow-all-egress selects every Pod in ${Q1_NS}. Narrow its podSelector (for example matchExpressions role NotIn [client]) instead of deleting it, so cache keeps its open egress."
-      - "client-egress needs two rules: to podSelector role=db on TCP 5432, and to UDP/TCP 53 (kube-system or anywhere) for DNS. Without DNS, the Service name db cannot be resolved."
+    variant: Q1_KIND
+    variants:
+      client-egress:
+        title: "NetworkPolicy: lock down egress of one Pod"
+        checks:
+          - id: q1-db-allowed
+            description: client reaches db by Service name on port 5432
+            type: kubectl
+            run: kubectl -n ${Q1_NS} get networkpolicy client-egress -o name >/dev/null && kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://db:5432/
+            expect: { contains: "db ok" }
+            weight: 2
+            retrySeconds: 30
+          - id: q1-others-blocked
+            description: client can no longer reach cache or the API server
+            type: kubectl
+            run: |
+              kubectl -n ${Q1_NS} exec client -- true || exit 1
+              a=$(kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://cache/ >/dev/null 2>&1 && echo open || echo blocked)
+              b=$(kubectl -n ${Q1_NS} exec client -- sh -c 'wget -qO- -T 3 --no-check-certificate https://kubernetes.default.svc/ 2>&1; true' | grep -qi 'timed out' && echo blocked || echo open)
+              echo "$a/$b"
+            expect: { equals: "blocked/blocked" }
+            weight: 2
+            retrySeconds: 30
+          - id: q1-others-unaffected
+            description: the egress of cache is not restricted
+            type: kubectl
+            run: kubectl -n ${Q1_NS} get networkpolicy client-egress -o name >/dev/null && kubectl -n ${Q1_NS} exec cache -- wget -qO- -T 3 http://db:5432/
+            expect: { contains: "db ok" }
+            weight: 1
+            retrySeconds: 30
+          - id: q1-policy
+            description: NetworkPolicy client-egress selects role=client for Egress
+            type: kubectl
+            run: kubectl -n ${Q1_NS} get networkpolicy client-egress -o jsonpath='{.spec.podSelector.matchLabels.role}/{.spec.policyTypes[*]}'
+            expect: { equals: "client/Egress" }
+            weight: 1
+        hints:
+          - "NetworkPolicies are additive. If any policy that selects client allows some egress, a stricter policy cannot take it away again."
+          - "allow-all-egress selects every Pod in ${Q1_NS}. Narrow its podSelector (for example matchExpressions role NotIn [client]) instead of deleting it, so cache keeps its open egress."
+          - "client-egress needs two rules: to podSelector role=db on TCP 5432, and to UDP/TCP 53 (kube-system or anywhere) for DNS. Without DNS, the Service name db cannot be resolved."
+      db-ingress:
+        title: "NetworkPolicy: an ingress allow-list across namespaces"
+        setup:
+          - node: controlplane
+            script: setup/q1-namespaces.sh
+            timeoutSeconds: 240
+            lane: q1
+        checks:
+          - id: q1i-client
+            description: client reaches db on port 5432
+            type: kubectl
+            run: kubectl -n ${Q1_NS} get networkpolicy db-ingress -o name >/dev/null && kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://db:5432/
+            expect: { contains: "db ok" }
+            weight: 2
+            retrySeconds: 30
+          - id: q1i-monitoring
+            description: Pod probe in ${Q1_NS}-mon (team=monitoring) reaches db on port 5432
+            type: kubectl
+            run: kubectl -n ${Q1_NS} get networkpolicy db-ingress -o name >/dev/null && kubectl -n ${Q1_NS}-mon exec probe -- wget -qO- -T 3 http://db.${Q1_NS}:5432/
+            expect: { contains: "db ok" }
+            weight: 1
+            retrySeconds: 30
+          - id: q1i-blocked
+            description: cache, Pod probe in ${Q1_NS}-dev and Pod other in ${Q1_NS}-mon cannot reach db
+            type: kubectl
+            run: |
+              kubectl -n ${Q1_NS} get networkpolicy db-ingress -o name >/dev/null || exit 1
+              a=$(kubectl -n ${Q1_NS} exec cache -- wget -qO- -T 3 http://db:5432/ >/dev/null 2>&1 && echo open || echo blocked)
+              b=$(kubectl -n ${Q1_NS}-dev exec probe -- wget -qO- -T 3 http://db.${Q1_NS}:5432/ >/dev/null 2>&1 && echo open || echo blocked)
+              c=$(kubectl -n ${Q1_NS}-mon exec other -- wget -qO- -T 3 http://db.${Q1_NS}:5432/ >/dev/null 2>&1 && echo open || echo blocked)
+              echo "$a/$b/$c"
+            expect: { equals: "blocked/blocked/blocked" }
+            weight: 2
+            retrySeconds: 30
+          - id: q1i-policy
+            description: NetworkPolicy db-ingress selects role=db for Ingress
+            type: kubectl
+            run: kubectl -n ${Q1_NS} get networkpolicy db-ingress -o jsonpath='{.spec.podSelector.matchLabels.role}/{.spec.policyTypes[*]}'
+            expect: { equals: "db/Ingress" }
+            weight: 1
+        hints:
+          - "kubectl get ns --show-labels. A namespaceSelector matches labels on the namespace, a podSelector labels on the Pod."
+          - "namespaceSelector and podSelector in the SAME from-entry means AND (those Pods in those namespaces). As two separate entries (two dashes) they mean OR."
+          - "from: [{ podSelector: { matchLabels: { role: client } } }, { namespaceSelector: { matchLabels: { team: monitoring } }, podSelector: { matchLabels: { role: probe } } }], ports TCP 5432."
+      ns-isolation:
+        title: "NetworkPolicy: isolate a namespace, with one exception"
+        setup:
+          - node: controlplane
+            script: setup/q1-namespaces.sh
+            timeoutSeconds: 240
+            lane: q1
+        checks:
+          - id: q1n-inside
+            description: Pods inside ${Q1_NS} still reach each other (client to db and to cache)
+            type: kubectl
+            run: |
+              kubectl -n ${Q1_NS} get networkpolicy -o name | grep -q . || { echo no-policy; exit 0; }
+              a=$(kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://db:5432/ 2>/dev/null | grep -q 'db ok' && echo open || echo blocked)
+              b=$(kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://cache/ >/dev/null 2>&1 && echo open || echo blocked)
+              echo "$a/$b"
+            expect: { equals: "open/open" }
+            weight: 2
+            retrySeconds: 30
+          - id: q1n-outside
+            description: Pods in ${Q1_NS}-dev reach neither db nor cache
+            type: kubectl
+            run: |
+              kubectl -n ${Q1_NS} get networkpolicy -o name | grep -q . || exit 1
+              a=$(kubectl -n ${Q1_NS}-dev exec probe -- wget -qO- -T 3 http://db.${Q1_NS}:5432/ >/dev/null 2>&1 && echo open || echo blocked)
+              b=$(kubectl -n ${Q1_NS}-dev exec probe -- wget -qO- -T 3 http://cache.${Q1_NS}/ >/dev/null 2>&1 && echo open || echo blocked)
+              echo "$a/$b"
+            expect: { equals: "blocked/blocked" }
+            weight: 2
+            retrySeconds: 30
+          - id: q1n-monitoring
+            description: Pods in ${Q1_NS}-mon reach cache on port 80, but not db
+            type: kubectl
+            run: |
+              kubectl -n ${Q1_NS} get networkpolicy -o name | grep -q . || exit 1
+              a=$(kubectl -n ${Q1_NS}-mon exec other -- wget -qO- -T 3 http://cache.${Q1_NS}/ >/dev/null 2>&1 && echo open || echo blocked)
+              b=$(kubectl -n ${Q1_NS}-mon exec probe -- wget -qO- -T 3 http://db.${Q1_NS}:5432/ >/dev/null 2>&1 && echo open || echo blocked)
+              echo "$a/$b"
+            expect: { equals: "open/blocked" }
+            weight: 1
+            retrySeconds: 30
+          - id: q1n-egress-kept
+            description: egress from ${Q1_NS} is not restricted (client still reaches the API server)
+            type: kubectl
+            run: kubectl -n ${Q1_NS} exec client -- sh -c 'wget -qO- -T 3 --no-check-certificate https://kubernetes.default.svc/ 2>&1; true' | grep -qi 'timed out' && echo blocked || echo open
+            expect: { equals: "open" }
+            weight: 1
+        hints:
+          - "A policy with podSelector: {} selects every Pod in its namespace. With policyTypes [Ingress] and a from-list, it allows only what the list names."
+          - "podSelector: {} inside a from-entry (without namespaceSelector) means every Pod of the policy's own namespace."
+          - "Policies add up: one for the whole namespace (from podSelector: {}), one more that selects role=cache and allows namespaceSelector team=monitoring on TCP 80. Keep policyTypes at Ingress so egress stays open."
 
   - id: q2
-    title: Route one hostname to two backends with Gateway API
+    title: Gateway API routing
     points: 6
     setup:
       - node: controlplane
         script: setup/q2.sh
         timeoutSeconds: 300
         lane: q2
-    checks:
-      - id: q2-root
-        description: http://app.${Q2_NS}.lab/ through the gateway returns the frontend
-        type: kubectl
-        run: 'curl -s -m 5 -H "Host: app.${Q2_NS}.lab" http://controlplane:30080/'
-        expect: { contains: "frontend ${Q2_NS}" }
-        weight: 2
-        retrySeconds: 30
-      - id: q2-api
-        description: http://app.${Q2_NS}.lab/api/ through the gateway returns the API
-        type: kubectl
-        run: 'curl -s -m 5 -H "Host: app.${Q2_NS}.lab" http://controlplane:30080/api/'
-        expect: { contains: "api ${Q2_NS}" }
-        weight: 2
-        retrySeconds: 30
-      - id: q2-parent
-        description: HTTPRoute app attaches to listener web of Gateway traefik/traefik-gateway
-        type: kubectl
-        run: kubectl -n ${Q2_NS} get httproute app -o jsonpath='{.spec.parentRefs[0].namespace}/{.spec.parentRefs[0].name}/{.spec.parentRefs[0].sectionName}/{.spec.hostnames[*]}'
-        expect: { equals: "traefik/traefik-gateway/web/app.${Q2_NS}.lab" }
-        weight: 1
-      - id: q2-deploy-unchanged
-        description: Deployment api was not changed
-        type: kubectl
-        run: kubectl -n ${Q2_NS} get httproute app -o name >/dev/null && kubectl -n ${Q2_NS} get deployment api -o jsonpath='{.metadata.generation}/{.spec.template.spec.containers[0].ports[0].name}'
-        expect: { equals: "1/http" }
-        weight: 1
-    hints:
-      - "kubectl -n traefik get gateway traefik-gateway -o yaml shows the listener names. Routes in other namespaces must name the Gateway's namespace in parentRefs."
-      - "If / works but /api/ returns 5xx or 404, compare the api Service's targetPort with the container's port name: kubectl -n ${Q2_NS} get endpointslices."
-      - "rules: [{matches: [{path: {type: PathPrefix, value: /api}}], backendRefs: [{name: api, port: 8080}]}, {backendRefs: [{name: frontend, port: 80}]}]"
+    variant: Q2_KIND
+    variants:
+      path-split:
+        title: Route one hostname to two backends by path
+        checks:
+          - id: q2-root
+            description: http://app.${Q2_NS}.lab/ through the gateway returns the frontend
+            type: kubectl
+            run: 'curl -s -m 5 -H "Host: app.${Q2_NS}.lab" http://controlplane:30080/'
+            expect: { contains: "frontend ${Q2_NS}" }
+            weight: 2
+            retrySeconds: 30
+          - id: q2-api
+            description: http://app.${Q2_NS}.lab/api/ through the gateway returns the API
+            type: kubectl
+            run: 'curl -s -m 5 -H "Host: app.${Q2_NS}.lab" http://controlplane:30080/api/'
+            expect: { contains: "api ${Q2_NS}" }
+            weight: 2
+            retrySeconds: 30
+          - id: q2-parent
+            description: HTTPRoute app attaches to listener web of Gateway traefik/traefik-gateway
+            type: kubectl
+            run: kubectl -n ${Q2_NS} get httproute app -o jsonpath='{.spec.parentRefs[0].namespace}/{.spec.parentRefs[0].name}/{.spec.parentRefs[0].sectionName}/{.spec.hostnames[*]}'
+            expect: { equals: "traefik/traefik-gateway/web/app.${Q2_NS}.lab" }
+            weight: 1
+          - id: q2-deploy-unchanged
+            description: Deployment api was not changed
+            type: kubectl
+            run: kubectl -n ${Q2_NS} get httproute app -o name >/dev/null && kubectl -n ${Q2_NS} get deployment api -o jsonpath='{.metadata.generation}/{.spec.template.spec.containers[0].ports[0].name}'
+            expect: { equals: "1/http" }
+            weight: 1
+        hints:
+          - "kubectl -n traefik get gateway traefik-gateway -o yaml shows the listener names. Routes in other namespaces must name the Gateway's namespace in parentRefs."
+          - "If / works but /api/ returns 5xx or 404, compare the api Service's targetPort with the container's port name: kubectl -n ${Q2_NS} get endpointslices."
+          - "rules: [{matches: [{path: {type: PathPrefix, value: /api}}], backendRefs: [{name: api, port: 8080}]}, {backendRefs: [{name: frontend, port: 80}]}]"
+      header-match:
+        title: Route by request header
+        checks:
+          - id: q2h-header
+            description: requests to app.${Q2_NS}.lab with header X-Backend api reach the API
+            type: kubectl
+            run: 'curl -s -m 5 -H "Host: app.${Q2_NS}.lab" -H "X-Backend: api" http://controlplane:30080/api/'
+            expect: { contains: "api ${Q2_NS}" }
+            weight: 2
+            retrySeconds: 30
+          - id: q2h-default
+            description: requests to app.${Q2_NS}.lab without that header reach the frontend, even under /api/
+            type: kubectl
+            run: |
+              a=$(curl -s -m 5 -H "Host: app.${Q2_NS}.lab" http://controlplane:30080/)
+              b=$(curl -s -m 5 -H "Host: app.${Q2_NS}.lab" http://controlplane:30080/api/)
+              echo "$a" | grep -q "frontend ${Q2_NS}" && ! echo "$b" | grep -q "api ${Q2_NS}" && echo ok || echo "root=[$a] api=[$b]"
+            expect: { equals: "ok" }
+            weight: 2
+            retrySeconds: 30
+          - id: q2h-route
+            description: HTTPRoute app attaches to listener web of traefik/traefik-gateway and matches on header X-Backend
+            type: kubectl
+            run: |
+              kubectl -n ${Q2_NS} get httproute app -o json | jq -r '"\(.spec.parentRefs[0].namespace)/\(.spec.parentRefs[0].name)/\(.spec.parentRefs[0].sectionName)/" +
+                ([.spec.rules[].matches[]?.headers[]? | select((.name | ascii_downcase) == "x-backend") | .value] | join(","))'
+            expect: { equals: "traefik/traefik-gateway/web/api" }
+            weight: 1
+          - id: q2h-deploy-unchanged
+            description: Deployment api was not changed
+            type: kubectl
+            run: kubectl -n ${Q2_NS} get httproute app -o name >/dev/null && kubectl -n ${Q2_NS} get deployment api -o jsonpath='{.metadata.generation}/{.spec.template.spec.containers[0].ports[0].name}'
+            expect: { equals: "1/http" }
+            weight: 1
+        hints:
+          - "An HTTPRoute match can test headers: matches: [{ headers: [{ name: X-Backend, value: api }] }]. Rules without matches catch everything else."
+          - "If the header request still fails with 5xx, compare the api Service's targetPort with the container's port name: kubectl -n ${Q2_NS} get endpointslices."
+          - "kubectl -n traefik get gateway traefik-gateway -o yaml shows the listener names; parentRefs needs namespace traefik."
+      two-hosts:
+        title: One HTTPRoute per hostname
+        checks:
+          - id: q2t-www
+            description: http://www.${Q2_NS}.lab/ through the gateway returns the frontend
+            type: kubectl
+            run: 'curl -s -m 5 -H "Host: www.${Q2_NS}.lab" http://controlplane:30080/'
+            expect: { contains: "frontend ${Q2_NS}" }
+            weight: 2
+            retrySeconds: 30
+          - id: q2t-api
+            description: http://api.${Q2_NS}.lab/api/ through the gateway returns the API
+            type: kubectl
+            run: 'curl -s -m 5 -H "Host: api.${Q2_NS}.lab" http://controlplane:30080/api/'
+            expect: { contains: "api ${Q2_NS}" }
+            weight: 2
+            retrySeconds: 30
+          - id: q2t-routes
+            description: HTTPRoutes web and api attach to listener web of traefik/traefik-gateway, one hostname each
+            type: kubectl
+            run: |
+              for r in web api; do
+                kubectl -n ${Q2_NS} get httproute $r -o jsonpath='{.spec.parentRefs[0].namespace}/{.spec.parentRefs[0].name}/{.spec.parentRefs[0].sectionName}/{.spec.hostnames[*]} ' 2>/dev/null || echo -n "missing-$r "
+              done
+            expect: { equals: "traefik/traefik-gateway/web/www.${Q2_NS}.lab traefik/traefik-gateway/web/api.${Q2_NS}.lab " }
+            weight: 1
+          - id: q2t-deploy-unchanged
+            description: Deployment api was not changed
+            type: kubectl
+            run: kubectl -n ${Q2_NS} get httproute api -o name >/dev/null && kubectl -n ${Q2_NS} get deployment api -o jsonpath='{.metadata.generation}/{.spec.template.spec.containers[0].ports[0].name}'
+            expect: { equals: "1/http" }
+            weight: 1
+        hints:
+          - "Each HTTPRoute lists its own hostnames; the Gateway listener web accepts any host."
+          - "If api.${Q2_NS}.lab returns 5xx, compare the api Service's targetPort with the container's port name: kubectl -n ${Q2_NS} get endpointslices."
+          - "parentRefs: [{ name: traefik-gateway, namespace: traefik, sectionName: web }] in both routes."
 
   - id: q3
-    title: Stable network identity with a headless Service
+    title: DNS for individual Pods
     points: 6
     setup:
       - node: controlplane
         run: kubectl delete namespace ${Q3_NS} --ignore-not-found --wait=true && kubectl create namespace ${Q3_NS}
         lane: q3
-    checks:
-      - id: q3-headless
-        description: Service ${Q3_STS}-hl is headless and selects the StatefulSet Pods
-        type: kubectl
-        run: kubectl -n ${Q3_NS} get service ${Q3_STS}-hl -o jsonpath='{.spec.clusterIP}/{.spec.selector.app}'
-        expect: { equals: "None/${Q3_STS}" }
-        weight: 1
-      - id: q3-sts
-        description: StatefulSet ${Q3_STS} uses ${Q3_STS}-hl, Parallel management, 3 of 3 ready
-        type: kubectl
-        run: kubectl -n ${Q3_NS} get statefulset ${Q3_STS} -o jsonpath='{.spec.serviceName}/{.spec.podManagementPolicy}/{.status.readyReplicas}'
-        expect: { equals: "${Q3_STS}-hl/Parallel/3" }
-        weight: 2
-        retrySeconds: 90
-      - id: q3-fqdn-file
-        description: /opt/course/q3/fqdn holds the fully qualified DNS name of ${Q3_STS}-1
-        type: ssh
-        node: controlplane
-        run: tr -d '[:space:]' < /opt/course/q3/fqdn 2>/dev/null | sed 's/\.$//'
-        expect: { equals: "${Q3_STS}-1.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local" }
-        weight: 1
-      - id: q3-resolves
-        description: that name resolves to the IP of Pod ${Q3_STS}-1 from inside the cluster
-        type: kubectl
-        run: |
-          ip=$(kubectl -n ${Q3_NS} get pod ${Q3_STS}-1 -o jsonpath='{.status.podIP}')
-          kubectl -n ${Q3_NS} exec ${Q3_STS}-0 -- nslookup ${Q3_STS}-1.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && [ -n "$ip" ] && echo resolved || echo unresolved
-        expect: { equals: "resolved" }
-        weight: 2
-        retrySeconds: 60
-    hints:
-      - "A headless Service has clusterIP: None. Its DNS name returns the Pod IPs instead of a virtual IP."
-      - "StatefulSet Pods get <pod>.<serviceName>.<namespace>.svc.cluster.local only when spec.serviceName names a headless Service that selects them."
-      - "podManagementPolicy: Parallel starts all replicas at once. It can only be set when the StatefulSet is created."
+    variant: Q3_KIND
+    variants:
+      headless-sts:
+        title: Stable network identity with a headless Service
+        checks:
+          - id: q3-headless
+            description: Service ${Q3_STS}-hl is headless and selects the StatefulSet Pods
+            type: kubectl
+            run: kubectl -n ${Q3_NS} get service ${Q3_STS}-hl -o jsonpath='{.spec.clusterIP}/{.spec.selector.app}'
+            expect: { equals: "None/${Q3_STS}" }
+            weight: 1
+          - id: q3-sts
+            description: StatefulSet ${Q3_STS} uses ${Q3_STS}-hl, Parallel management, 3 of 3 ready
+            type: kubectl
+            run: kubectl -n ${Q3_NS} get statefulset ${Q3_STS} -o jsonpath='{.spec.serviceName}/{.spec.podManagementPolicy}/{.status.readyReplicas}'
+            expect: { equals: "${Q3_STS}-hl/Parallel/3" }
+            weight: 2
+            retrySeconds: 90
+          - id: q3-fqdn-file
+            description: /opt/course/q3/fqdn holds the fully qualified DNS name of ${Q3_STS}-1
+            type: ssh
+            node: controlplane
+            run: tr -d '[:space:]' < /opt/course/q3/fqdn 2>/dev/null | sed 's/\.$//'
+            expect: { equals: "${Q3_STS}-1.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local" }
+            weight: 1
+          - id: q3-resolves
+            description: that name resolves to the IP of Pod ${Q3_STS}-1 from inside the cluster
+            type: kubectl
+            run: |
+              ip=$(kubectl -n ${Q3_NS} get pod ${Q3_STS}-1 -o jsonpath='{.status.podIP}')
+              kubectl -n ${Q3_NS} exec ${Q3_STS}-0 -- nslookup ${Q3_STS}-1.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && [ -n "$ip" ] && echo resolved || echo unresolved
+            expect: { equals: "resolved" }
+            weight: 2
+            retrySeconds: 60
+        hints:
+          - "A headless Service has clusterIP: None. Its DNS name returns the Pod IPs instead of a virtual IP."
+          - "StatefulSet Pods get <pod>.<serviceName>.<namespace>.svc.cluster.local only when spec.serviceName names a headless Service that selects them."
+          - "podManagementPolicy: Parallel starts all replicas at once. It can only be set when the StatefulSet is created."
+      pod-subdomain:
+        title: A DNS name for a plain Pod
+        checks:
+          - id: q3p-headless
+            description: Service ${Q3_STS}-hl is headless and selects app=${Q3_STS}
+            type: kubectl
+            run: kubectl -n ${Q3_NS} get service ${Q3_STS}-hl -o jsonpath='{.spec.clusterIP}/{.spec.selector.app}'
+            expect: { equals: "None/${Q3_STS}" }
+            weight: 1
+          - id: q3p-pod
+            description: Pod ${Q3_STS}-primary runs with hostname primary and subdomain ${Q3_STS}-hl
+            type: kubectl
+            run: kubectl -n ${Q3_NS} get pod ${Q3_STS}-primary -o jsonpath='{.status.phase}/{.spec.hostname}/{.spec.subdomain}/{.metadata.labels.app}'
+            expect: { equals: "Running/primary/${Q3_STS}-hl/${Q3_STS}" }
+            weight: 2
+            retrySeconds: 60
+          - id: q3p-fqdn-file
+            description: /opt/course/q3/fqdn holds the fully qualified DNS name of that Pod
+            type: ssh
+            node: controlplane
+            run: tr -d '[:space:]' < /opt/course/q3/fqdn 2>/dev/null | sed 's/\.$//'
+            expect: { equals: "primary.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local" }
+            weight: 1
+          - id: q3p-resolves
+            description: that name resolves to the Pod's IP from inside the cluster
+            type: kubectl
+            run: |
+              ip=$(kubectl -n ${Q3_NS} get pod ${Q3_STS}-primary -o jsonpath='{.status.podIP}')
+              kubectl -n ${Q3_NS} exec ${Q3_STS}-primary -- nslookup primary.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && [ -n "$ip" ] && echo resolved || echo unresolved
+            expect: { equals: "resolved" }
+            weight: 2
+            retrySeconds: 60
+        hints:
+          - "A Pod gets the DNS name <hostname>.<subdomain>.<namespace>.svc.cluster.local when spec.hostname and spec.subdomain are set and a headless Service named like the subdomain selects it."
+          - "The Pod's name does not matter for that record; spec.hostname does."
+          - "Service: clusterIP: None, selector app: ${Q3_STS}. Pod: hostname: primary, subdomain: ${Q3_STS}-hl, label app: ${Q3_STS}."
+      sts-scale:
+        title: Fix Pod DNS of a StatefulSet and scale it out
+        setup:
+          - node: controlplane
+            script: setup/q3-scale.sh
+            timeoutSeconds: 240
+            lane: q3
+        checks:
+          - id: q3s-headless
+            description: Service ${Q3_STS}-hl is headless and selects the StatefulSet Pods
+            type: kubectl
+            run: kubectl -n ${Q3_NS} get service ${Q3_STS}-hl -o jsonpath='{.spec.clusterIP}/{.spec.selector.app}'
+            expect: { equals: "None/${Q3_STS}" }
+            weight: 1
+          - id: q3s-scaled
+            description: StatefulSet ${Q3_STS} runs 4 of 4 ready replicas and still uses ${Q3_STS}-hl
+            type: kubectl
+            run: kubectl -n ${Q3_NS} get statefulset ${Q3_STS} -o jsonpath='{.spec.serviceName}/{.spec.replicas}/{.status.readyReplicas}'
+            expect: { equals: "${Q3_STS}-hl/4/4" }
+            weight: 2
+            retrySeconds: 90
+          - id: q3s-fqdn-file
+            description: /opt/course/q3/fqdn holds the fully qualified DNS name of the newest Pod
+            type: ssh
+            node: controlplane
+            run: tr -d '[:space:]' < /opt/course/q3/fqdn 2>/dev/null | sed 's/\.$//'
+            expect: { equals: "${Q3_STS}-3.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local" }
+            weight: 1
+          - id: q3s-resolves
+            description: that name resolves to the IP of Pod ${Q3_STS}-3 from inside the cluster
+            type: kubectl
+            run: |
+              ip=$(kubectl -n ${Q3_NS} get pod ${Q3_STS}-3 -o jsonpath='{.status.podIP}')
+              kubectl -n ${Q3_NS} exec ${Q3_STS}-0 -- nslookup ${Q3_STS}-3.${Q3_STS}-hl.${Q3_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && [ -n "$ip" ] && echo resolved || echo unresolved
+            expect: { equals: "resolved" }
+            weight: 2
+            retrySeconds: 60
+        hints:
+          - "kubectl -n ${Q3_NS} get svc ${Q3_STS}-hl: does it have a ClusterIP? Per-Pod DNS records only exist for headless Services."
+          - "spec.clusterIP cannot be changed in place. Delete the Service and create it again with clusterIP: None; the StatefulSet does not need to be recreated."
+          - "kubectl -n ${Q3_NS} scale statefulset ${Q3_STS} --replicas=4. With OrderedReady the new Pods start one by one, and the last one is ${Q3_STS}-3."
 
   - id: q4
     title: Cluster network facts
     points: 4
-    checks:
-      - id: q4-pod-cidr
-        description: /opt/course/q4/pod-cidr holds the cluster's Pod CIDR
-        type: ssh
-        node: controlplane
-        run: |
-          want=$(grep -oE -- '--cluster-cidr=[^ "]+' /etc/kubernetes/manifests/kube-controller-manager.yaml | cut -d= -f2)
-          [ -n "$want" ] && grep -qF "$want" /opt/course/q4/pod-cidr 2>/dev/null && echo ok || echo "want $want"
-        expect: { equals: "ok" }
-        weight: 1
-      - id: q4-service-cidr
-        description: /opt/course/q4/service-cidr holds the cluster's Service CIDR
-        type: ssh
-        node: controlplane
-        run: |
-          want=$(grep -oE -- '--service-cluster-ip-range=[^ "]+' /etc/kubernetes/manifests/kube-apiserver.yaml | cut -d= -f2)
-          [ -n "$want" ] && grep -qF "$want" /opt/course/q4/service-cidr 2>/dev/null && echo ok || echo "want $want"
-        expect: { equals: "ok" }
-        weight: 1
-      - id: q4-proxy-mode
-        description: /opt/course/q4/proxy-mode holds the mode kube-proxy runs in
-        type: ssh
-        node: controlplane
-        run: |
-          want=$(curl -s -m 3 http://127.0.0.1:10249/proxyMode)
-          [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/q4/proxy-mode 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
-        expect: { equals: "ok" }
-        weight: 1
-      - id: q4-dns-ip
-        description: /opt/course/q4/dns-ip holds the ClusterIP of the cluster DNS Service
-        type: ssh
-        node: controlplane
-        run: |
-          want=$(kubectl -n kube-system get service kube-dns -o jsonpath='{.spec.clusterIP}')
-          [ "$(tr -d '[:space:]' < /opt/course/q4/dns-ip 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
-        expect: { equals: "ok" }
-        weight: 1
-    hints:
-      - "The control plane components run as static Pods; their flags are in /etc/kubernetes/manifests."
-      - "kube-controller-manager has --cluster-cidr, kube-apiserver has --service-cluster-ip-range."
-      - "kube-proxy reports its mode on its metrics port: curl localhost:10249/proxyMode. The DNS Service is kube-system/kube-dns."
+    variant: Q4_KIND
+    variants:
+      cidrs-proxy-dns:
+        title: "Cluster network facts: CIDRs, kube-proxy and DNS"
+        checks:
+          - id: q4-pod-cidr
+            description: /opt/course/q4/pod-cidr holds the cluster's Pod CIDR
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(grep -oE -- '--cluster-cidr=[^ "]+' /etc/kubernetes/manifests/kube-controller-manager.yaml | cut -d= -f2)
+              [ -n "$want" ] && grep -qF "$want" /opt/course/q4/pod-cidr 2>/dev/null && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 1
+          - id: q4-service-cidr
+            description: /opt/course/q4/service-cidr holds the cluster's Service CIDR
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(grep -oE -- '--service-cluster-ip-range=[^ "]+' /etc/kubernetes/manifests/kube-apiserver.yaml | cut -d= -f2)
+              [ -n "$want" ] && grep -qF "$want" /opt/course/q4/service-cidr 2>/dev/null && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 1
+          - id: q4-proxy-mode
+            description: /opt/course/q4/proxy-mode holds the mode kube-proxy runs in
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(curl -s -m 3 http://127.0.0.1:10249/proxyMode)
+              [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/q4/proxy-mode 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 1
+          - id: q4-dns-ip
+            description: /opt/course/q4/dns-ip holds the ClusterIP of the cluster DNS Service
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(kubectl -n kube-system get service kube-dns -o jsonpath='{.spec.clusterIP}')
+              [ "$(tr -d '[:space:]' < /opt/course/q4/dns-ip 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 1
+        hints:
+          - "The control plane components run as static Pods; their flags are in /etc/kubernetes/manifests."
+          - "kube-controller-manager has --cluster-cidr, kube-apiserver has --service-cluster-ip-range."
+          - "kube-proxy reports its mode on its metrics port: curl localhost:10249/proxyMode. The DNS Service is kube-system/kube-dns."
+      node-cidrs-cni:
+        title: "Cluster network facts: node Pod ranges and the CNI"
+        checks:
+          - id: q4n-node-cidrs
+            description: /opt/course/q4/node-cidrs maps every node to the Pod CIDR assigned to it
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name} {.spec.podCIDR}{"\n"}{end}' | sort)
+              have=$(sed -E 's/[[:space:]]+/ /g; s/ $//; /^$/d' /opt/course/q4/node-cidrs 2>/dev/null | sort)
+              [ -n "$have" ] && [ "$have" = "$want" ] && echo same || echo different
+            expect: { equals: "same" }
+            weight: 2
+          - id: q4n-cni
+            description: /opt/course/q4/cni names the CNI plugin of the cluster
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(jq -r '.plugins[0].type' "$(ls /etc/cni/net.d/*.conflist | sort | head -1)")
+              grep -qiw "$want" /opt/course/q4/cni 2>/dev/null && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 1
+          - id: q4n-cni-config
+            description: /opt/course/q4/cni-config holds the path of the CNI configuration file the container runtime loads
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(ls /etc/cni/net.d/ | grep -E '\.(conf|conflist|json)$' | sort | head -1)
+              [ "$(tr -d '[:space:]' < /opt/course/q4/cni-config 2>/dev/null)" = "/etc/cni/net.d/$want" ] && echo ok || echo "want /etc/cni/net.d/$want"
+            expect: { equals: "ok" }
+            weight: 1
+        hints:
+          - "kubectl get nodes -o custom-columns=NAME:.metadata.name,CIDR:.spec.podCIDR"
+          - "The container runtime loads the first CNI config file (in lexical order) from /etc/cni/net.d."
+          - "The plugin type is in that file: jq '.plugins[0].type'. kubectl -n kube-system get pods also tells you which CNI runs."
+      nodeport-coredns:
+        title: "Cluster network facts: NodePorts and CoreDNS"
+        checks:
+          - id: q4c-nodeport-range
+            description: /opt/course/q4/nodeport-range holds the range NodePorts are allocated from
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(grep -oE -- '--service-node-port-range=[^ "]+' /etc/kubernetes/manifests/kube-apiserver.yaml | cut -d= -f2)
+              want=${want:-30000-32767}
+              [ "$(tr -d '[:space:]' < /opt/course/q4/nodeport-range 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 1
+          - id: q4c-upstream
+            description: /opt/course/q4/dns-upstream holds where CoreDNS forwards names outside the cluster
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | awk '$1 == "forward" {print $3; exit}')
+              [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/q4/dns-upstream 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 2
+          - id: q4c-domain
+            description: /opt/course/q4/cluster-domain holds the cluster's DNS domain
+            type: ssh
+            node: controlplane
+            run: |
+              want=$(awk '$1 == "clusterDomain:" {print $2}' /var/lib/kubelet/config.yaml)
+              [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/q4/cluster-domain 2>/dev/null | sed 's/\.$//')" = "$want" ] && echo ok || echo "want $want"
+            expect: { equals: "ok" }
+            weight: 1
+        hints:
+          - "The NodePort range is a kube-apiserver flag; without the flag the default applies (kubectl explain service.spec.ports.nodePort)."
+          - "CoreDNS reads its Corefile from ConfigMap kube-system/coredns. The forward plugin names the upstream."
+          - "The cluster domain is set in the kubelet configuration (/var/lib/kubelet/config.yaml) and in the Corefile's kubernetes plugin."

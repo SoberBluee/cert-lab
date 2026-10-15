@@ -214,9 +214,10 @@ program
 program
   .command('reset')
   .description('restore the snapshot and re-run setup')
+  .option('--reroll', 'roll new variables first, for a different variant of the question')
   .action(
-    action(async () => {
-      const { ready } = await o().sessions.reset();
+    action(async (opts: { reroll?: boolean }) => {
+      const { ready } = await o().sessions.reset({ reroll: opts.reroll });
       printTask(await awaitReady(ready));
     }),
   );

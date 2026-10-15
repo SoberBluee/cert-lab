@@ -3,7 +3,10 @@
 set -euo pipefail
 
 dir="$(awk '/^staticPodPath:/ {print $2}' /var/lib/kubelet/config.yaml)"
-cat > "${dir:-/etc/kubernetes/manifests}/${Q4_POD}.yaml" <<EOF
+dir="${dir:-/etc/kubernetes/manifests}"
+case "$Q4_KIND" in
+  static-nodeport)
+    cat > "$dir/${Q4_POD}.yaml" <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -17,3 +20,6 @@ spec:
       resources:
         requests: { cpu: 10m, memory: 20Mi }
 EOF
+    ;;
+  static-fix-move) rm -f "$dir/${Q4_POD}.yaml" ;;
+esac

@@ -46,6 +46,11 @@ const short = (s: string, n = 60) => {
 };
 const now = () => new Date().toISOString();
 const totalHints = (row: Pick<SessionRow, 'hintsRevealed'>) => Object.values(row.hintsRevealed).reduce((a, b) => a + b, 0);
+/** Whether rolling again can produce different values. */
+const canReroll = (s: LoadedScenario) =>
+  Object.values(s.def.variables).some((v) =>
+    'oneOf' in v ? v.oneOf.length > 1 : 'range' in v ? v.range[1] > v.range[0] : 'node' in v ? v.node === 'any' || s.def.nodes.workers > 1 : true,
+  );
 
 export interface StartResult {
   view: SessionView;
@@ -70,13 +75,14 @@ export class SessionManager extends EventEmitter {
     this.setMaxListeners(100);
   }
 
-  private lookup(id: string): LoadedScenario | undefined {
+  /** `fresh` re-reads the scenario from disk; use it whenever a lab is about to be set up. */
+  private lookup(id: string, fresh = false): LoadedScenario | undefined {
     if (id === PLAYGROUND_ID) return PLAYGROUND;
     if (id.startsWith(LEARN_PREFIX)) {
       const lesson = this.lessonFor(id);
       return lesson && lessonScenario(lesson);
     }
-    return this.library.get(id);
+    return fresh ? this.library.fresh(id) : this.library.get(id);
   }
 
   private lessonFor(scenarioId: string) {
@@ -117,6 +123,7 @@ export class SessionManager extends EventEmitter {
       context: s?.def.context,
       tasks,
       vars: row.solutionViewed || row.endedAt ? row.vars : visibleVars(row.vars, raw?.def.variables),
+      rerollable: row.mode === 'practice' && Boolean(raw && canReroll(raw)),
       hintsRevealed: tasks.flatMap((t) => t.hintsRevealed),
       hintsTotal: tasks.reduce((n, t) => n + t.hintsTotal, 0),
       solutionViewed: row.solutionViewed,
@@ -195,7 +202,7 @@ export class SessionManager extends EventEmitter {
     if (scenarioId.startsWith(LEARN_PREFIX) !== (mode === 'learn')) {
       throw new OrchestratorError('Lessons can only be started in learn mode.', 400);
     }
-    const scenario = this.lookup(scenarioId);
+    const scenario = this.lookup(scenarioId, true);
     if (!scenario) throw new OrchestratorError(`Unknown ${mode === 'learn' ? 'lesson' : 'scenario'} "${scenarioId.replace(LEARN_PREFIX, '')}".`, 404);
     let vars: Vars;
     try {
@@ -275,21 +282,35 @@ export class SessionManager extends EventEmitter {
     });
   }
 
-  async reset(): Promise<StartResult> {
+  /**
+   * Restores the snapshot and sets the lab up again. With `reroll`, a practice session first rolls
+   * new variables, so the learner gets a different variant of the question with fresh hints.
+   */
+  async reset(opts: { reroll?: boolean } = {}): Promise<StartResult> {
     const row = this.requireOpen();
     if (row.state === 'provisioning' || row.state === 'grading') {
       throw new OrchestratorError(`Cannot reset while the session is ${row.state}.`, 409);
     }
     if (row.mode === 'mock' && row.state !== 'failed') throw new OrchestratorError('An exam cannot be reset.', 409);
-    const s = this.scenarioFor(row);
+    const raw = this.lookup(row.scenarioId, true);
+    let vars = row.vars;
+    if (opts.reroll) {
+      if (row.mode !== 'practice' || !raw || !canReroll(raw)) {
+        throw new OrchestratorError('Only a practice session of a scenario with variables can roll a new variant.', 409);
+      }
+      vars = rollScenarioVars(raw);
+    } else if (raw) {
+      // Keeps the stored values, rolls variables added to the scenario since, drops removed ones.
+      vars = rollScenarioVars(raw, Object.fromEntries(Object.entries(row.vars).filter(([k]) => Object.hasOwn(raw.def.variables, k))));
+    }
     this.stopWatching();
     this.finalizeAttempt(row);
     const attemptId = this.store.createAttempt({
       scenarioId: row.scenarioId,
       sessionId: row.id,
       mode: row.mode,
-      hintsUsed: totalHints(row),
-      solutionViewed: row.solutionViewed,
+      hintsUsed: opts.reroll ? 0 : totalHints(row),
+      solutionViewed: opts.reroll ? false : row.solutionViewed,
     });
     this.store.updateSession(row.id, {
       state: 'provisioning',
@@ -301,10 +322,12 @@ export class SessionManager extends EventEmitter {
       connection: undefined,
       tasksReady: [],
       preparingTask: undefined,
+      vars,
+      ...(opts.reroll && { hintsRevealed: {}, solutionViewed: false }),
     });
-    this.log.info({ sessionId: row.id, vars: row.vars }, 'session reset');
+    this.log.info({ sessionId: row.id, vars }, opts.reroll ? 'session re-rolled' : 'session reset');
     this.emitChange(row.id);
-    const ready = this.provision(row.id, s, row.vars, row.mode);
+    const ready = this.provision(row.id, this.scenarioFor(this.store.getSession(row.id)!), vars, row.mode);
     return { view: this.toView(this.store.getSession(row.id)!), ready };
   }
 

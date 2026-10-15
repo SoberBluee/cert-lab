@@ -1,0 +1,56 @@
+id: ks-sa-rbac-chain
+title: "Killer-style: a ServiceAccount that should list Pods cluster-wide"
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 12
+points: 9
+tags: [killer-style, rbac, serviceaccount, clusterrole, clusterrolebinding, auth-can-i, re-rollable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  NS: { oneOf: [reporting, audit, insight] }
+  SA: { oneOf: [pod-reporter, inventory-bot, census] }
+  ROLE_FAULT: { oneOf: [verbs, resource, api-group], hidden: true }
+  BINDING_FAULT: { oneOf: [subject-namespace, subject-name, subject-kind], hidden: true }
+  WORKLOAD_FAULT: { oneOf: [no-sa, sa-typo, sa-missing], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 180
+checks:
+  - id: can-list
+    description: ServiceAccount ${SA} in ${NS} can list Pods in every namespace
+    type: kubectl
+    run: |
+      for ns in default kube-system ${NS}; do kubectl auth can-i list pods -n $ns --as=system:serviceaccount:${NS}:${SA}; done | sort -u | xargs
+    expect: { equals: "yes" }
+    weight: 3
+  - id: read-only
+    description: ${SA} still cannot create, delete or patch Pods, and cannot read Secrets
+    type: kubectl
+    run: |
+      for v in "create pods" "delete pods" "patch pods" "get secrets"; do kubectl auth can-i $v -A --as=system:serviceaccount:${NS}:${SA}; done | sort -u | xargs
+    expect: { equals: "no" }
+    weight: 2
+  - id: deployment-sa
+    description: Deployment ${SA} runs its Pods as ServiceAccount ${SA}, with 1 ready replica
+    type: kubectl
+    run: |
+      kubectl -n ${NS} get deployment ${SA} -o jsonpath='{.spec.template.spec.serviceAccountName}/{.status.readyReplicas}/'
+      kubectl -n ${NS} get pods -l app=${SA} --field-selector=status.phase=Running -o jsonpath='{.items[*].spec.serviceAccountName}'
+    expect: { equals: "${SA}/1/${SA}" }
+    weight: 2
+    retrySeconds: 60
+  - id: can-i-file
+    description: /opt/course/6/can-i.txt holds the answer of kubectl auth can-i for ${SA}
+    type: ssh
+    node: controlplane
+    run: tr -d '[:space:]' < /opt/course/6/can-i.txt 2>/dev/null || echo missing
+    expect: { equals: "yes" }
+    weight: 2
+hints:
+  - "kubectl auth can-i list pods -A --as=system:serviceaccount:${NS}:${SA} answers without running anything. Then follow the chain: which ClusterRoleBinding names this ServiceAccount, and what does its ClusterRole allow?"
+  - "A ServiceAccount subject is identified by kind ServiceAccount, its name AND its namespace. kubectl get clusterrolebinding -o wide shows them."
+  - "A rule matches on apiGroup (core is \"\"), the plural resource name (kubectl api-resources) and the verb: listing needs list. A Pod only uses a ServiceAccount if spec.serviceAccountName names one that exists; kubectl describe replicaset shows why Pods are not created."

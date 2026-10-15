@@ -1,0 +1,65 @@
+id: helm-component-template
+title: "Helm: render a chart, then install a cluster component on every node"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 12
+points: 8
+tags: [helm, helm-template, helm-show-values, daemonset, tolerations, control-plane]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  LEVEL: { oneOf: [debug, warn, error] }
+  INTERVAL: { oneOf: [15, 20, 45] }
+setup:
+  - node: controlplane
+    script: setup/chartrepo.sh
+    timeoutSeconds: 180
+  - node: controlplane
+    script: setup/prepare.sh
+    timeoutSeconds: 120
+checks:
+  - id: default-interval
+    description: /opt/course/helm/default-interval.txt holds the chart's default interval (30)
+    type: ssh
+    node: controlplane
+    run: tr -d '[:space:]' < /opt/course/helm/default-interval.txt 2>/dev/null || echo missing
+    expect: { equals: "30" }
+    weight: 1
+  - id: rendered
+    description: /opt/course/helm/node-agent.yaml is the node-agent 0.2.0 DaemonSet rendered with logLevel ${LEVEL} and a control plane toleration
+    type: ssh
+    node: controlplane
+    run: |
+      f=/opt/course/helm/node-agent.yaml
+      grep -q 'kind: DaemonSet' $f && grep -q 'helm.sh/chart: node-agent-0.2.0' $f && grep -q 'level=${LEVEL}' $f \
+        && grep -q 'sleep ${INTERVAL}' $f && grep -q 'node-role.kubernetes.io/control-plane' $f && echo ok || echo wrong
+    expect: { equals: "ok" }
+    weight: 2
+  - id: release
+    description: release node-agent in monitoring is deployed from chart node-agent-0.2.0
+    type: kubectl
+    run: helm -n monitoring list -a -o json | jq -r '.[] | select(.name == "node-agent") | .status + "/" + .chart'
+    expect: { equals: "deployed/node-agent-0.2.0" }
+    weight: 2
+  - id: values
+    description: the release sets logLevel ${LEVEL} and interval ${INTERVAL}
+    type: kubectl
+    run: helm -n monitoring get values node-agent -o json | jq -r '.logLevel + "/" + (.interval | tostring)'
+    expect: { equals: "${LEVEL}/${INTERVAL}" }
+    weight: 1
+  - id: every-node
+    description: DaemonSet node-agent runs a ready Pod on all 3 nodes, including controlplane
+    type: kubectl
+    run: |
+      s=$(kubectl -n monitoring get daemonset node-agent -o jsonpath='{.status.desiredNumberScheduled}/{.status.numberReady}')
+      cp=$(kubectl -n monitoring get pods -l app.kubernetes.io/instance=node-agent --field-selector spec.nodeName=controlplane -o name | wc -l)
+      echo "$s/$cp"
+    expect: { equals: "3/3/1" }
+    weight: 2
+    retrySeconds: 90
+hints:
+  - "helm show values lab/node-agent --version 0.2.0 lists every value and its default."
+  - "helm template renders the manifests locally without installing anything; it takes the same --version, --set and -f flags as helm install."
+  - "The control plane carries the taint node-role.kubernetes.io/control-plane:NoSchedule (kubectl describe node controlplane). Tolerations are a list, which is easiest to pass in a values file: -f values.yaml."

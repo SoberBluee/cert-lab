@@ -49,7 +49,13 @@ export function lintScenario(s: LoadedScenario, read: FileReader, where: string,
   const texts: [string, string, 'templated' | 'script'][] = [
     ['scenario.yaml', JSON.stringify({ ...d, variables: undefined }), 'templated'],
     ...s.tasks.map((t): [string, string, 'templated'] => [d.tasks ? taskFile(t.id) : 'task.md', t.markdown, 'templated']),
+    ...s.tasks.flatMap((t) =>
+      Object.entries(t.variantMarkdown ?? {}).map(([k, md]): [string, string, 'templated'] => [taskFile(t.id, k), md, 'templated']),
+    ),
   ];
+  for (const t of s.tasks) {
+    for (const [k, md] of Object.entries(t.variantMarkdown ?? {})) if (!md.trim()) err(`${taskFile(t.id, k)} is missing or empty`);
+  }
   if (s.solutionMd) texts.push(['solution.md', s.solutionMd, 'templated']);
 
   const seenScripts = new Set<string>();
@@ -65,10 +71,14 @@ export function lintScenario(s: LoadedScenario, read: FileReader, where: string,
   const steps: [string, Step][] = [
     ...d.setup.map((st, i): [string, Step] => [`setup[${i}]`, st]),
     ...s.tasks.flatMap((t) => t.setup.map((st, i): [string, Step] => [`task ${t.id} setup[${i}]`, st])),
+    ...s.tasks.flatMap((t) =>
+      Object.entries(t.variants ?? {}).flatMap(([k, v]) => v.setup.map((st, i): [string, Step] => [`task ${t.id}.${k} setup[${i}]`, st])),
+    ),
     ...(d.solution ?? []).map((st, i): [string, Step] => [`solution[${i}]`, st]),
   ];
   for (const [label, st] of steps) if (st.script) checkScript(label, st.script);
-  for (const t of s.tasks) for (const c of t.checks) if (c.type === 'script') checkScript(`check "${c.id}"`, c.script);
+  const everyCheck = s.tasks.flatMap((t) => [...t.checks, ...Object.values(t.variants ?? {}).flatMap((v) => v.checks)]);
+  for (const c of everyCheck) if (c.type === 'script') checkScript(`check "${c.id}"`, c.script);
 
   if (!s.solutionMd) warn('solution.md is missing');
   if (!d.solution && !s.solutionScript) warn('no solution steps or solution.sh, so "cka verify" cannot run');
@@ -88,14 +98,36 @@ export function lintScenario(s: LoadedScenario, read: FileReader, where: string,
     // Scripts may also read variables as plain environment variables ($NAME).
     for (const name of declared) if (new RegExp(`\\$${name}\\b`).test(text)) used.add(name);
   }
-  for (const name of declared) if (!used.has(name)) warn(`variable ${name} is declared but never used`);
+  for (const name of declared) if (!used.has(name) && !s.tasks.some((t) => t.variant === name)) warn(`variable ${name} is declared but never used`);
+
+  // When scripts branch on some values of a hidden variable, a value they never mention is most likely an unhandled fault.
+  const scriptText = texts.filter(([file, , kind]) => kind === 'script' || file === 'solution.md').map(([, text]) => text);
+  for (const name of hidden) {
+    const def = d.variables[name];
+    if (!('oneOf' in def)) continue;
+    const missing = def.oneOf.map(String).filter((value) => {
+      const re = new RegExp(`(^|[^\\w./-])${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w./-])`, 'm');
+      return !scriptText.some((text) => re.test(text));
+    });
+    if (missing.length && missing.length < def.oneOf.length) {
+      for (const value of missing) warn(`hidden ${name}=${value} appears in no script or solution.md`);
+    }
+  }
 
   for (const t of s.tasks) {
-    const weights = t.checks.reduce((sum, c) => sum + c.weight, 0);
-    const label = d.tasks ? `task ${t.id}: check weights` : 'check weights';
-    if (weights !== t.points) warn(`${label} add up to ${weights} but points is ${t.points}`);
-    if (!t.hints.length) warn(d.tasks ? `task ${t.id} has no hints` : 'no hints');
-    if (t.setupStage > 0 && !t.setup.length) warn(`task ${t.id} has setupStage ${t.setupStage} but no setup steps`);
+    const variants: [string, { checks: { weight: number }[]; hints: string[]; setup: Step[]; setupStage: number }][] = t.variants
+      ? Object.entries(t.variants).map(([k, v]) => [
+          `.${k}`,
+          { checks: [...t.checks, ...v.checks], hints: v.hints.length ? v.hints : t.hints, setup: [...t.setup, ...v.setup], setupStage: v.setupStage ?? t.setupStage },
+        ])
+      : [['', t]];
+    for (const [suffix, r] of variants) {
+      const weights = r.checks.reduce((sum, c) => sum + c.weight, 0);
+      const label = d.tasks ? `task ${t.id}${suffix}: check weights` : 'check weights';
+      if (weights !== t.points) warn(`${label} add up to ${weights} but points is ${t.points}`);
+      if (!r.hints.length) warn(d.tasks ? `task ${t.id}${suffix} has no hints` : 'no hints');
+      if (r.setupStage > 0 && !r.setup.length) warn(`task ${t.id}${suffix} has setupStage ${r.setupStage} but no setup steps`);
+    }
   }
   if (s.tasks.length === 1 && s.tasks[0].setupStage > 0) warn('setupStage has no effect in a single-task scenario; its setup runs at start');
   if (d.tasks) {

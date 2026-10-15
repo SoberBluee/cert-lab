@@ -1,0 +1,64 @@
+id: helm-install-values
+title: "Helm: add a repository and install a chart with values"
+domain: cluster-architecture
+difficulty: 1
+estimatedMinutes: 8
+points: 9
+tags: [helm, helm-repo, helm-install, values, nodeport]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [web-prod, shop-prod, blog-prod] }
+  REL: { oneOf: [frontend, storefront, landing] }
+  REPLICAS: { oneOf: [2, 3, 4] }
+setup:
+  - node: controlplane
+    script: setup/chartrepo.sh
+    timeoutSeconds: 180
+  - node: controlplane
+    run: |
+      kubectl delete namespace "$NS" --ignore-not-found --wait=true >/dev/null
+      mkdir -p /opt/course/helm && rm -f /opt/course/helm/versions.txt && chown -R ubuntu:ubuntu /opt/course
+checks:
+  - id: repo
+    description: user ubuntu has the repository lab at http://controlplane:8879
+    type: ssh
+    node: controlplane
+    run: runuser -u ubuntu -- env HOME=/home/ubuntu helm repo list -o json 2>/dev/null | jq -r '.[] | select(.name == "lab") | .url'
+    expect: { equals: "http://controlplane:8879" }
+    weight: 1
+  - id: versions
+    description: /opt/course/helm/versions.txt lists the webapp chart versions 1.0.0, 1.1.0 and 2.0.0
+    type: ssh
+    node: controlplane
+    run: f=/opt/course/helm/versions.txt; grep -q '1\.0\.0' $f && grep -q '1\.1\.0' $f && grep -q '2\.0\.0' $f && echo ok || echo incomplete
+    expect: { equals: "ok" }
+    weight: 1
+  - id: release
+    description: release ${REL} in ${NS} is deployed from chart webapp-1.1.0
+    type: kubectl
+    run: helm -n ${NS} list -a -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
+    expect: { equals: "deployed/webapp-1.1.0" }
+    weight: 3
+  - id: values
+    description: the release sets replicaCount ${REPLICAS} and service.type NodePort as Helm values
+    type: kubectl
+    run: helm -n ${NS} get values ${REL} -o json | jq -r '(.replicaCount | tostring) + "/" + (.service.type // "")'
+    expect: { equals: "${REPLICAS}/NodePort" }
+    weight: 1
+  - id: running
+    description: ${REPLICAS} replicas of the release are ready behind a NodePort Service
+    type: kubectl
+    run: |
+      d=$(kubectl -n ${NS} get deployment -l app.kubernetes.io/instance=${REL} -o jsonpath='{.items[0].status.readyReplicas}')
+      s=$(kubectl -n ${NS} get service -l app.kubernetes.io/instance=${REL} -o jsonpath='{.items[0].spec.type}')
+      echo "$d/$s"
+    expect: { equals: "${REPLICAS}/NodePort" }
+    weight: 3
+    retrySeconds: 90
+hints:
+  - "helm repo add <name> <url>, then helm repo update. Run Helm as yourself, not with sudo: repositories are stored per user."
+  - "helm search repo lab/webapp --versions lists every version; helm show values lab/webapp --version 1.1.0 shows the keys you can set."
+  - "helm install <release> <chart> --version <v> -n <ns> --create-namespace --set key=value"

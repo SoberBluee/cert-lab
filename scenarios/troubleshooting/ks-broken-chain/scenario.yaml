@@ -4,7 +4,7 @@ domain: troubleshooting
 difficulty: 3
 estimatedMinutes: 20
 points: 11
-tags: [killer-style, multi-step, networkpolicy, dns, service, targetport, secret, crashloop, nodeport]
+tags: [killer-style, multi-step, networkpolicy, dns, service, targetport, secret, crashloop, nodeport, re-rollable]
 base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
@@ -14,6 +14,9 @@ variables:
   APP: { oneOf: [catalog, ledger, checkout] }
   NODEPORT: { range: [30200, 30999] }
   TOKEN: { random: 8 }
+  DNS_FAULT: { oneOf: [no-dns, dns-port, api-port], hidden: true }
+  API_FAULT: { oneOf: [secret-key, secret-name, image-tag], hidden: true }
+  SVC_FAULT: { oneOf: [target-port, selector, port], hidden: true }
 setup:
   - node: controlplane
     script: setup/break.sh
@@ -53,25 +56,28 @@ checks:
     expect: { equals: "token/${TOKEN}" }
     retrySeconds: 60
     weight: 1
-  - id: cause-netpol
-    description: causes.txt names the NetworkPolicy blocking DNS
-    type: ssh
+  - id: cause-egress
+    description: causes.txt names what was wrong in the egress NetworkPolicy
+    type: script
     node: controlplane
-    run: grep -Eiq '(networkpolicy|netpol|egress).*(dns|53)|(dns|53).*(networkpolicy|netpol|egress)' /opt/course/chain/causes.txt && echo found || echo missing
+    script: checks/cause.sh
+    args: [egress]
     expect: { equals: "found" }
     weight: 1
-  - id: cause-secret
-    description: causes.txt names the wrong Secret key
-    type: ssh
+  - id: cause-api
+    description: causes.txt names why the API Pods could not start
+    type: script
     node: controlplane
-    run: grep -Eiq 'secret|secretKeyRef|api-token' /opt/course/chain/causes.txt && echo found || echo missing
+    script: checks/cause.sh
+    args: [api]
     expect: { equals: "found" }
     weight: 1
-  - id: cause-port
-    description: causes.txt names the Service targetPort
-    type: ssh
+  - id: cause-service
+    description: causes.txt names what was wrong with Service ${APP}-api
+    type: script
     node: controlplane
-    run: grep -Eiq 'targetport|target port|api-http' /opt/course/chain/causes.txt && echo found || echo missing
+    script: checks/cause.sh
+    args: [service]
     expect: { equals: "found" }
     weight: 1
   - id: causes-lines
@@ -83,5 +89,5 @@ checks:
     weight: 1
 hints:
   - "Start at the edge and walk inwards: NodePort Service, frontend Pods and their logs, then the Service they call, its endpoints, and the Pods behind it."
-  - "nginx resolves proxy_pass hosts when it starts. 'host not found in upstream' with an existing Service means DNS itself is unreachable from that Pod. Which policies select it?"
-  - "Three fixes: allow UDP/TCP 53 egress in ${APP}-web-egress, point secretKeyRef at the key that exists in ${APP}-api-creds, and make the Service targetPort match the container port name."
+  - "nginx resolves proxy_pass hosts when it starts. 'host not found in upstream' with an existing Service means DNS itself is unreachable from that Pod. If nginx runs but times out, compare the egress rule's port with the port the API container listens on (a NetworkPolicy sees the Pod port)."
+  - "kubectl describe pod on an API Pod says why it does not start. kubectl get endpointslices and the Service's selector, port and targetPort show whether the Service reaches it, on the port nginx calls (80)."

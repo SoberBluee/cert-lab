@@ -59,6 +59,7 @@ export const api = {
   submit: () => request<SessionView>('POST', '/sessions/current/submit'),
   startPlayground: () => request<SessionView>('POST', '/playground'),
   reset: () => request<SessionView>('POST', '/sessions/current/reset'),
+  reroll: () => request<SessionView>('POST', '/sessions/current/reset', { reroll: true }),
   grade: () => request<GradeResult>('POST', '/sessions/current/grade'),
   openTask: (taskId: string) => request<SessionView>('POST', `/sessions/current/tasks/${encodeURIComponent(taskId)}/open`),
   hint: (taskId?: string) => request<SessionView>('POST', '/sessions/current/hint', { taskId }),

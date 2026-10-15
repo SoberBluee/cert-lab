@@ -11,12 +11,12 @@ metadata:
   name: sec-pv
 spec:
   capacity:
-    storage: 3Gi
-  accessModes: [ReadWriteOnce]
-  persistentVolumeReclaimPolicy: Retain
+    storage: ${CAPACITY}
+  accessModes: [${ACCESS_MODE}]
+  persistentVolumeReclaimPolicy: ${RECLAIM}
   storageClassName: manual
   hostPath:
-    path: /mnt/sec-data
+    path: ${DATA_DIR}
     type: DirectoryOrCreate
   nodeAffinity:
     required:
@@ -34,10 +34,10 @@ metadata:
 spec:
   storageClassName: manual
   volumeName: sec-pv
-  accessModes: [ReadWriteOnce]
+  accessModes: [${ACCESS_MODE}]
   resources:
     requests:
-      storage: 2Gi
+      storage: ${REQUEST}
 ---
 apiVersion: v1
 kind: Pod
@@ -52,14 +52,14 @@ spec:
   containers:
     - name: vault
       image: busybox:1.36
-      command: ["sh", "-c", "while true; do date >> /secure/vault/heartbeat; sleep 10; done"]
+      command: ["sh", "-c", "while true; do date >> ${MOUNT_PATH}/heartbeat; sleep 10; done"]
       securityContext:
         readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]
       volumeMounts:
         - name: vault
-          mountPath: /secure/vault
+          mountPath: ${MOUNT_PATH}
   volumes:
     - name: vault
       persistentVolumeClaim:

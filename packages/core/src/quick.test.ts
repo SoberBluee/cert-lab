@@ -9,6 +9,7 @@ import type { FieldInput, PartInput, QuickQuestion, RecipeField, ScenarioBundle 
 import { selectFaults } from './faults';
 import { buildQuickBundle } from './quick';
 import { BUILDERS, CATEGORIES, composeCreate, faultList, recipeCatalog, type Builder, type PartBase } from './recipes';
+import { CHARTREPO_SCRIPT } from './recipes/create/helm';
 import { ScenarioLibrary } from './scenarios';
 import { SessionManager } from './session';
 import type { SessionRow } from './store';
@@ -123,6 +124,11 @@ const STUBS = [
   'install',
   'chown',
   'base64',
+  'helm',
+  'runuser',
+  'flock',
+  'systemd-run',
+  'python3',
 ];
 
 /**
@@ -204,7 +210,7 @@ describe('Create track', () => {
           const { build: res, issues } = build([createQ(b, addons, followUps, randomize)]);
           assert.deepEqual(issues, []);
           bashSyntax(res.bundle);
-          assertAppliesCleanly(res.bundle, b.track !== 'cluster');
+          assertAppliesCleanly(res.bundle, b.build(defaults(b.fields)).manifests.length > 0);
           const ids = scenarioOf(res.bundle).tasks[0].checks.map((c: { id: string }) => c.id);
           assert.equal(new Set(ids).size, ids.length);
         }
@@ -514,6 +520,14 @@ describe('Quick Create', () => {
     assert.doesNotMatch(out.solution[0].script, /kubectl apply -f - <<EOF/);
     assert.doesNotMatch(out.solutionMd, /kubectl apply/);
     assert.match(out.solution[0].script, /snapshot save/);
+  });
+
+  it('Helm scenarios ship the same chart repository script as the Helm builder', () => {
+    const dir = join(import.meta.dirname, '../../../scenarios/cluster-architecture');
+    for (const s of ['helm-install-values', 'helm-rollback-upgrade', 'helm-release-cleanup', 'helm-component-template']) {
+      assert.equal(readFileSync(join(dir, s, 'setup/chartrepo.sh'), 'utf8'), CHARTREPO_SCRIPT, `${s}/setup/chartrepo.sh differs`);
+    }
+    assert.ok(!CHARTREPO_SCRIPT.includes('${'), 'the renderer would substitute ${...} in the builder copy');
   });
 
   it('catalog hides fault ids unless spoilers are asked for', () => {

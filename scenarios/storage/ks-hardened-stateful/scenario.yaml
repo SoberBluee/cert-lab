@@ -4,7 +4,7 @@ domain: storage
 difficulty: 3
 estimatedMinutes: 20
 points: 17
-tags: [killer-style, multi-step, pv, pvc, node-affinity, hostpath, security-context, context-switch]
+tags: [killer-style, multi-step, pv, pvc, node-affinity, hostpath, security-context, context-switch, re-rollable]
 base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: ${CTX}
@@ -16,23 +16,30 @@ variables:
   NODE: { node: workers }
   RUN_UID: { oneOf: [10001, 10500, 20001] }
   FS_GID: { oneOf: [2000, 3000, 4000] }
+  DATA_DIR: { oneOf: [/mnt/sec-data, /srv/vault-data, /opt/secure-store] }
+  MOUNT_PATH: { oneOf: [/secure/vault, /data/vault, /var/lib/vault] }
+  CAPACITY: { oneOf: [3Gi, 4Gi, 5Gi] }
+  REQUEST: { oneOf: [1Gi, 2Gi] }
+  ACCESS_MODE: { oneOf: [ReadWriteOnce, ReadWriteOncePod] }
+  RECLAIM: { oneOf: [Retain, Delete] }
+  TRAP: { oneOf: [plain, default-sc, stale-dir], hidden: true }
 setup:
   - node: ${NODE}
-    run: rm -rf /mnt/sec-data
+    script: setup/node.sh
   - node: controlplane
     script: setup/contexts.sh
 solution:
   - node: ${NODE}
-    run: mkdir -p /mnt/sec-data && chown "$RUN_UID:$FS_GID" /mnt/sec-data && chmod 0770 /mnt/sec-data
+    run: mkdir -p "$DATA_DIR" && chown -R "$RUN_UID:$FS_GID" "$DATA_DIR" && chmod 0770 "$DATA_DIR"
   - node: controlplane
     script: solution.sh
     timeoutSeconds: 300
 checks:
   - id: pv-spec
-    description: PV sec-pv is 3Gi, ReadWriteOnce, Retain, hostPath /mnt/sec-data (DirectoryOrCreate)
+    description: PV sec-pv is ${CAPACITY}, ${ACCESS_MODE}, ${RECLAIM}, hostPath ${DATA_DIR} (DirectoryOrCreate)
     type: kubectl
     run: kubectl get pv sec-pv -o jsonpath='{.spec.capacity.storage}/{.spec.accessModes[0]}/{.spec.persistentVolumeReclaimPolicy}/{.spec.hostPath.path}/{.spec.hostPath.type}'
-    expect: { equals: "3Gi/ReadWriteOnce/Retain//mnt/sec-data/DirectoryOrCreate" }
+    expect: { equals: "${CAPACITY}/${ACCESS_MODE}/${RECLAIM}/${DATA_DIR}/DirectoryOrCreate" }
     weight: 2
   - id: pv-affinity
     description: sec-pv can only be used on ${NODE}
@@ -41,10 +48,10 @@ checks:
     expect: { equals: "kubernetes.io/hostname=${NODE}" }
     weight: 1
   - id: pvc-bound
-    description: PVC sec-pvc in ${NS} requests 2Gi and is Bound to sec-pv
+    description: PVC sec-pvc in ${NS} requests ${REQUEST} and is Bound to sec-pv
     type: kubectl
     run: kubectl -n ${NS} get pvc sec-pvc -o jsonpath='{.status.phase}/{.spec.volumeName}/{.spec.resources.requests.storage}'
-    expect: { equals: "Bound/sec-pv/2Gi" }
+    expect: { equals: "Bound/sec-pv/${REQUEST}" }
     weight: 2
     retrySeconds: 30
   - id: pod-running
@@ -55,13 +62,13 @@ checks:
     weight: 2
     retrySeconds: 60
   - id: pod-mount
-    description: sec-vault mounts sec-pvc at /secure/vault
+    description: sec-vault mounts sec-pvc at ${MOUNT_PATH}
     type: kubectl
     run: |
       kubectl -n ${NS} get pod sec-vault -o json | jq -r '
         (.spec.volumes[] | select(.persistentVolumeClaim.claimName == "sec-pvc") | .name) as $v
         | [.spec.containers[0].volumeMounts[] | select(.name == $v) | .mountPath] | join(",")'
-    expect: { equals: "/secure/vault" }
+    expect: { equals: "${MOUNT_PATH}" }
     weight: 1
   - id: pod-security
     description: Pod securityContext is runAsNonRoot, runAsUser ${RUN_UID}, fsGroup ${FS_GID}
@@ -76,11 +83,11 @@ checks:
     expect: { matches: "^busybox[^/]*/true/ALL$" }
     weight: 2
   - id: heartbeat
-    description: sec-vault keeps writing /secure/vault/heartbeat, owned by UID ${RUN_UID}, onto ${NODE}:/mnt/sec-data
+    description: sec-vault keeps writing ${MOUNT_PATH}/heartbeat, owned by UID ${RUN_UID}, onto ${NODE}:${DATA_DIR}
     type: ssh
     node: ${NODE}
     run: |
-      f=/mnt/sec-data/heartbeat
+      f=${DATA_DIR}/heartbeat
       if [ -s "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 60 ]; then stat -c %u "$f"; else echo missing-or-stale; fi
     expect: { equals: "${RUN_UID}" }
     weight: 3
@@ -98,6 +105,6 @@ checks:
     expect: { equals: "0" }
     weight: 1
 hints:
-  - "Read the task top to bottom first. Check which namespace the context you switched to defaults to: kubectl config get-contexts."
-  - "A hostPath directory created by the kubelet is owned by root with mode 0755, and fsGroup is not applied to hostPath volumes. A non-root user cannot write there."
-  - "ssh ${NODE}, then: sudo mkdir -p /mnt/sec-data && sudo chown ${RUN_UID}:${FS_GID} /mnt/sec-data. The PV needs storageClassName set to the same value on the PV and the PVC (or empty on both)."
+  - "Read the task top to bottom first. Check which namespace the context you switched to defaults to: kubectl config get-contexts. kubectl get storageclass shows whether a class would be filled in for a PVC that names none."
+  - "A hostPath directory created by the kubelet is owned by root with mode 0755, and fsGroup is not applied to hostPath volumes. A non-root user cannot write there. Look at the node: does ${DATA_DIR} already exist, and who owns what is inside?"
+  - "ssh ${NODE}, then: sudo mkdir -p ${DATA_DIR} && sudo chown -R ${RUN_UID}:${FS_GID} ${DATA_DIR}. The PV needs storageClassName set to the same value on the PV and the PVC."

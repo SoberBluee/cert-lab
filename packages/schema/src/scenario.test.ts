@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { formatZodError, LEGACY_TASK_ID, ScenarioSchema, scenarioTasks } from './scenario';
+import { formatZodError, LEGACY_TASK_ID, resolveTask, ScenarioSchema, scenarioTasks } from './scenario';
 
 const base = {
   id: 'demo',
@@ -49,6 +49,49 @@ describe('ScenarioSchema tasks', () => {
   it('puts hints inside tasks, not at the top level', () => {
     const s = { ...base, hints: ['x'], tasks: [{ id: 'q1', title: 'A', points: 4, checks: [check('a')] }] };
     assert.match(errors(s).join(), /put hints inside each task/);
+  });
+});
+
+describe('ScenarioSchema task variants', () => {
+  const withVariants = (variables: object, variants: object) => ({
+    ...base,
+    variables,
+    tasks: [{ id: 'q1', title: 'Slot', points: 4, checks: [check('shared')], variant: 'KIND', variants }],
+  });
+
+  it('accepts one variant per oneOf value and resolves the rolled one', () => {
+    const s = ScenarioSchema.parse(
+      withVariants({ KIND: { oneOf: ['a', 'b'] } }, {
+        a: { title: 'A', checks: [check('a1')], hints: ['ha'], setup: [{ node: 'controlplane', run: 'echo a' }] },
+        b: { checks: [check('b1')] },
+      }),
+    );
+    const [t] = s.tasks!;
+    const a = resolveTask(t, { KIND: 'a' });
+    assert.equal(a.title, 'A');
+    assert.deepEqual(a.checks.map((c) => c.id), ['shared', 'a1']);
+    assert.deepEqual(a.hints, ['ha']);
+    assert.equal(a.variants, undefined);
+    assert.equal(resolveTask(t, { KIND: 'b' }).title, 'Slot');
+    assert.equal(resolveTask(t, {}), t);
+  });
+
+  it('needs variants to match the oneOf values of a visible variable', () => {
+    assert.match(errors(withVariants({ KIND: { oneOf: ['a', 'b'] } }, { a: { checks: [check('a1')] } })).join(), /no entry for KIND=b/);
+    assert.match(
+      errors(withVariants({ KIND: { oneOf: ['a'] } }, { a: { checks: [check('a1')] }, z: { checks: [check('z1')] } })).join(),
+      /variants.z is not a value of KIND/,
+    );
+    assert.match(errors(withVariants({ KIND: { oneOf: ['a'], hidden: true } }, { a: { checks: [check('a1')] } })).join(), /not hidden/);
+    assert.match(errors(withVariants({}, { a: { checks: [check('a1')] } })).join(), /declared oneOf/);
+  });
+
+  it('rejects duplicate check ids across variants and tasks without checks', () => {
+    assert.match(
+      errors(withVariants({ KIND: { oneOf: ['a', 'b'] } }, { a: { checks: [check('x')] }, b: { checks: [check('x')] } })).join(),
+      /duplicate check id "x"/,
+    );
+    assert.match(errors({ ...base, tasks: [{ id: 'q1', title: 'A', points: 4 }] }).join(), /at least one check/);
   });
 });
 

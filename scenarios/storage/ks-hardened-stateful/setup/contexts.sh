@@ -6,6 +6,24 @@ kubectl create namespace "$DECOY_NS" >/dev/null 2>&1 || kubectl get namespace "$
 kubectl delete namespace "$NS" --ignore-not-found --wait=true >/dev/null
 kubectl delete pv sec-pv --ignore-not-found --wait=true >/dev/null
 
+# TRAP=default-sc: a default StorageClass fills in storageClassName on any PVC that names none,
+# so the claim no longer matches a PV without a class.
+case "$TRAP" in
+  default-sc)
+    kubectl apply -f - >/dev/null <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+  annotations: { storageclass.kubernetes.io/is-default-class: "true" }
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+EOF
+    ;;
+  plain | stale-dir) ;;
+  *) echo "unknown TRAP $TRAP" >&2; exit 1 ;;
+esac
+
 for cfg in /home/ubuntu/.kube/config /root/.kube/config; do
   [[ -f "$cfg" ]] || continue
   kubectl --kubeconfig "$cfg" config set-context "$CTX" --cluster=kubernetes --user=kubernetes-admin --namespace="$DECOY_NS" >/dev/null

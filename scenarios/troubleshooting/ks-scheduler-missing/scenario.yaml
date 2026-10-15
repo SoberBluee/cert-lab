@@ -1,0 +1,66 @@
+id: ks-scheduler-missing
+title: "Killer-style: no scheduler, schedule a Pod by hand"
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 12
+points: 9
+tags: [killer-style, kube-scheduler, static-pod, manual-scheduling, nodename, control-plane, re-rollable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [ops, intake, batch] }
+  APP: { oneOf: [ledger, parser, mailer] }
+  SCHED_FAULT: { oneOf: [moved, kubeconfig-path, image-tag, command], hidden: true }
+  HIDE_DIR: { oneOf: [/etc/kubernetes, /etc/kubernetes/backup, /root], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 240
+solution:
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 420
+checks:
+  - id: manual-pod
+    description: Pod manual-${APP} runs on controlplane, placed with nodeName
+    type: kubectl
+    run: kubectl -n ${NS} get pod manual-${APP} -o jsonpath='{.spec.nodeName}/{.status.phase}/{.spec.schedulerName}'
+    expect: { equals: "controlplane/Running/default-scheduler" }
+    weight: 3
+    retrySeconds: 60
+  - id: manual-image
+    description: manual-${APP} still runs image httpd:2.4-alpine
+    type: kubectl
+    run: kubectl -n ${NS} get pod manual-${APP} -o jsonpath='{.spec.containers[0].image}'
+    expect: { equals: "httpd:2.4-alpine" }
+    weight: 1
+  - id: scheduler-ready
+    description: the kube-scheduler static Pod on controlplane is Ready
+    type: kubectl
+    run: kubectl -n kube-system get pod kube-scheduler-controlplane -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+    expect: { equals: "True" }
+    weight: 2
+    retrySeconds: 90
+  - id: deployment-ready
+    description: Deployment ${APP} runs 3 ready replicas, all on workers
+    type: kubectl
+    run: |
+      r=$(kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}')
+      n=$(kubectl -n ${NS} get pods -l app=${APP} -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | grep -c '^worker-' || true)
+      echo "$r/$n"
+    expect: { equals: "3/3" }
+    weight: 2
+    retrySeconds: 120
+  - id: manifests
+    description: /etc/kubernetes/manifests holds the four control plane manifests
+    type: ssh
+    node: controlplane
+    run: ls /etc/kubernetes/manifests | sort | xargs
+    expect: { equals: "etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml" }
+    weight: 1
+hints:
+  - "kubectl -n kube-system get pods: which control plane component is missing or not Ready? kubectl describe and kubectl logs on its Pod, or sudo crictl ps -a on controlplane, say why."
+  - "nodeName is set by the scheduler. Without one, you can set it yourself, but only when the Pod is created: kubectl get pod -o yaml > file, add spec.nodeName, then kubectl replace --force -f file."
+  - "Static Pods come from files in /etc/kubernetes/manifests. If the file is gone, find it: sudo find / -name 'kube-scheduler.yaml' -not -path '/proc/*' 2>/dev/null. If it is there, compare its command, flags and image with kube-controller-manager.yaml."

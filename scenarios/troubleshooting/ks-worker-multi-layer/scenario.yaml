@@ -1,0 +1,68 @@
+id: ks-worker-multi-layer
+title: "Killer-style: worker NotReady, three layers deep"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 15
+points: 10
+tags: [killer-style, node, kubelet, containerd, systemd, container-runtime, notready, re-rollable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NODE: { node: workers }
+  RUNTIME_FAULT: { oneOf: [endpoint, containerd-config, cni-removed], hidden: true }
+  KUBELET_FAULT: { oneOf: [binary-path, kubeconfig-flag, api-port, client-ca], hidden: true }
+  BOOT_FAULT: { oneOf: [kubelet-disabled, containerd-disabled, both-disabled], hidden: true }
+setup:
+  - node: ${NODE}
+    script: setup/break-node.sh
+  - node: controlplane
+    script: setup/wait.sh
+    timeoutSeconds: 240
+solution:
+  - node: ${NODE}
+    script: solution-node.sh
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 300
+checks:
+  - id: node-ready
+    description: ${NODE} is Ready
+    type: kubectl
+    run: kubectl get node ${NODE} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+    expect: { equals: "True" }
+    weight: 2
+    retrySeconds: 90
+  - id: probe-running
+    description: Pod node-probe in namespace default runs on ${NODE}
+    type: kubectl
+    run: kubectl get pod node-probe -o jsonpath='{.spec.nodeName}/{.status.phase}'
+    expect: { equals: "${NODE}/Running" }
+    weight: 2
+    retrySeconds: 90
+  - id: services
+    description: containerd and kubelet are active and enabled on ${NODE}, so they survive a reboot
+    type: ssh
+    node: ${NODE}
+    run: echo $(systemctl is-active containerd kubelet) $(systemctl is-enabled containerd kubelet)
+    expect: { equals: "active active enabled enabled" }
+    weight: 2
+  - id: config-restored
+    description: the runtime and kubelet configuration on ${NODE} were fixed in place
+    type: script
+    node: ${NODE}
+    script: checks/config-restored.sh
+    expect: { equals: "ok" }
+    weight: 1
+  - id: causes
+    description: /opt/course/3/causes.txt names the runtime fault, the kubelet fault and the service that would not survive a reboot, one line each
+    type: script
+    node: controlplane
+    script: checks/causes.sh
+    expect: { equals: "ok" }
+    weight: 3
+hints:
+  - "On the node: systemctl status kubelet containerd, then journalctl -u kubelet -n 50 (and -u containerd). Fix one layer, restart, and look again: the next error only shows once the first is gone."
+  - "The kubelet reads its unit drop-in (systemctl cat kubelet), /var/lib/kubelet/config.yaml and /etc/kubernetes/kubelet.conf. containerd reads /etc/containerd/config.toml, and the Pod network needs a file in /etc/cni/net.d. Compare with the healthy worker."
+  - "systemctl is-enabled tells you whether a service will start after a reboot. 'enable --now' starts and enables in one go."

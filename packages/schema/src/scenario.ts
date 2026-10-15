@@ -128,17 +128,41 @@ export const VariableSchema = z.union([
 
 const VariableNameSchema = z.string().regex(VAR_NAME, { message: 'variable names are UPPER_SNAKE_CASE' });
 
-export const TaskSchema = z.strictObject({
-  id: SlugSchema,
-  title: z.string().min(1),
-  points: z.number().positive(),
+/** One of several sibling questions a task slot can roll. Fields left out fall back to the task's. */
+export const TaskVariantSchema = z.strictObject({
+  title: z.string().min(1).optional(),
   context: z.string().optional(),
+  /** Runs after the task's own setup steps. */
   setup: z.array(StepSchema).default([]),
-  /** 0: set up at session start. 1 or more: set up when the learner first opens the task, after any unopened task with a lower stage. */
-  setupStage: z.number().int().min(0).max(9).default(0),
+  setupStage: z.number().int().min(0).max(9).optional(),
+  /** Added to the task's own checks. */
   checks: z.array(CheckSchema).min(1),
+  /** Replace the task's hints when not empty. */
   hints: z.array(z.string()).default([]),
 });
+export type TaskVariant = z.infer<typeof TaskVariantSchema>;
+
+export const TaskSchema = z
+  .strictObject({
+    id: SlugSchema,
+    title: z.string().min(1),
+    points: z.number().positive(),
+    context: z.string().optional(),
+    setup: z.array(StepSchema).default([]),
+    /** 0: set up at session start. 1 or more: set up when the learner first opens the task, after any unopened task with a lower stage. */
+    setupStage: z.number().int().min(0).max(9).default(0),
+    checks: z.array(CheckSchema).default([]),
+    hints: z.array(z.string()).default([]),
+    /** A oneOf variable whose rolled value picks the entry of `variants`; its markdown is tasks/<id>.<value>.md. */
+    variant: z.string().regex(VAR_NAME, { message: 'variant names an UPPER_SNAKE_CASE variable' }).optional(),
+    variants: z.record(z.string().regex(/^[\w.-]+$/), TaskVariantSchema).optional(),
+  })
+  .superRefine((t, ctx) => {
+    if ((t.variant === undefined) !== (t.variants === undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'a task needs both "variant" and "variants", or neither', path: ['variants'] });
+    }
+    if (!t.variants && !t.checks.length) ctx.addIssue({ code: 'custom', message: 'a task needs at least one check', path: ['checks'] });
+  });
 export type Task = z.infer<typeof TaskSchema>;
 
 export const TopologySchema = z.strictObject({
@@ -185,11 +209,32 @@ export const ScenarioSchema = z
     });
     const allChecks: [Check, (string | number)[]][] = s.checks
       ? s.checks.map((c, i) => [c, ['checks', i]])
-      : s.tasks!.flatMap((t, ti) => t.checks.map((c, i): [Check, (string | number)[]] => [c, ['tasks', ti, 'checks', i]]));
+      : s.tasks!.flatMap((t, ti) => [
+          ...t.checks.map((c, i): [Check, (string | number)[]] => [c, ['tasks', ti, 'checks', i]]),
+          ...Object.entries(t.variants ?? {}).flatMap(([k, v]) =>
+            v.checks.map((c, i): [Check, (string | number)[]] => [c, ['tasks', ti, 'variants', k, 'checks', i]]),
+          ),
+        ]);
     for (const [c, path] of allChecks) {
       if (seen.has(c.id)) ctx.addIssue({ code: 'custom', message: `duplicate check id "${c.id}"`, path: [...path, 'id'] });
       seen.add(c.id);
     }
+    s.tasks?.forEach((t, ti) => {
+      if (!t.variant || !t.variants) return;
+      const v = s.variables[t.variant];
+      if (!v || !('oneOf' in v) || v.hidden) {
+        ctx.addIssue({ code: 'custom', message: `variant ${t.variant} must be a declared oneOf variable that is not hidden`, path: ['tasks', ti, 'variant'] });
+        return;
+      }
+      const values = v.oneOf.map(String);
+      const keys = Object.keys(t.variants);
+      for (const x of values) {
+        if (!keys.includes(x)) ctx.addIssue({ code: 'custom', message: `variants has no entry for ${t.variant}=${x}`, path: ['tasks', ti, 'variants'] });
+      }
+      for (const k of keys) {
+        if (!values.includes(k)) ctx.addIssue({ code: 'custom', message: `variants.${k} is not a value of ${t.variant}`, path: ['tasks', ti, 'variants', k] });
+      }
+    });
     for (const [name, v] of Object.entries(s.variables)) {
       if ('node' in v && v.node === 'workers' && s.nodes.workers < 1) {
         ctx.addIssue({ code: 'custom', message: `variable ${name} picks a worker but the topology has none`, path: ['variables', name] });
@@ -220,7 +265,12 @@ export const ScenarioSchema = z
     s.setup.forEach((st, i) => visit(st.node, ['setup', i, 'node']));
     s.solution?.forEach((st, i) => visit(st.node, ['solution', i, 'node']));
     for (const [c, path] of allChecks) visit('node' in c ? c.node : undefined, [...path, 'node']);
-    s.tasks?.forEach((t, ti) => t.setup.forEach((st, i) => visit(st.node, ['tasks', ti, 'setup', i, 'node'])));
+    s.tasks?.forEach((t, ti) => {
+      t.setup.forEach((st, i) => visit(st.node, ['tasks', ti, 'setup', i, 'node']));
+      for (const [k, v] of Object.entries(t.variants ?? {})) {
+        v.setup.forEach((st, i) => visit(st.node, ['tasks', ti, 'variants', k, 'setup', i, 'node']));
+      }
+    });
   });
 export type Scenario = z.infer<typeof ScenarioSchema>;
 
@@ -230,6 +280,30 @@ export const LEGACY_TASK_ID = 'main';
 export function scenarioTasks(s: Scenario): Task[] {
   if (s.tasks) return s.tasks;
   return [{ id: LEGACY_TASK_ID, title: s.title, points: s.points, context: s.context, setup: [], setupStage: 0, checks: s.checks ?? [], hints: s.hints }];
+}
+
+/** The rolled variant of a task, or undefined when the task has none or its variable was not rolled. */
+export function taskVariant(t: Task, vars: Record<string, string>): string | undefined {
+  if (!t.variant || !t.variants || !Object.hasOwn(vars, t.variant)) return undefined;
+  const key = vars[t.variant];
+  return Object.hasOwn(t.variants, key) ? key : undefined;
+}
+
+/** Merges the rolled variant into the task. Tasks without variants come back unchanged. */
+export function resolveTask(t: Task, vars: Record<string, string>): Task {
+  const key = taskVariant(t, vars);
+  if (key === undefined) return t;
+  const v = t.variants![key];
+  const { variant: _variant, variants: _variants, ...rest } = t;
+  return {
+    ...rest,
+    title: v.title ?? t.title,
+    context: v.context ?? t.context,
+    setup: [...t.setup, ...v.setup],
+    setupStage: v.setupStage ?? t.setupStage,
+    checks: [...t.checks, ...v.checks],
+    hints: v.hints.length ? v.hints : t.hints,
+  };
 }
 
 export function formatZodError(error: z.ZodError): string[] {

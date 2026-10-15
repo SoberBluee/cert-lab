@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds web -> api with three chained faults: egress policy blocks DNS, wrong Secret key, wrong targetPort name.
+# Builds web -> api with three chained faults, one per hop: the frontend's egress policy
+# ($DNS_FAULT), the API Pods ($API_FAULT) and the API Service ($SVC_FAULT).
 set -euo pipefail
 
 kubectl delete namespace "$NS" --ignore-not-found --wait=true >/dev/null
@@ -8,6 +9,35 @@ timeout 60 bash -c "until kubectl -n '$NS' get serviceaccount default >/dev/null
 mkdir -p /opt/course/chain
 rm -f /opt/course/chain/causes.txt
 chown -R ubuntu:ubuntu /opt/course
+
+api_rule="    - to: [{ podSelector: { matchLabels: { app: ${APP}-api } } }]
+      ports: [{ protocol: TCP, port: 8080 }]"
+dns_rule="    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]"
+case "$DNS_FAULT" in
+  no-dns) egress="$api_rule" ;;
+  dns-port) egress="$api_rule
+${dns_rule//port: 53/port: 5353}" ;;
+  api-port) egress="${api_rule//port: 8080/port: 80}
+$dns_rule" ;;
+  *) echo "unknown DNS_FAULT $DNS_FAULT" >&2; exit 1 ;;
+esac
+
+secret_name="${APP}-api-creds"; secret_key=token; api_image=busybox:1.36
+case "$API_FAULT" in
+  secret-key) secret_key=api-token ;;
+  secret-name) secret_name="${APP}-api-credentials" ;;
+  image-tag) api_image=busybox:1.366 ;;
+  *) echo "unknown API_FAULT $API_FAULT" >&2; exit 1 ;;
+esac
+
+svc_selector="${APP}-api"; svc_port=80; svc_target=http
+case "$SVC_FAULT" in
+  target-port) svc_target=api-http ;;
+  selector) svc_selector="${APP}-apis" ;;
+  port) svc_port=8080 ;;
+  *) echo "unknown SVC_FAULT $SVC_FAULT" >&2; exit 1 ;;
+esac
 
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -22,8 +52,7 @@ spec:
   podSelector: { matchLabels: { app: ${APP}-web } }
   policyTypes: [Egress]
   egress:
-    - to: [{ podSelector: { matchLabels: { app: ${APP}-api } } }]
-      ports: [{ protocol: TCP, port: 8080 }]
+${egress}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -36,19 +65,19 @@ spec:
     spec:
       containers:
         - name: api
-          image: busybox:1.36
+          image: ${api_image}
           command: ["sh", "-c", "mkdir -p /tmp/www && echo \"api ok: \$API_TOKEN\" > /tmp/www/index.html && exec httpd -f -p 8080 -h /tmp/www"]
           ports: [{ name: http, containerPort: 8080 }]
           env:
             - name: API_TOKEN
-              valueFrom: { secretKeyRef: { name: ${APP}-api-creds, key: api-token } }
+              valueFrom: { secretKeyRef: { name: ${secret_name}, key: ${secret_key} } }
 ---
 apiVersion: v1
 kind: Service
 metadata: { name: ${APP}-api, namespace: ${NS} }
 spec:
-  selector: { app: ${APP}-api }
-  ports: [{ port: 80, targetPort: api-http }]
+  selector: { app: ${svc_selector} }
+  ports: [{ port: ${svc_port}, targetPort: ${svc_target} }]
 ---
 apiVersion: v1
 kind: Pod
@@ -107,12 +136,15 @@ EOF
 
 kubectl -n "$NS" wait --for=condition=Ready "pod/${APP}-admin" --timeout=180s >/dev/null
 
-# The frontend must be visibly crashing and the API stuck before the session starts.
+# The frontend must be visibly broken (crashing without DNS, or up but unable to reach the API)
+# and the API stuck before the session starts.
 for _ in $(seq 1 60); do
-  web="$(kubectl -n "$NS" get pods -l "app=${APP}-web" -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}' 2>/dev/null || true)"
+  web_restarts="$(kubectl -n "$NS" get pods -l "app=${APP}-web" -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}' 2>/dev/null || true)"
+  web_ready="$(kubectl -n "$NS" get pods -l "app=${APP}-web" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || true)"
   api="$(kubectl -n "$NS" get pods -l "app=${APP}-api" -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)"
-  [[ "${web:-0}" -ge 1 && "$api" == CreateContainerConfigError ]] && exit 0
+  if [[ "$DNS_FAULT" == api-port ]]; then web_ok=$([[ "$web_ready" == true ]] && echo y || echo n); else web_ok=$([[ "${web_restarts:-0}" -ge 1 ]] && echo y || echo n); fi
+  [[ "$web_ok" == y && "$api" =~ ^(CreateContainerConfigError|ErrImagePull|ImagePullBackOff)$ ]] && exit 0
   sleep 3
 done
-echo "faults did not show: web restarts=${web:-?} api=${api:-?}" >&2
+echo "faults did not show: web restarts=${web_restarts:-?} ready=${web_ready:-?} api=${api:-?}" >&2
 exit 1

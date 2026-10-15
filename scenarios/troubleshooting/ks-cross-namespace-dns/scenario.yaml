@@ -1,0 +1,65 @@
+id: ks-cross-namespace-dns
+title: "Killer-style: a frontend cannot reach an API in another namespace"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 15
+points: 10
+tags: [killer-style, networkpolicy, dns, egress, ingress, namespaceselector, service, targetport, re-rollable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  CLIENT_NS: { oneOf: [storefront, portal, kiosk] }
+  API_NS: { oneOf: [inventory, pricing, stock] }
+  TOKEN: { random: 8 }
+  EGRESS_FAULT: { oneOf: [no-dns, dns-port, api-port], hidden: true }
+  INGRESS_FAULT: { oneOf: [ns-label, pod-selector, port], hidden: true }
+  SERVICE_FAULT: { oneOf: [target-port, selector, port-name], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: end-to-end
+    description: frontend in ${CLIENT_NS} gets the payload from http://api.${API_NS}.svc.cluster.local
+    type: kubectl
+    run: kubectl -n ${CLIENT_NS} exec deploy/frontend -- wget -qO- -T 4 http://api.${API_NS}.svc.cluster.local 2>/dev/null || true
+    expect: { contains: "api ok ${TOKEN}" }
+    weight: 4
+    retrySeconds: 60
+  - id: ingress-restricted
+    description: Pod canary in namespace default still cannot reach api.${API_NS}
+    type: kubectl
+    run: |
+      ip=$(kubectl -n ${API_NS} get pods -l app=api -o jsonpath='{.items[0].status.podIP}')
+      kubectl -n default exec canary -- wget -qO- -T 3 "http://$ip" >/dev/null 2>&1 && echo reachable || echo blocked
+    expect: { equals: "blocked" }
+    weight: 2
+  - id: egress-restricted
+    description: frontend still cannot reach Pod canary in namespace default
+    type: kubectl
+    run: |
+      ip=$(kubectl -n default get pod canary -o jsonpath='{.status.podIP}')
+      kubectl -n ${CLIENT_NS} exec deploy/frontend -- wget -qO- -T 3 "http://$ip" >/dev/null 2>&1 && echo reachable || echo blocked
+    expect: { equals: "blocked" }
+    weight: 2
+  - id: policies-kept
+    description: NetworkPolicies default-deny-egress in ${CLIENT_NS} and api-ingress in ${API_NS} still exist and select every Pod / the api Pods
+    type: kubectl
+    run: |
+      a=$(kubectl -n ${CLIENT_NS} get networkpolicy default-deny-egress -o jsonpath='{.spec.podSelector}/{.spec.policyTypes[*]}')
+      b=$(kubectl -n ${API_NS} get networkpolicy api-ingress -o jsonpath='{.spec.podSelector.matchLabels.app}/{.spec.policyTypes[*]}')
+      echo "$a|$b"
+    expect: { equals: "{}/Egress|api/Ingress" }
+    weight: 1
+  - id: frontend-unchanged
+    description: Deployment frontend was not modified (image busybox:1.36, 1 replica)
+    type: kubectl
+    run: kubectl -n ${CLIENT_NS} get deployment frontend -o jsonpath='{.spec.replicas}/{.spec.template.spec.containers[0].image}'
+    expect: { equals: "1/busybox:1.36" }
+    weight: 1
+hints:
+  - "Test one hop at a time from the frontend: nslookup api.${API_NS}.svc.cluster.local, then wget the Service IP, then wget a Pod IP directly."
+  - "NetworkPolicies are additive and directional: an egress policy in the client's namespace and an ingress policy in the server's namespace must both allow the traffic. DNS is egress to kube-system on port 53, UDP and TCP."
+  - "kubectl get ns --show-labels and kubectl get pods --show-labels show what a selector can match. kubectl -n ${API_NS} get endpointslices and the container's port show whether the Service has endpoints and forwards to the right port. A NetworkPolicy sees the Pod port, not the Service port."

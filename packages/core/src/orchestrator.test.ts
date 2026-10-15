@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { describe, it } from 'node:test';
 import pino from 'pino';
 import { FakeDriver } from '@cka/driver-fake';
 import type { ExecOptions, ExecResult, Mode } from '@cka/schema';
+import { diskReader, lintScenario } from './lint';
 import { selectDriverName } from './orchestrator';
 import { ScenarioLibrary } from './scenarios';
 import { SessionManager } from './session';
@@ -189,6 +190,114 @@ describe('exam mode', () => {
     const view = await start();
     assert.equal(view.deadlineAt, undefined);
     await assert.rejects(sessions.submit(), /Only an exam is submitted/);
+  });
+});
+
+/** A lab whose only question rolls between two sibling variants with their own setup and checks. */
+function variantSetup() {
+  const root = mkdtempSync(join(tmpdir(), 'cka-variants-'));
+  const dir = join(root, 'workloads', 'varied');
+  mkdirSync(join(dir, 'setup'), { recursive: true });
+  mkdirSync(join(dir, 'tasks'));
+  const variant = (k: string) => `      ${k}:
+        title: Variant ${k}
+        setup: [{ node: controlplane, script: setup/${k}.sh }]
+        checks: [{ id: ${k}-c, description: check ${k}, type: kubectl, run: echo check-${k}, expect: { equals: '' } }]
+        hints: [hint ${k}]`;
+  writeFileSync(
+    join(dir, 'scenario.yaml'),
+    `id: varied
+title: Varied
+domain: workloads
+difficulty: 1
+estimatedMinutes: 5
+points: 1
+base: cluster
+settleSeconds: 0
+variables:
+  KIND: { oneOf: [alpha, beta] }
+  NS: { oneOf: [one, two, three] }
+tasks:
+  - id: q1
+    title: Slot
+    points: 1
+    variant: KIND
+    variants:
+${variant('alpha')}
+${variant('beta')}
+`,
+  );
+  for (const k of ['alpha', 'beta']) {
+    writeFileSync(join(dir, 'setup', `${k}.sh`), 'true\n');
+    writeFileSync(join(dir, 'tasks', `q1.${k}.md`), `Question ${k} in \${NS}\n`);
+  }
+  writeFileSync(join(dir, 'solution.sh'), 'true\n');
+  writeFileSync(join(dir, 'solution.md'), '<!-- fault KIND=alpha -->\nsolve alpha\n<!-- /fault -->\n<!-- fault KIND=beta -->\nsolve beta\n<!-- /fault -->\n');
+  const driver = new RecordingDriver();
+  const library = new ScenarioLibrary(root);
+  assert.deepEqual(library.errors, []);
+  const sessions = new SessionManager(driver, new Store(join(root, 'state.db')), library, pino({ enabled: false }));
+  return { driver, sessions, library, dir };
+}
+
+describe('task variants', () => {
+  it('sets up, shows and grades only the rolled variant', async () => {
+    const { driver, sessions } = variantSetup();
+    const view = await (await sessions.start('varied', 'practice', { vars: { KIND: 'beta', NS: 'two' } })).ready;
+    assert.deepEqual(driver.scripts, ['beta.sh']);
+    assert.equal(view.tasks[0].title, 'Variant beta');
+    assert.equal(view.tasks[0].markdown, 'Question beta in two\n');
+    assert.equal(view.tasks[0].hintsTotal, 1);
+    const result = await sessions.grade({ retry: false });
+    assert.deepEqual(result.checks.map((c) => c.id), ['beta-c']);
+    assert.equal(sessions.solution().solution?.trim(), 'solve beta');
+  });
+
+  it('lints every variant', () => {
+    const { library, dir } = variantSetup();
+    const s = library.get('varied')!;
+    assert.deepEqual(lintScenario(s, diskReader(dir), 'varied'), []);
+    rmSync(join(dir, 'tasks', 'q1.beta.md'));
+    const broken = new ScenarioLibrary(join(dir, '..', '..')).get('varied')!;
+    assert.match(lintScenario(broken, diskReader(dir), 'varied').map((i) => i.message).join(), /tasks\/q1.beta.md is missing/);
+  });
+
+  it('re-roll rolls new variables, forgets hints and the solution, and sets up again', async () => {
+    const { driver, sessions } = variantSetup();
+    const store = (sessions as unknown as { store: Store }).store;
+    const first = await (await sessions.start('varied', 'practice', { vars: { KIND: 'alpha', NS: 'one' } })).ready;
+    assert.equal(first.rerollable, true);
+    sessions.hint();
+    sessions.solution();
+    let view = first;
+    for (let i = 0; i < 20 && view.vars.KIND === 'alpha' && view.vars.NS === 'one'; i++) view = await (await sessions.reset({ reroll: true })).ready;
+    assert.notDeepEqual(view.vars, { KIND: 'alpha', NS: 'one' });
+    assert.equal(view.state, 'running');
+    assert.equal(view.solutionViewed, false);
+    assert.deepEqual(view.hintsRevealed, []);
+    assert.equal(view.tasks[0].title, `Variant ${view.vars.KIND}`);
+    assert.equal(driver.scripts[0], 'alpha.sh');
+    assert.equal(driver.scripts.at(-1), `${view.vars.KIND}.sh`);
+    assert.equal(store.listAttempts().find((a) => a.id === view.attemptId)?.solutionViewed, false);
+  });
+
+  it('picks up variables added to scenario.yaml while the API is running', async () => {
+    const { sessions, dir } = variantSetup();
+    await (await sessions.start('varied', 'practice', { vars: { KIND: 'beta', NS: 'two' } })).ready;
+    const file = join(dir, 'scenario.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('variables:\n', 'variables:\n  EXTRA: { oneOf: [x] }\n'));
+    const reset = await (await sessions.reset()).ready;
+    assert.deepEqual(reset.vars, { EXTRA: 'x', KIND: 'beta', NS: 'two' });
+    await sessions.end();
+    const started = await (await sessions.start('varied')).ready;
+    assert.equal(started.vars.EXTRA, 'x');
+  });
+
+  it('only practice sessions can re-roll', async () => {
+    const { sessions } = variantSetup();
+    const view = await (await sessions.start('varied', 'verify')).ready;
+    assert.equal(view.rerollable, false);
+    await assert.rejects(sessions.reset({ reroll: true }), /Only a practice session/);
   });
 });
 

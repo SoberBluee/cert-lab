@@ -15,6 +15,8 @@ import { PLAYGROUND_ID } from './playground';
 
 export interface LoadedTask extends Task {
   markdown: string;
+  /** Markdown per variant key, from tasks/<id>.<key>.md. */
+  variantMarkdown?: Record<string, string>;
 }
 
 export interface LoadedScenario {
@@ -29,7 +31,19 @@ export interface LoadedScenario {
   solutionScript?: string;
 }
 
-export const taskFile = (taskId: string) => `tasks/${taskId}.md`;
+export const taskFile = (taskId: string, variant?: string) => (variant === undefined ? `tasks/${taskId}.md` : `tasks/${taskId}.${variant}.md`);
+
+/** Whole task text: the single task's markdown, or every task's markdown under a heading. */
+export function combinedTask(def: Scenario, tasks: LoadedTask[]): string {
+  return def.tasks
+    ? tasks.map((t, i) => `### Question ${i + 1}: ${t.title} (${t.points} pt)\n\n${t.markdown.trim()}`).join('\n\n')
+    : (tasks[0]?.markdown ?? '');
+}
+
+const variantsOverview = (t: Task) =>
+  `One of these questions is rolled when the lab starts:\n\n${Object.values(t.variants ?? {})
+    .map((v) => `- ${v.title ?? t.title}`)
+    .join('\n')}\n`;
 
 /** Builds a LoadedScenario from a validated definition and a file reader (disk or in-memory bundle). */
 export function assembleScenario(
@@ -39,13 +53,14 @@ export function assembleScenario(
   read: (name: string) => string | undefined,
   hasSolutionScript: boolean,
 ): LoadedScenario {
-  const tasks = scenarioTasks(def).map((t) => ({
+  const tasks: LoadedTask[] = scenarioTasks(def).map((t) => ({
     ...t,
-    markdown: (def.tasks ? read(taskFile(t.id)) : read('task.md')) ?? '',
+    markdown: (def.tasks ? read(taskFile(t.id)) : read('task.md')) ?? (t.variants ? variantsOverview(t) : ''),
+    ...(t.variants && {
+      variantMarkdown: Object.fromEntries(Object.keys(t.variants).map((k) => [k, read(taskFile(t.id, k)) ?? ''])),
+    }),
   }));
-  const task = def.tasks
-    ? tasks.map((t, i) => `### Question ${i + 1}: ${t.title} (${t.points} pt)\n\n${t.markdown.trim()}`).join('\n\n')
-    : tasks[0].markdown;
+  const task = combinedTask(def, tasks);
   return {
     def,
     dir,
@@ -128,6 +143,22 @@ export class ScenarioLibrary {
 
   get(id: string): LoadedScenario | undefined {
     return this.byId.get(id);
+  }
+
+  /**
+   * Re-reads one scenario from disk. Setup scripts are always copied from disk, so starting a lab
+   * from a cached definition after its scenario.yaml changed would run them with the wrong variables.
+   * Keeps the cached copy when the file no longer loads.
+   */
+  fresh(id: string): LoadedScenario | undefined {
+    const cached = this.byId.get(id);
+    if (!cached) return undefined;
+    const file = join(cached.dir, 'scenario.yaml');
+    if (!existsSync(file)) return cached;
+    const res = loadScenarioFile(file, this.root);
+    if (isLoadError(res) || res.def.id !== id) return cached;
+    this.byId.set(id, res);
+    return res;
   }
 }
 
