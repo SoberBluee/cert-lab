@@ -145,8 +145,10 @@ Viewing the solution marks the attempt as assisted.
 
 The **Quick lab** bar sits under the filters on the Scenarios tab. It generates a random lab and starts it with one click.
 
-1. Choose **Create**, **Troubleshoot** or **Random**, and how many questions you want (1-20).
+1. Choose **Create**, **Troubleshoot** or **Random**, a category (or **Any**), and how many questions you want (1-20).
 2. Press **Start**. The lab is generated from the [recipe catalog](#recipe-catalog), the VMs are provisioned and you go straight to the session.
+
+A category limits every question to one topic, such as Service, Ingress, HTTPRoute / Gateway, Deployment, Nodes or Kubelet. Create topics appear for Create and Random; troubleshoot topics appear for Troubleshoot and Random. **Any** keeps the mix below. A create topic such as Ingress asks only for that add-on. A troubleshoot topic such as Kubelet rolls only the kubelet faults from the node pools.
 
 How each kind is built:
 - **Create** labs pick random build tasks, each with a random set of add-ons and follow-up tasks that don't conflict.

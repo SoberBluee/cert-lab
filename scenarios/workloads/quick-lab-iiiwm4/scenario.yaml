@@ -1,0 +1,50 @@
+id: quick-lab-iiiwm4
+title: "Quick lab: Troubleshoot"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ troubleshooting, cronjob, job ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ batch, nightly, reports ] }
+  Q1_APP: { oneOf: [ report, cleanup, export ] }
+  Q1_FAULT: { oneOf: [ suspended, never-schedule, deadline, backoff-zero-command, image-registry ], hidden: true }
+tasks:
+  - id: q1
+    title: CronJob ${Q1_APP} never succeeds
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-succeeded
+        description: a Job of ${Q1_APP} has completed
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get cronjob ${Q1_APP} -o jsonpath='{.status.lastSuccessfulTime}'
+        expect: { notEmpty: true }
+        weight: 3
+        retrySeconds: 150
+      - id: q1-spec
+        description: ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get cronjob ${Q1_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.backoffLimit}|{.spec.jobTemplate.spec.activeDeadlineSeconds}|{.spec.jobTemplate.spec.template.spec.containers[0].image}|{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}'
+        expect: { equals: "* * * * *|false|2||busybox:1.36|date; sleep 8; echo report done" }
+        weight: 2
+      - id: q1-same-cronjob
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get cronjob ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get cronjob ${Q1_APP}: look at SUSPEND, SCHEDULE and LAST SCHEDULE. Has it created any Job at all?"
+      - "kubectl -n ${Q1_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q1_NS} describe job <job> shows the reason (BackoffLimitExceeded, DeadlineExceeded, ...)."
+      - kubectl -n ${Q1_NS} logs <pod> and kubectl -n ${Q1_NS} describe pod <pod> show what the container did, or why it never started.
+      - "To test a fix without waiting for the next minute: kubectl -n ${Q1_NS} create job test-run --from=cronjob/${Q1_APP}"

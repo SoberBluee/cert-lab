@@ -312,9 +312,28 @@ export interface CategorySummary {
   faults?: FaultSummary[];
 }
 
+/** One fault category a Quick lab topic may draw, with an optional subset of its faults. */
+export interface LabTopicCategory {
+  id: string;
+  /** When set, only these faults are rolled. Otherwise every fault in the category. */
+  faults?: string[];
+}
+
+/** A Quick lab category: one create builder, or one or more troubleshoot categories. */
+export interface LabTopic {
+  id: string;
+  label: string;
+  group: 'create' | 'troubleshoot';
+  builderId?: string;
+  /** When set, a create question contains exactly these add-ons, prerequisites first. */
+  addons?: string[];
+  categories?: LabTopicCategory[];
+}
+
 export interface RecipeCatalog {
   builders: BuilderSummary[];
   categories: CategorySummary[];
+  topics: LabTopic[];
 }
 
 export interface FieldInput {

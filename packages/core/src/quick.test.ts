@@ -562,6 +562,49 @@ describe('Quick Create', () => {
     assert.ok(!CHARTREPO_SCRIPT.includes('${'), 'the renderer would substitute ${...} in the builder copy');
   });
 
+  it('quick lab topics pin add-ons and fault subsets', () => {
+    const topics = recipeCatalog().topics;
+    const ingress = topics.find((t) => t.id === 'create-ingress');
+    assert.deepEqual(ingress?.addons, ['expose', 'ingress']);
+    assert.equal(ingress?.builderId, 'deployment');
+
+    const ids = (categoryId: string, prefix: string) =>
+      faultList(CATEGORIES.find((c) => c.id === categoryId)!).map((f) => f.id).filter((id) => id.startsWith(prefix));
+    const kubelet = topics.find((t) => t.id === 'trouble-kubelet');
+    assert.deepEqual(kubelet?.categories, [
+      { id: 'nodes', faults: ids('nodes', 'kubelet-') },
+      { id: 'nodeconfig', faults: ids('nodeconfig', 'kubelet-') },
+    ]);
+
+    const deployment = BUILDERS.find((b) => b.id === 'deployment')!;
+    const addon = (id: string) => deployment.addons.find((a) => a.id === id)!;
+    const ingressTask = build([createQ(deployment, [addon('expose'), addon('ingress')], [])]).build.bundle.files.find((f) => f.path === 'tasks/q1.md')!.content;
+    assert.match(ingressTask, /Ingress/);
+    assert.doesNotMatch(ingressTask, /HTTPRoute|PriorityClass/);
+
+    const kubeletMd = build((kubelet.categories ?? []).map((c) => troubleQ(c.id, c.faults))).build.bundle.files.find((f) => f.path === 'solution.md')!.content;
+    assert.match(kubeletMd, /kubelet-stopped/);
+    assert.doesNotMatch(kubeletMd, /containerd-stopped|runtime-endpoint/);
+
+    for (const topic of topics) {
+      if (topic.group === 'create') {
+        const builder = BUILDERS.find((b) => b.id === topic.builderId);
+        assert.ok(builder, topic.id);
+        const parts = new Set([...builder.addons, ...builder.followUps].map((p) => p.id));
+        for (const id of topic.addons ?? []) assert.ok(parts.has(id), `${topic.id} ${id}`);
+      } else {
+        for (const source of topic.categories ?? []) {
+          const category = CATEGORIES.find((c) => c.id === source.id);
+          assert.ok(category, `${topic.id} ${source.id}`);
+          if (!source.faults) continue;
+          const known = new Set(faultList(category).map((f) => f.id));
+          assert.ok(source.faults.length > 0);
+          assert.ok(source.faults.every((id) => known.has(id)), `${topic.id} ${source.id}`);
+        }
+      }
+    }
+  });
+
   it('catalog hides fault ids unless spoilers are asked for', () => {
     const plain = recipeCatalog();
     assert.ok(plain.categories.every((c) => c.faults === undefined && c.faultCount > 0));

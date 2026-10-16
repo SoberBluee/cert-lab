@@ -1,0 +1,68 @@
+id: quick-lab-o58tmj
+title: "Quick lab: API access"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 12
+points: 8
+tags: [ troubleshooting, kubeconfig, kube-apiserver, static-pod, certificates ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_NS: { oneOf: [ ops, core, mgmt ] }
+  Q1_FAULT: { oneOf: [ kubeconfig-server-port, kubeconfig-wrong-ca, apiserver-client-ca, apiserver-secure-port, apiserver-manifest-yaml, kubeconfig-current-context, kubeconfig-client-key, apiserver-tls-cert-path ], hidden: true }
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+tasks:
+  - id: q1
+    title: kubectl stopped working
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+    checks:
+      - id: q1-api-ready
+        description: the API server reports ready
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-user-kubectl
+        description: kubectl works with /root/.kube/config and /home/ubuntu/.kube/config
+        type: kubectl
+        run: for f in /root/.kube/config /home/ubuntu/.kube/config; do kubectl --kubeconfig "$f" get --raw /readyz 2>/dev/null || echo fail; echo; done | xargs
+        expect: { equals: ok ok }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-components
+        description: node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        type: kubectl
+        run: "{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}{end}' | sort; } | xargs"
+        expect: { equals: controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-web-ready
+        description: web runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 2/2 }
+        weight: 1
+        retrySeconds: 120
+      - id: q1-manifests
+        description: /etc/kubernetes/manifests holds only the four control plane manifests
+        type: ssh
+        node: controlplane
+        run: ls /etc/kubernetes/manifests | sort | xargs
+        expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
+        weight: 1
+    hints:
+      - 'Read the exact kubectl error: "connection refused", "x509: certificate signed by unknown authority" and a hang point at different places.'
+      - Is the API server up at all? curl -k https://127.0.0.1:6443/readyz, ss -ltnp | grep 6443, and crictl ps -a | grep kube-apiserver (as root).
+      - "If the kube-apiserver container is missing or keeps exiting: crictl logs <container-id>, journalctl -u kubelet | grep -i apiserver, and compare the flags in /etc/kubernetes/manifests/kube-apiserver.yaml with the files in /etc/kubernetes/pki."
+      - "If the API server is healthy, the kubeconfig is wrong: compare the server and certificate-authority-data in ~/.kube/config with /etc/kubernetes/admin.conf (kubectl config view --raw)."

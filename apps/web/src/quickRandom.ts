@@ -1,4 +1,4 @@
-import type { BuilderSummary, CategorySummary, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
+import type { BuilderSummary, CategorySummary, LabTopic, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
 import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import { studioApi } from './api';
 
@@ -92,31 +92,72 @@ function randomParts(available: PartSummary[], chosen: Part[], all: PartSummary[
   return out;
 }
 
-export type Item = { kind: 'create'; builder: BuilderSummary } | { kind: 'troubleshoot'; category: CategorySummary };
+export type Item =
+  | { kind: 'create'; builder: BuilderSummary; addons?: string[] }
+  | { kind: 'troubleshoot'; category: CategorySummary; faults?: string[] };
+
+/** The named add-ons in order. `plain` keeps each field's default; otherwise every field is randomized. */
+function pinnedParts(builder: BuilderSummary, ids: string[], plain: boolean): Part[] {
+  const all = [...builder.addons, ...builder.followUps];
+  return ids.map((id) => {
+    const part = all.find((p) => p.id === id);
+    if (!part) throw new Error(`Builder "${builder.id}" has no add-on "${id}".`);
+    return { ...newPart(part), ...(plain ? {} : randomFields(part.fields)) };
+  });
+}
 
 function randomQuestion(item: Item, plain = false): Question {
   const key = newKey();
   if (item.kind === 'troubleshoot') {
     const { category } = item;
-    return { key, type: 'troubleshoot', category, fields: plain ? initialFields(category.fields) : randomFields(category.fields) };
+    return {
+      key,
+      type: 'troubleshoot',
+      category,
+      fields: plain ? initialFields(category.fields) : randomFields(category.fields),
+      ...(item.faults ? { faults: item.faults } : {}),
+    };
   }
   const { builder } = item;
-  if (plain) return { key, type: 'create', builder, fields: initialFields(builder.fields), addons: [], followUps: [] };
+  const fields = plain ? initialFields(builder.fields) : randomFields(builder.fields);
+  if (item.addons) return { key, type: 'create', builder, fields, addons: pinnedParts(builder, item.addons, plain), followUps: [] };
+  if (plain) return { key, type: 'create', builder, fields, addons: [], followUps: [] };
   const all = [...builder.addons, ...builder.followUps];
   const addons = randomParts(builder.addons, [], all, QUICK_MAX_ADDONS);
   const followUps = randomParts(builder.followUps, addons, all, QUICK_MAX_FOLLOWUPS);
-  return { key, type: 'create', builder, fields: randomFields(builder.fields), addons, followUps };
+  return { key, type: 'create', builder, fields, addons, followUps };
 }
 
 const info = (i: Item) => (i.kind === 'create' ? i.builder : i.category);
-export const itemId = (i: Item) => `${i.kind}:${info(i).id}`;
+export const itemId = (i: Item) => {
+  const base = `${i.kind}:${info(i).id}`;
+  if (i.kind === 'create' && i.addons) return `${base}:${i.addons.join('+')}`;
+  if (i.kind === 'troubleshoot' && i.faults) return `${base}:${i.faults.join(',')}`;
+  return base;
+};
 
-/** Every item a lab of `n` questions of `kind` can draw. */
-function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind): Item[] {
-  const items: Item[] = [
-    ...(kind === 'troubleshoot' ? [] : catalog.builders.map((builder) => ({ kind: 'create' as const, builder }))),
-    ...(kind === 'create' ? [] : catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category }))),
-  ];
+/** The builder or fault categories one topic draws from. */
+function topicItems(catalog: RecipeCatalog, topic: LabTopic): Item[] {
+  if (topic.group === 'create') {
+    const builder = catalog.builders.find((b) => b.id === topic.builderId);
+    return builder ? [{ kind: 'create', builder, ...(topic.addons ? { addons: topic.addons } : {}) }] : [];
+  }
+  return (topic.categories ?? []).flatMap((source) => {
+    const category = catalog.categories.find((c) => c.id === source.id);
+    return category ? [{ kind: 'troubleshoot' as const, category, ...(source.faults ? { faults: source.faults } : {}) }] : [];
+  });
+}
+
+/** Every item a lab of `n` questions of `kind` can draw. `topic` limits that to one category. */
+function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabTopic): Item[] {
+  const items: Item[] = topic
+    ? kind === 'random' || topic.group === kind
+      ? topicItems(catalog, topic)
+      : []
+    : [
+        ...(kind === 'troubleshoot' ? [] : catalog.builders.map((builder) => ({ kind: 'create' as const, builder }))),
+        ...(kind === 'create' ? [] : catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category }))),
+      ];
   return items.filter((i) => !(i.kind === 'create' && i.builder.solo && n > 1));
 }
 
@@ -125,8 +166,8 @@ function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind): Item[] {
  * that breaks the API. Items not in `seen` come first, so successive labs work through the whole
  * catalog before repeating anything.
  */
-export function pickItems(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', seen: ReadonlySet<string> = new Set()): Item[] {
-  const items = itemPool(catalog, n, kind);
+export function pickItems(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', seen: ReadonlySet<string> = new Set(), topic?: LabTopic): Item[] {
+  const items = itemPool(catalog, n, kind, topic);
   const order = () => [...shuffle(items.filter((i) => !seen.has(itemId(i)))), ...shuffle(items.filter((i) => seen.has(itemId(i))))];
   const out: Item[] = [];
   let apiTaken = false;
@@ -173,9 +214,9 @@ export function nextSeen(seen: ReadonlySet<string>, picked: Item[], pool: Item[]
   return next;
 }
 
-export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind = 'random'): Promise<Question[]> {
+export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', topic?: LabTopic): Promise<Question[]> {
   const seen = loadSeen();
-  const items = pickItems(catalog, n, kind, seen);
-  localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, items, itemPool(catalog, n, kind))]));
+  const items = pickItems(catalog, n, kind, seen, topic);
+  localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, items, itemPool(catalog, n, kind, topic))]));
   return Promise.all(items.map(validRandomQuestion));
 }

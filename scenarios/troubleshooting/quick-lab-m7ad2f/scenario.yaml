@@ -1,0 +1,113 @@
+id: quick-lab-m7ad2f
+title: "Quick lab: Random"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 20
+points: 12
+tags: [ troubleshooting, node, kubelet, kubeconfig, systemd, pvc, pv, storageclass ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q1_NS: { oneOf: [ fleet, edge, infra ] }
+  Q1_FAULT: { oneOf: [ kubelet-kubeconfig-server, kubelet-client-ca, runtime-endpoint, kubelet-config-flag, kubelet-kubeconfig-flag, kubelet-serving-cert, kubelet-max-pods ], hidden: true }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+  Q2_NS: { oneOf: [ files, backups, media-store ] }
+  Q2_CLAIM: { oneOf: [ archive, assets, cache-data ] }
+  Q2_FAULT: { oneOf: [ storageclass-mismatch, access-mode-mismatch, claim-too-large ], hidden: true }
+solution:
+  - node: worker-1
+    script: setup/q1-solution.sh
+  - node: worker-2
+    script: setup/q1-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: Worker after a configuration change
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+      - node: worker-1
+        script: setup/q1-2.sh
+      - node: worker-2
+        script: setup/q1-3.sh
+      - node: controlplane
+        script: setup/q1-4.sh
+        timeoutSeconds: 300
+    setupStage: 1
+    checks:
+      - id: q1-all-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 3
+        retrySeconds: 90
+      - id: q1-kubelet-worker-1
+        description: the kubelet is running and enabled on worker-1
+        type: ssh
+        node: worker-1
+        run: echo $(systemctl is-active kubelet) $(systemctl is-enabled kubelet)
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q1-kubelet-worker-2
+        description: the kubelet is running and enabled on worker-2
+        type: ssh
+        node: worker-2
+        run: echo $(systemctl is-active kubelet) $(systemctl is-enabled kubelet)
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q1-agent
+        description: node-agent has a ready Pod on every worker
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get daemonset node-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
+        expect: { equals: 2/2 }
+        weight: 2
+        retrySeconds: 90
+    hints:
+      - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
+      - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
+      - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
+  - id: q2
+    title: Pod ${Q2_CLAIM}-app stuck
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-bound
+        description: PVC ${Q2_CLAIM} is Bound to ${Q2_CLAIM}-pv
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pvc ${Q2_CLAIM} -o jsonpath='{.status.phase}/{.spec.volumeName}'
+        expect: { equals: "Bound/${Q2_CLAIM}-pv" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-spec-claim
+        description: PVC ${Q2_CLAIM} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pvc ${Q2_CLAIM} -o jsonpath='{.spec.storageClassName} {.spec.accessModes[0]} {.spec.resources.requests.storage}'
+        expect: { equals: manual ReadWriteOnce 500Mi }
+        weight: 1
+      - id: q2-pod-running
+        description: Pod ${Q2_CLAIM}-app is Running with the claim at /data
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod ${Q2_CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+        expect: { matches: "^Running ${Q2_CLAIM} .*/data" }
+        weight: 1
+        retrySeconds: 60
+      - id: q2-pv-kept
+        description: PV ${Q2_CLAIM}-pv is unchanged
+        type: kubectl
+        run: kubectl get pv ${Q2_CLAIM}-pv -o jsonpath='{.spec.storageClassName} {.spec.capacity.storage} {.spec.accessModes[0]}'
+        expect: { equals: manual 1Gi ReadWriteOnce }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} describe pod ${Q2_CLAIM}-app, then kubectl -n ${Q2_NS} describe pvc ${Q2_CLAIM}: what are the Events waiting for?"
+      - "Put kubectl get pv ${Q2_CLAIM}-pv next to kubectl -n ${Q2_NS} get pvc ${Q2_CLAIM} -o yaml: class, access mode and size must all fit."
+      - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { ScenarioSummary } from '@cka/schema';
+import type { LabTopic, ScenarioSummary } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
@@ -9,6 +9,13 @@ import { isActive, sessionKey, useExamMode, useSession } from '../hooks';
 import { RANDOM_MAX, randomLab, toRequest, type LabKind } from '../quickRandom';
 
 const KIND_LABELS: Record<LabKind, string> = { create: 'Create', troubleshoot: 'Troubleshoot', random: 'Random' };
+
+const topicOptions = (topics: LabTopic[]) =>
+  topics.map((t) => (
+    <option key={t.id} value={t.id}>
+      {t.label}
+    </option>
+  ));
 
 const select = 'rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-200';
 
@@ -56,14 +63,19 @@ export function BrowserPage() {
 
   const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity });
   const [labKind, setLabKind] = useState<LabKind>('random');
+  const [labTopic, setLabTopic] = useState('any');
   const [labCount, setLabCount] = useState('1');
   const [labPhase, setLabPhase] = useState<'generating' | 'starting'>('generating');
+  const topics = catalog.data?.topics ?? [];
+  const topicChoices = topics.filter((t) => labKind === 'random' || t.group === labKind);
+  const chosenTopic = topicChoices.find((t) => t.id === labTopic);
+  const topicIds = topicChoices.map((t) => t.id).join('\n');
   const quickStart = useMutation({
-    mutationFn: async ({ kind, n }: { kind: LabKind; n: number }) => {
+    mutationFn: async ({ kind, n, topic }: { kind: LabKind; n: number; topic?: LabTopic }) => {
       setLabPhase('generating');
-      const questions = await randomLab(catalog.data!, n, kind);
+      const questions = await randomLab(catalog.data!, n, kind, topic);
       const id = `quick-lab-${Math.random().toString(36).slice(2, 8).padEnd(6, '0')}`;
-      await studioApi.quickCreate({ ...toRequest(questions, id, `Quick lab: ${KIND_LABELS[kind]}`), dryRun: false });
+      await studioApi.quickCreate({ ...toRequest(questions, id, `Quick lab: ${topic?.label ?? KIND_LABELS[kind]}`), dryRun: false });
       setLabPhase('starting');
       qc.invalidateQueries({ queryKey: ['scenarios'] });
       try {
@@ -78,6 +90,10 @@ export function BrowserPage() {
     },
   });
   const labN = Math.min(RANDOM_MAX, Math.max(1, Math.floor(Number(labCount)) || 1));
+
+  useEffect(() => {
+    if (labTopic !== 'any' && !topicIds.split('\n').includes(labTopic)) setLabTopic('any');
+  }, [labTopic, topicIds]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -176,6 +192,17 @@ export function BrowserPage() {
             </option>
           ))}
         </select>
+        <select className={select} value={chosenTopic?.id ?? 'any'} onChange={(e) => setLabTopic(e.target.value)} disabled={quickStart.isPending || !catalog.data}>
+          <option value="any">Any</option>
+          {labKind === 'random' ? (
+            <>
+              <optgroup label="Create">{topicOptions(topicChoices.filter((t) => t.group === 'create'))}</optgroup>
+              <optgroup label="Troubleshoot">{topicOptions(topicChoices.filter((t) => t.group === 'troubleshoot'))}</optgroup>
+            </>
+          ) : (
+            topicOptions(topicChoices)
+          )}
+        </select>
         <label className="flex items-center gap-1.5 text-sm text-zinc-400">
           <input
             type="number"
@@ -192,11 +219,13 @@ export function BrowserPage() {
           variant="primary"
           disabled={active || !catalog.data || quickStart.isPending || start.isPending}
           title={active ? 'End the current session first' : catalog.error ? 'Could not load the recipe catalog' : undefined}
-          onClick={() => quickStart.mutate({ kind: labKind, n: labN })}
+          onClick={() => quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic })}
         >
           {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
         </Button>
-        <span className="text-xs text-zinc-500">A random lab from the recipe catalog, saved as a hidden draft.</span>
+        <span className="text-xs text-zinc-500">
+          {chosenTopic ? `Questions from ${chosenTopic.label}, saved as a hidden draft.` : 'A random lab from the recipe catalog, saved as a hidden draft.'}
+        </span>
       </div>
 
       <ErrorBanner error={quickStart.error} onDismiss={() => quickStart.reset()} />
