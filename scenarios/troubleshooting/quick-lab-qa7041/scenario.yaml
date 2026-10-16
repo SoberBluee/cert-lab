@@ -1,0 +1,105 @@
+id: quick-lab-qa7041
+title: "Broken kubeconfig/API and a default StorageClass"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 19
+points: 13
+tags: [ troubleshooting, kubeconfig, kube-apiserver, static-pod, certificates, storageclass, make-default, change-binding ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q1_NS: { oneOf: [ ops, core, mgmt ] }
+  Q1_FAULT: { oneOf: [ kubeconfig-server-port, kubeconfig-wrong-ca, apiserver-client-ca, apiserver-secure-port, apiserver-manifest-yaml, kubeconfig-current-context, kubeconfig-client-key, apiserver-tls-cert-path ], hidden: true }
+  Q2_NAME: { oneOf: [ gold, silver, bronze ] }
+  Q2_RECLAIM: { oneOf: [ Retain, Delete ] }
+  Q2_BINDING: { oneOf: [ Immediate, WaitForFirstConsumer ] }
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: kubectl stopped working
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+    setupStage: 2
+    checks:
+      - id: q1-api-ready
+        description: the API server reports ready
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-user-kubectl
+        description: kubectl works with /root/.kube/config and /home/ubuntu/.kube/config
+        type: kubectl
+        run: for f in /root/.kube/config /home/ubuntu/.kube/config; do kubectl --kubeconfig "$f" get --raw /readyz 2>/dev/null || echo fail; echo; done | xargs
+        expect: { equals: ok ok }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-components
+        description: node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        type: kubectl
+        run: "{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}{end}' | sort; } | xargs"
+        expect: { equals: controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-web-ready
+        description: web runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 2/2 }
+        weight: 1
+        retrySeconds: 120
+      - id: q1-manifests
+        description: /etc/kubernetes/manifests holds only the four control plane manifests
+        type: ssh
+        node: controlplane
+        run: ls /etc/kubernetes/manifests | sort | xargs
+        expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
+        weight: 1
+    hints:
+      - 'Read the exact kubectl error: "connection refused", "x509: certificate signed by unknown authority" and a hang point at different places.'
+      - Is the API server up at all? curl -k https://127.0.0.1:6443/readyz, ss -ltnp | grep 6443, and crictl ps -a | grep kube-apiserver (as root).
+      - "If the kube-apiserver container is missing or keeps exiting: crictl logs <container-id>, journalctl -u kubelet | grep -i apiserver, and compare the flags in /etc/kubernetes/manifests/kube-apiserver.yaml with the files in /etc/kubernetes/pki."
+      - "If the API server is healthy, the kubeconfig is wrong: compare the server and certificate-authority-data in ~/.kube/config with /etc/kubernetes/admin.conf (kubectl config view --raw)."
+  - id: q2
+    title: StorageClass ${Q2_NAME}
+    points: 5
+    checks:
+      - id: q2-provisioner
+        description: ${Q2_NAME} uses kubernetes.io/no-provisioner
+        type: kubectl
+        run: kubectl get storageclass ${Q2_NAME} -o jsonpath='{.provisioner}'
+        expect: { equals: kubernetes.io/no-provisioner }
+        weight: 1
+      - id: q2-reclaim
+        description: ${Q2_NAME} has reclaim policy ${Q2_RECLAIM}
+        type: kubectl
+        run: kubectl get storageclass ${Q2_NAME} -o jsonpath='{.reclaimPolicy}'
+        expect: { equals: "${Q2_RECLAIM}" }
+        weight: 1
+      - id: q2-make-default
+        description: ${Q2_NAME} is the default StorageClass
+        type: kubectl
+        run: kubectl get storageclass ${Q2_NAME} -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}'
+        expect: { equals: "true" }
+        weight: 1
+      - id: q2-change-binding
+        description: ${Q2_NAME} no longer binds with ${Q2_BINDING}
+        type: kubectl
+        run: kubectl get storageclass ${Q2_NAME} -o jsonpath='{.volumeBindingMode}'
+        expect: { matches: ^(Immediate|WaitForFirstConsumer)$, notContains: "${Q2_BINDING}" }
+        weight: 2
+    hints:
+      - kubectl explain storageclass lists the fields; there is no kubectl create storageclass, so write the YAML.
+      - kubectl annotate storageclass ${Q2_NAME} storageclass.kubernetes.io/is-default-class=true
+      - "The field cannot be edited: kubectl get storageclass ${Q2_NAME} -o yaml > sc.yaml, change it, then kubectl replace --force -f sc.yaml."

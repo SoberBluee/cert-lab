@@ -1,0 +1,127 @@
+id: quick-lab-ffk7aw
+title: "Stuck PVC, quota-blocked Deployment and failing CronJob"
+domain: storage
+difficulty: 2
+estimatedMinutes: 24
+points: 16
+tags: [ troubleshooting, pvc, pv, storageclass, scheduling, resourcequota, limitrange, affinity, cronjob, job ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ files, backups, media-store ] }
+  Q1_CLAIM: { oneOf: [ archive, assets, cache-data ] }
+  Q1_FAULT: { oneOf: [ storageclass-mismatch, access-mode-mismatch, claim-too-large ], hidden: true }
+  Q2_NS: { oneOf: [ batch, reports, analytics ] }
+  Q2_APP: { oneOf: [ worker, renderer, indexer ] }
+  Q2_FAULT: { oneOf: [ quota-pods, quota-limits, limitrange-max, node-affinity, priority-class ], hidden: true }
+  Q3_NS: { oneOf: [ batch, nightly, reports ] }
+  Q3_APP: { oneOf: [ report, cleanup, export ] }
+  Q3_FAULT: { oneOf: [ suspended, never-schedule, deadline, backoff-zero-command, image-registry ], hidden: true }
+tasks:
+  - id: q1
+    title: Pod ${Q1_CLAIM}-app stuck
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-bound
+        description: PVC ${Q1_CLAIM} is Bound to ${Q1_CLAIM}-pv
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pvc ${Q1_CLAIM} -o jsonpath='{.status.phase}/{.spec.volumeName}'
+        expect: { equals: "Bound/${Q1_CLAIM}-pv" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-spec-claim
+        description: PVC ${Q1_CLAIM} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pvc ${Q1_CLAIM} -o jsonpath='{.spec.storageClassName} {.spec.accessModes[0]} {.spec.resources.requests.storage}'
+        expect: { equals: manual ReadWriteOnce 500Mi }
+        weight: 1
+      - id: q1-pod-running
+        description: Pod ${Q1_CLAIM}-app is Running with the claim at /data
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pod ${Q1_CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+        expect: { matches: "^Running ${Q1_CLAIM} .*/data" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-pv-kept
+        description: PV ${Q1_CLAIM}-pv is unchanged
+        type: kubectl
+        run: kubectl get pv ${Q1_CLAIM}-pv -o jsonpath='{.spec.storageClassName} {.spec.capacity.storage} {.spec.accessModes[0]}'
+        expect: { equals: manual 1Gi ReadWriteOnce }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} describe pod ${Q1_CLAIM}-app, then kubectl -n ${Q1_NS} describe pvc ${Q1_CLAIM}: what are the Events waiting for?"
+      - "Put kubectl get pv ${Q1_CLAIM}-pv next to kubectl -n ${Q1_NS} get pvc ${Q1_CLAIM} -o yaml: class, access mode and size must all fit."
+      - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."
+  - id: q2
+    title: Deployment ${Q2_APP} not running
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-ready
+        description: ${Q2_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 3
+        retrySeconds: 60
+      - id: q2-spec
+        description: replicas, image and requests match the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory}'
+        expect: { equals: 2 nginx:1.27-alpine 100m 64Mi }
+        weight: 1
+      - id: q2-same-deployment
+        description: ${Q2_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q2.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} get deployment,replicaset,pods -o wide: are there fewer Pods than replicas, or Pods stuck in Pending?"
+      - "Missing Pods: kubectl -n ${Q2_NS} describe replicaset -l app=${Q2_APP} shows why creating them failed (FailedCreate events)."
+      - "Pending Pods: kubectl -n ${Q2_NS} describe pod <pod> shows the scheduler's reason under Events."
+      - "kubectl -n ${Q2_NS} get resourcequota,limitrange: what does the namespace enforce?"
+  - id: q3
+    title: CronJob ${Q3_APP} never succeeds
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+        lane: q3
+    checks:
+      - id: q3-succeeded
+        description: a Job of ${Q3_APP} has completed
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get cronjob ${Q3_APP} -o jsonpath='{.status.lastSuccessfulTime}'
+        expect: { notEmpty: true }
+        weight: 3
+        retrySeconds: 150
+      - id: q3-spec
+        description: ${Q3_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get cronjob ${Q3_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.backoffLimit}|{.spec.jobTemplate.spec.activeDeadlineSeconds}|{.spec.jobTemplate.spec.template.spec.containers[0].image}|{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}'
+        expect: { equals: "* * * * *|false|2||busybox:1.36|date; sleep 8; echo report done" }
+        weight: 2
+      - id: q3-same-cronjob
+        description: ${Q3_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q3_NS} get cronjob ${Q3_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q3.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q3_NS} get cronjob ${Q3_APP}: look at SUSPEND, SCHEDULE and LAST SCHEDULE. Has it created any Job at all?"
+      - "kubectl -n ${Q3_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q3_NS} describe job <job> shows the reason (BackoffLimitExceeded, DeadlineExceeded, ...)."
+      - kubectl -n ${Q3_NS} logs <pod> and kubectl -n ${Q3_NS} describe pod <pod> show what the container did, or why it never started.
+      - "To test a fix without waiting for the next minute: kubectl -n ${Q3_NS} create job test-run --from=cronjob/${Q3_APP}"

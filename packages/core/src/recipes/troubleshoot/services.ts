@@ -206,5 +206,59 @@ kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
       wait: waitServing(NS, APP),
       explain: `Service, endpoints and Pods all look right, and the client can reach a Pod IP directly, but not the Service IP. The \`kube-system/kube-proxy\` DaemonSet has a nodeSelector \`kube-proxy=disabled\` that no node matches, so no kube-proxy runs and the Service's new endpoints are never programmed into iptables (\`kubectl -n kube-system get ds kube-proxy\` shows 0 desired). Remove that nodeSelector entry.`,
     },
+    {
+      id: 'selector-cleared',
+      label: 'Service has no selector',
+      break: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"remove","path":"/spec/selector"}]'`,
+      fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"add","path":"/spec/selector","value":{"app":"'"${APP}"'"}}]'`,
+      wait: waitServing(NS, APP),
+      explain: `The Service has no \`selector\`, so it manages no endpoints (\`kubectl -n ${NS} get endpointslices -l kubernetes.io/service-name=${APP}\` is empty). Restore \`selector: { app: ${APP} }\`.`,
+    },
+    {
+      id: 'target-port-typo',
+      label: 'Service targetPort has a typo',
+      break: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":"htt"}]'`,
+      fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":"http"}]'`,
+      wait: waitServing(NS, APP),
+      explain: `The Service's \`targetPort\` is \`htt\`, but the container port is named \`http\`, so the endpoint slices list no ports and traffic goes nowhere. Set \`targetPort\` back to \`http\`.`,
+    },
+    {
+      id: 'pod-label-drift',
+      label: 'Pod labels drifted away from the Service selector',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"paused":true}}'
+kubectl -n "${NS}" label pods -l "app=${APP}" "app=${APP}-v2" --overwrite`,
+      fix: `kubectl -n "${NS}" label pods -l "app=${APP}-v2" "app=${APP}" --overwrite
+kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"paused":false}}'`,
+      wait: waitServing(NS, APP),
+      explain: `The running Pods are labelled \`app=${APP}-v2\`, but Service \`${APP}\` still selects \`app=${APP}\`, so it has no endpoints. The Deployment is paused, which is why the controller did not recreate correctly labelled Pods. Relabel the Pods to \`app=${APP}\` and unpause the Deployment (\`spec.paused: false\`).`,
+    },
+    {
+      id: 'readiness-https',
+      label: 'Readiness probe uses HTTPS against plain HTTP',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"add","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/scheme","value":"HTTPS"}]'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/scheme"}]'
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
+      wait: waitServing(NS, APP),
+      explain:
+        'The readiness probe uses `scheme: HTTPS`, but nginx serves plain HTTP on port 80, so every probe fails and the Service has only not-ready endpoints. Remove the scheme (or set it to `HTTP`) so the probe succeeds.',
+    },
+    {
+      id: 'readiness-port-number',
+      label: 'Readiness probe hits the wrong port',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":8080}]'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":"http"}]'
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
+      wait: waitServing(NS, APP),
+      explain:
+        'The readiness probe targets port `8080`, where nothing listens, so the Pods never become ready and the Service has no ready endpoints. Point the probe back at the named port `http`.',
+    },
+    {
+      id: 'egress-network-policy',
+      label: 'NetworkPolicy denies all egress from the namespace',
+      break: `kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"deny-egress"},"spec":{"podSelector":{},"policyTypes":["Egress"]}}'`,
+      fix: `kubectl -n "${NS}" delete networkpolicy deny-egress`,
+      wait: waitServing(NS, APP),
+      explain: `NetworkPolicy \`deny-egress\` selects every Pod and lists \`Egress\` with no allow rules, so the client cannot leave the Pod network (DNS and HTTP both fail) even though the Service and endpoints look fine. Delete \`deny-egress\`.`,
+    },
   ],
 };

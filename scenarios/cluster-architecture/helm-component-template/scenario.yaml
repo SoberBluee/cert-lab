@@ -40,7 +40,7 @@ checks:
   - id: release
     description: release node-agent in monitoring is deployed from chart node-agent-0.2.0
     type: kubectl
-    run: helm -n monitoring list -a -o json | jq -r '.[] | select(.name == "node-agent") | .status + "/" + .chart'
+    run: helm -n monitoring list -o json | jq -r '.[] | select(.name == "node-agent") | .status + "/" + .chart'
     expect: { equals: "deployed/node-agent-0.2.0" }
     weight: 2
   - id: values

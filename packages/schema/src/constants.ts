@@ -7,3 +7,7 @@ export const DOMAINS = [
 ] as const;
 
 export const BASES = ['bare', 'cluster'] as const;
+
+/** Cap for Quick Create "create" questions so a single question stays exam-sized. */
+export const QUICK_MAX_ADDONS = 3;
+export const QUICK_MAX_FOLLOWUPS = 2;

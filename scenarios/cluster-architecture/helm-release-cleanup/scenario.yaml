@@ -28,7 +28,7 @@ checks:
     description: release ${OLD} and its Deployment are gone
     type: kubectl
     run: |
-      r=$(helm -n ${NS} list -a -q | grep -cx '${OLD}' || true)
+      r=$(helm -n ${NS} list -q | grep -cx '${OLD}' || true)
       d=$(kubectl -n ${NS} get deployment -l app.kubernetes.io/instance=${OLD} -o name | wc -l)
       echo "$r/$d"
     expect: { equals: "0/0" }
@@ -36,14 +36,14 @@ checks:
   - id: upgraded
     description: release ${UPG} is deployed from the newest webapp chart (2.0.0)
     type: kubectl
-    run: helm -n ${NS} list -a -o json | jq -r '.[] | select(.name == "${UPG}") | .status + "/" + .chart'
+    run: helm -n ${NS} list -o json | jq -r '.[] | select(.name == "${UPG}") | .status + "/" + .chart'
     expect: { equals: "deployed/webapp-2.0.0" }
     weight: 2
   - id: installed
     description: release ${NEW} is deployed from webapp-1.0.0 with 2 ready replicas
     type: kubectl
     run: |
-      c=$(helm -n ${NS} list -a -o json | jq -r '.[] | select(.name == "${NEW}") | .status + "/" + .chart')
+      c=$(helm -n ${NS} list -o json | jq -r '.[] | select(.name == "${NEW}") | .status + "/" + .chart')
       r=$(kubectl -n ${NS} get deployment -l app.kubernetes.io/instance=${NEW} -o jsonpath='{.items[0].status.readyReplicas}')
       echo "$c/$r"
     expect: { equals: "deployed/webapp-1.0.0/2" }
@@ -54,8 +54,8 @@ checks:
     type: kubectl
     run: |
       p=$(helm -n ${NS} list --pending -q | wc -l)
-      s=$(helm -n ${NS} list -a -o json | jq '[.[] | select(.status | test("^pending|^failed$"))] | length')
-      a=$(helm -n ${NS} list -a -q | wc -l)
+      s=$(helm -n ${NS} list -o json | jq '[.[] | select(.status | test("^pending|^failed$"))] | length')
+      a=$(helm -n ${NS} list -q | wc -l)
       echo "$p/$s/$a"
     expect: { equals: "0/0/2" }
     weight: 3
@@ -63,12 +63,12 @@ checks:
     description: releases outside ${NS} (traefik and the other cluster add-ons) are still deployed
     type: kubectl
     run: |
-      bad=$(helm list -A -a -o json | jq '[.[] | select(.namespace != "${NS}" and .status != "deployed")] | length')
+      bad=$(helm list -A -o json | jq '[.[] | select(.namespace != "${NS}" and .status != "deployed")] | length')
       t=$(helm -n traefik list -o json | jq -r '.[] | select(.name == "traefik") | .status')
       echo "$bad/$t"
     expect: { equals: "0/deployed" }
     weight: 1
 hints:
-  - "helm -n ${NS} list shows only deployed and failed releases by default. helm list --help: look at -a, --pending and --uninstalled."
+  - "helm -n ${NS} list shows releases in every status; read the STATUS column. helm list --help: --pending and --failed filter by status."
   - "helm search repo lab/webapp --versions tells you which version is the newest; helm upgrade without --version takes it."
   - "A release stuck in pending-install, pending-upgrade or failed is still a release: helm uninstall removes it like any other."

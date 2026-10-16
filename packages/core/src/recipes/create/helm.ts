@@ -132,7 +132,7 @@ const releaseCheck = (ctx: CreateCtx, id: string, version: string, weight: numbe
   kubectlCheck({
     id,
     description,
-    run: `helm -n ${ctx.ns} list -a -o json | jq -r '.[] | select(.name == "${ctx.v.REL}") | .status + "/" + .chart'`,
+    run: `helm -n ${ctx.ns} list -o json | jq -r '.[] | select(.name == "${ctx.v.REL}") | .status + "/" + .chart'`,
     expect: { equals: `deployed/webapp-${version}` },
     weight,
   });

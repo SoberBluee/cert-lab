@@ -10,6 +10,13 @@ const patch = (ns: string, policy: string, ops: string) => `kubectl -n "${ns}" p
 
 const dnsPorts = (port: number) => `[{"protocol":"UDP","port":${port}},{"protocol":"TCP","port":${port}}]`;
 
+/** One-line applies so the body stays safe when indented inside a fault `case` branch. */
+const applyAllowDns = (ns: string) =>
+  `kubectl -n "${ns}" apply -f - <<< '{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"allow-dns"},"spec":{"podSelector":{},"policyTypes":["Egress"],"egress":[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}},"podSelector":{"matchLabels":{"k8s-app":"kube-dns"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}]}}'`;
+
+const applyFrontendEgress = (ns: string, app: string) =>
+  `kubectl -n "${ns}" apply -f - <<< '{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"frontend-egress"},"spec":{"podSelector":{"matchLabels":{"role":"frontend"}},"policyTypes":["Egress"],"egress":[{"to":[{"podSelector":{"matchLabels":{"app":"'"${app}"'"}}}],"ports":[{"protocol":"TCP","port":80}]}]}}'`;
+
 export const netpolCategory: FaultCategory = {
   id: 'netpol',
   name: 'NetworkPolicy',
@@ -273,6 +280,56 @@ exit 1`,
       fix: patch(NS, `${APP}-ingress`, `[{"op":"replace","path":"/spec/podSelector/matchLabels","value":{"app":"${APP}"}}]`),
       wait: waitServing(NS, APP),
       explain: `\`${APP}-ingress\` applies to Pods labelled \`app=${APP}-v2\`, which do not exist. Its allow rule protects nothing, and \`default-deny\` keeps dropping all ingress to the real \`${APP}\` Pods. Set its podSelector to \`app=${APP}\`.`,
+    },
+    {
+      id: 'dns-policy-deleted',
+      label: 'DNS egress NetworkPolicy was deleted',
+      break: `kubectl -n "${NS}" delete networkpolicy allow-dns`,
+      fix: applyAllowDns(NS),
+      wait: waitServing(NS, APP),
+      explain: `NetworkPolicy \`allow-dns\` is missing, so \`default-deny\` drops every DNS query: \`nslookup\` times out and \`wget http://${APP}\` fails with \`bad address\`. Recreate \`allow-dns\` so every Pod can reach \`kube-dns\` in \`kube-system\` on port 53 UDP and TCP.`,
+    },
+    {
+      id: 'dns-udp-only',
+      label: 'DNS egress allows TCP only, not UDP',
+      break: patch(NS, 'allow-dns', '[{"op":"replace","path":"/spec/egress/0/ports","value":[{"protocol":"TCP","port":53}]}]'),
+      fix: patch(NS, 'allow-dns', `[{"op":"replace","path":"/spec/egress/0/ports","value":${dnsPorts(53)}}]`),
+      wait: waitServing(NS, APP),
+      explain:
+        '`allow-dns` opens only TCP/53. Cluster DNS queries use UDP first, so names do not resolve (`nslookup` hangs) while wget to a Pod IP still works. Allow both UDP and TCP on port 53.',
+    },
+    {
+      id: 'dns-pod-selector',
+      label: 'DNS egress selects DNS Pods by the wrong label',
+      break: patch(NS, 'allow-dns', '[{"op":"replace","path":"/spec/egress/0/to/0/podSelector/matchLabels","value":{"k8s-app":"coredns"}}]'),
+      fix: patch(NS, 'allow-dns', '[{"op":"replace","path":"/spec/egress/0/to/0/podSelector/matchLabels","value":{"k8s-app":"kube-dns"}}]'),
+      wait: waitServing(NS, APP),
+      explain:
+        '`allow-dns` selects Pods labelled `k8s-app=coredns`, but CoreDNS Pods carry `k8s-app=kube-dns` (`kubectl -n kube-system get pods --show-labels`). No peer matches, so DNS is dropped. Select `k8s-app: kube-dns`.',
+    },
+    {
+      id: 'frontend-egress-deleted',
+      label: 'Frontend egress NetworkPolicy was deleted',
+      break: `kubectl -n "${NS}" delete networkpolicy frontend-egress`,
+      fix: applyFrontendEgress(NS, APP),
+      wait: waitServing(NS, APP),
+      explain: `NetworkPolicy \`frontend-egress\` is missing, so \`default-deny\` drops the client's egress to \`${APP}\` even though DNS works and \`${APP}-ingress\` would accept the connection. Recreate \`frontend-egress\` so Pods labelled \`role=frontend\` can reach \`app=${APP}\` on TCP port 80.`,
+    },
+    {
+      id: 'frontend-egress-selector',
+      label: 'Frontend egress policy selects no Pod',
+      break: patch(NS, 'frontend-egress', '[{"op":"replace","path":"/spec/podSelector/matchLabels","value":{"role":"front-end"}}]'),
+      fix: patch(NS, 'frontend-egress', '[{"op":"replace","path":"/spec/podSelector/matchLabels","value":{"role":"frontend"}}]'),
+      wait: waitServing(NS, APP),
+      explain: `\`frontend-egress\` applies to Pods labelled \`role=front-end\`, but \`client\` is \`role=frontend\`. The allow rule protects nobody, and \`default-deny\` drops the client's egress. Set its podSelector to \`role=frontend\`.`,
+    },
+    {
+      id: 'ingress-ports-cleared',
+      label: 'Ingress allowed on HTTPS only',
+      break: patch(NS, `${APP}-ingress`, '[{"op":"replace","path":"/spec/ingress/0/ports","value":[{"protocol":"TCP","port":443}]}]'),
+      fix: patch(NS, `${APP}-ingress`, '[{"op":"replace","path":"/spec/ingress/0/ports","value":[{"protocol":"TCP","port":80}]}]'),
+      wait: waitServing(NS, APP),
+      explain: `\`${APP}-ingress\` lets frontends in on port 443 only, but nginx listens on 80. Names resolve and the client's egress is allowed, yet the connection times out at the server. Set the ingress port back to 80.`,
     },
   ],
 };

@@ -1,4 +1,5 @@
 import type { BuilderSummary, CategorySummary, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
+import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import { studioApi } from './api';
 
 export interface Fields {
@@ -79,9 +80,9 @@ const randomFields = (fields: RecipeField[]): Fields => ({
   pools: Object.fromEntries(fields.filter((f) => f.pool).map((f) => [f.key, [...(f.options ?? f.pool!)]])),
 });
 
-/** A random number of parts from `available`, skipping any that `blocked` rules out given what is already chosen. */
-function randomParts(available: PartSummary[], chosen: Part[], all: PartSummary[]): Part[] {
-  const want = Math.floor(Math.random() * (available.length + 1));
+/** A random number of parts from `available` (at most `max`), skipping any that `blocked` rules out given what is already chosen. */
+function randomParts(available: PartSummary[], chosen: Part[], all: PartSummary[], max: number): Part[] {
+  const want = Math.floor(Math.random() * (Math.min(available.length, max) + 1));
   const out: Part[] = [];
   for (const p of shuffle(available)) {
     if (out.length >= want) break;
@@ -102,8 +103,8 @@ function randomQuestion(item: Item, plain = false): Question {
   const { builder } = item;
   if (plain) return { key, type: 'create', builder, fields: initialFields(builder.fields), addons: [], followUps: [] };
   const all = [...builder.addons, ...builder.followUps];
-  const addons = randomParts(builder.addons, [], all);
-  const followUps = randomParts(builder.followUps, addons, all);
+  const addons = randomParts(builder.addons, [], all, QUICK_MAX_ADDONS);
+  const followUps = randomParts(builder.followUps, addons, all, QUICK_MAX_FOLLOWUPS);
   return { key, type: 'create', builder, fields: randomFields(builder.fields), addons, followUps };
 }
 

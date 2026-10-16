@@ -10,6 +10,7 @@ import type {
   ScenarioBundle,
   VariableDef,
 } from '@cka/schema';
+import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import {
   composeCreate,
   composeTrouble,
@@ -153,6 +154,16 @@ function buildCreate(q: Extract<QuickQuestion, { type: 'create' }>, n: number, c
   };
   const addons = pick(q.addons, builder.addons, 'add-on');
   const followUps = pick(q.followUps, builder.followUps, 'follow-up');
+  if (addons.length > QUICK_MAX_ADDONS) {
+    ctx.errors.push(
+      `${where}: at most ${QUICK_MAX_ADDONS} add-ons per question (got ${addons.length}); split the rest into another question`,
+    );
+  }
+  if (followUps.length > QUICK_MAX_FOLLOWUPS) {
+    ctx.errors.push(
+      `${where}: at most ${QUICK_MAX_FOLLOWUPS} "Then" steps per question (got ${followUps.length}); split the rest into another question`,
+    );
+  }
   if (ctx.errors.length) return;
   return composeCreate(builder, base.refs, addons, followUps);
 }

@@ -26,7 +26,7 @@ checks:
   - id: release
     description: release ${REL} is deployed from chart webapp-${TARGET}
     type: kubectl
-    run: helm -n ${NS} list -a -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
+    run: helm -n ${NS} list -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
     expect: { equals: "deployed/webapp-${TARGET}" }
     weight: 3
   - id: values-kept

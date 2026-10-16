@@ -39,7 +39,7 @@ checks:
   - id: release
     description: release ${REL} in ${NS} is deployed from chart webapp-1.1.0
     type: kubectl
-    run: helm -n ${NS} list -a -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
+    run: helm -n ${NS} list -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
     expect: { equals: "deployed/webapp-1.1.0" }
     weight: 3
   - id: values

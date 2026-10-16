@@ -31,6 +31,6 @@ for name in "$STUCK" "$STUCK-2"; do
 done
 
 for name in "$STUCK" "$STUCK-2"; do
-  status="$(helm -n "$NS" list -a -o json | jq -r --arg n "$name" '.[] | select(.name == $n) | .status')"
+  status="$(helm -n "$NS" list -o json | jq -r --arg n "$name" '.[] | select(.name == $n) | .status')"
   [[ "$status" == "$STUCK_KIND" ]] || { echo "expected $name in $STUCK_KIND, got: ${status:-none}" >&2; exit 1; }
 done

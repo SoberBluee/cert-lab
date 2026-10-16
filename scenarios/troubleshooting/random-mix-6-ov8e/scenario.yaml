@@ -9,7 +9,6 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 60
-draft: true
 variables:
   Q1_NS: { oneOf: [ ops, core, platform ] }
   Q1_FAULT: { oneOf: [ apiserver-etcd-port, apiserver-etcd-certfile, etcd-cert-path, scheduler-command, controller-manager-kubeconfig, kubelet-client-cert, kubelet-static-pod-path ], hidden: true }

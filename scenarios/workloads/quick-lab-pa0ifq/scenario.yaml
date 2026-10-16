@@ -1,0 +1,389 @@
+id: quick-lab-pa0ifq
+title: "Broken HPA, layered Deployment, PVC selector and etcd restore"
+domain: workloads
+difficulty: 3
+estimatedMinutes: 64
+points: 57
+tags: [ troubleshooting, hpa, autoscaling, metrics-server, deployment, init-content, revision-settings, spread, env, probes, service-account, expose, ingress, priority-class, httproute, resources, set-env, scale, restart, strategy, update-image, pvc, pv, selector, delete-keep-data, etcd, restore, static-pod ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_NS: { oneOf: [ shop, storefront, media ] }
+  Q1_APP: { oneOf: [ web, api, frontend ] }
+  Q1_FAULT: { oneOf: [ no-cpu-request, target-name, target-kind, max-one, metrics-server-down, metrics-apiservice ], hidden: true }
+  Q2_NS: { oneOf: [ web, shop, team-a ] }
+  Q2_NAME: { oneOf: [ frontend, api, catalog ] }
+  Q2_IMAGE: { oneOf: [ nginx:1.26-alpine, nginx:1.27-alpine ] }
+  Q2_REPLICAS: { oneOf: [ 2, 3, 4 ] }
+  Q2_INIT_TEXT: { oneOf: [ welcome-shop, hello-cka, v1-ready ] }
+  Q2_REV_HISTORY: { oneOf: [ 2, 5, 10 ] }
+  Q2_REV_MINREADY: { oneOf: [ 5, 10 ] }
+  Q2_ENV_OBJ: { oneOf: [ app-config, app-settings, runtime-env ] }
+  Q2_ENV_KEY: { oneOf: [ LOG_LEVEL, MODE, REGION ] }
+  Q2_ENV_VALUE: { oneOf: [ debug, info, warn ] }
+  Q2_PROBES_PERIOD: { oneOf: [ 5, 10, 15 ] }
+  Q2_SA_SA: { oneOf: [ web-runner, app-identity, deploy-bot ] }
+  Q2_EXPOSE_PORT: { oneOf: [ 80, 8080, 3000 ] }
+  Q2_EXPOSE_TYPE: { oneOf: [ ClusterIP, NodePort ] }
+  Q2_INGRESS_SUB: { oneOf: [ www, shop, app ] }
+  Q2_PRIO_CLASS: { oneOf: [ high-priority, critical-apps, batch-low ] }
+  Q2_PRIO_VALUE: { oneOf: [ 1000, 10000, 100000 ] }
+  Q2_ROUTE_SUB: { oneOf: [ api, edge, gw ] }
+  Q2_RES_CPU: { oneOf: [ 50m, 100m, 150m ] }
+  Q2_RES_MEMORY: { oneOf: [ 128Mi, 256Mi, 512Mi ] }
+  Q2_SETENV_KEY: { oneOf: [ APP_COLOR, FEATURE_FLAG, TZ ] }
+  Q2_SETENV_VALUE: { oneOf: [ blue, on, UTC ] }
+  Q2_SCALE_REPLICAS: { oneOf: [ 5, 6 ] }
+  Q2_STRATEGY_SURGE: { oneOf: [ "1", "2", 50% ] }
+  Q2_STRATEGY_UNAVAILABLE: { oneOf: [ "0", "1" ] }
+  Q2_UPDATE_IMAGE: { oneOf: [ nginx:1.28-alpine, httpd:2.4-alpine ] }
+  Q3_NS: { oneOf: [ billing, orders-app, photo-lib ] }
+  Q3_NAME: { oneOf: [ orders, invoices, photos ] }
+  Q3_SIZE: { oneOf: [ 100Mi, 500Mi, 1Gi ] }
+  Q3_ACCESS: { oneOf: [ ReadWriteOnce, ReadWriteMany ] }
+  Q3_SELECT_TIER: { oneOf: [ premium, standard, backup ] }
+  Q4_NS: { oneOf: [ ledger, records, archive ] }
+  Q4_SNAPSHOT: { oneOf: [ /opt/backups/etcd-snapshot.db, /var/backups/etcd.db, /srv/etcd/backup.db ] }
+  Q4_DATADIR: { oneOf: [ /var/lib/etcd-restore, /var/lib/etcd-from-backup, /var/lib/etcd-new ] }
+solution:
+  - node: controlplane
+    script: setup/q4-solution.sh
+    timeoutSeconds: 900
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: Autoscaler ${Q1_APP} not working
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-hpa-spec
+        description: the autoscaler targets Deployment ${Q1_APP} between 2 and 6 replicas at 50% CPU
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q1_APP}/2/6/50" }
+        weight: 1
+      - id: q1-hpa-active
+        description: the autoscaler reads current metrics (ScalingActive)
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.status.conditions[?(@.type=="ScalingActive")].status}'
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-hpa-metric
+        description: it reports the current CPU utilization
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.status.currentMetrics[?(@.resource.name=="cpu")].resource.current.averageUtilization}' | grep -qE '^[0-9]+$' && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 120
+      - id: q1-ready
+        description: ${Q1_APP} has at least 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}'
+        expect: { gte: 2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-spec
+        description: image and requests match the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory}'
+        expect: { equals: nginx:1.27-alpine 50m 32Mi }
+        weight: 1
+      - id: q1-same-deployment
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get hpa ${Q1_APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics."
+      - "kubectl -n ${Q1_NS} describe hpa ${Q1_APP}: the Conditions and Events say why (FailedGetScale, FailedGetResourceMetric, ...)."
+      - "kubectl top pods -n ${Q1_NS}: if this fails, the problem is the metrics pipeline, not the autoscaler. Check kubectl get apiservice v1beta1.metrics.k8s.io and kubectl -n kube-system get deploy,svc metrics-server."
+  - id: q2
+    title: Deployment ${Q2_NAME}
+    points: 39
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - id: q2-expose-service
+        description: Service ${Q2_NAME} is a ${Q2_EXPOSE_TYPE} mapping port ${Q2_EXPOSE_PORT} to 80
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get svc ${Q2_NAME} -o jsonpath='{.spec.type}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+        expect: { equals: "${Q2_EXPOSE_TYPE}/${Q2_EXPOSE_PORT}/80" }
+        weight: 1
+      - id: q2-expose-reachable
+        description: Service ${Q2_NAME} answers HTTP 200 on port ${Q2_EXPOSE_PORT}
+        type: kubectl
+        run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q2_NS} get svc ${Q2_NAME} -o jsonpath='{.spec.clusterIP}'):${Q2_EXPOSE_PORT}/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-init-container
+        description: init container content runs busybox:1.36
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="content")].image}'
+        expect: { equals: busybox:1.36 }
+        weight: 1
+      - id: q2-html-content
+        description: the Pods hold /usr/share/nginx/html/index.html with "${Q2_INIT_TEXT}"
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec deployment/${Q2_NAME} -- cat /usr/share/nginx/html/index.html
+        expect: { equals: "${Q2_INIT_TEXT}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-rev-settings
+        description: revisionHistoryLimit ${Q2_REV_HISTORY} and minReadySeconds ${Q2_REV_MINREADY}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.spec.revisionHistoryLimit}/{.spec.minReadySeconds}'
+        expect: { equals: "${Q2_REV_HISTORY}/${Q2_REV_MINREADY}" }
+        weight: 2
+      - id: q2-spread-spec
+        description: a hard spread constraint on kubernetes.io/hostname with maxSkew 1
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.topologySpreadConstraints[0].topologyKey}/{.spec.template.spec.topologySpreadConstraints[0].maxSkew}/{.spec.template.spec.topologySpreadConstraints[0].whenUnsatisfiable}'
+        expect: { equals: kubernetes.io/hostname/1/DoNotSchedule }
+        weight: 1
+      - id: q2-spread-nodes
+        description: the Pods run on both workers
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pods -l app=${Q2_NAME} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | tr '\n' ' '
+        expect: { equals: worker-1 worker-2 }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-env-source
+        description: Secret ${Q2_ENV_OBJ} has ${Q2_ENV_KEY}=${Q2_ENV_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get secret ${Q2_ENV_OBJ} -o jsonpath='{.data.${Q2_ENV_KEY}}' | base64 -d
+        expect: { equals: "${Q2_ENV_VALUE}" }
+        weight: 1
+      - id: q2-env-value
+        description: ${Q2_ENV_KEY} is ${Q2_ENV_VALUE} inside the container
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec deployment/${Q2_NAME} -- printenv ${Q2_ENV_KEY}
+        expect: { equals: "${Q2_ENV_VALUE}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-probes-readiness
+        description: "readiness probe: HTTP GET / on port 80 every ${Q2_PROBES_PERIOD}s"
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}/{.spec.template.spec.containers[0].readinessProbe.httpGet.port}/{.spec.template.spec.containers[0].readinessProbe.periodSeconds}'
+        expect: { equals: "//80/${Q2_PROBES_PERIOD}" }
+        weight: 1
+      - id: q2-probes-liveness
+        description: "liveness probe: TCP port 80 every ${Q2_PROBES_PERIOD}s"
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}/{.spec.template.spec.containers[0].livenessProbe.periodSeconds}'
+        expect: { equals: "80/${Q2_PROBES_PERIOD}" }
+        weight: 1
+      - id: q2-sa-spec
+        description: the Pods use ${Q2_SA_SA} with automountServiceAccountToken false
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.serviceAccountName}/{.spec.template.spec.automountServiceAccountToken}'
+        expect: { equals: "${Q2_SA_SA}/false" }
+        weight: 1
+      - id: q2-sa-no-token
+        description: no token is mounted in the Pods
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec deployment/${Q2_NAME} -- sh -c 'ls /var/run/secrets/kubernetes.io/serviceaccount 2>/dev/null | wc -l'
+        expect: { equals: "0" }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-ingress-spec
+        description: Ingress ${Q2_NAME} routes ${Q2_INGRESS_SUB}.${Q2_NS}.lab to ${Q2_NAME}:${Q2_EXPOSE_PORT} with class traefik
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get ingress ${Q2_NAME} -o jsonpath='{.spec.ingressClassName} {.spec.rules[0].host} {.spec.rules[0].http.paths[0].backend.service.name} {.spec.rules[0].http.paths[0].backend.service.port.number}'
+        expect: { equals: "traefik ${Q2_INGRESS_SUB}.${Q2_NS}.lab ${Q2_NAME} ${Q2_EXPOSE_PORT}" }
+        weight: 1
+      - id: q2-ingress-reachable
+        description: ${Q2_INGRESS_SUB}.${Q2_NS}.lab answers HTTP 200 through Traefik on NodePort 30080
+        type: kubectl
+        run: "curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q2_INGRESS_SUB}.${Q2_NS}.lab' http://controlplane:30080/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-prio-class
+        description: PriorityClass ${Q2_PRIO_CLASS} has value ${Q2_PRIO_VALUE}
+        type: kubectl
+        run: kubectl get priorityclass ${Q2_PRIO_CLASS} -o jsonpath='{.value}/{.globalDefault}'
+        expect: { matches: "^${Q2_PRIO_VALUE}/(false)?$" }
+        weight: 1
+      - id: q2-prio-pods
+        description: the Pods run with priority ${Q2_PRIO_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pods -l app=${Q2_NAME} -o jsonpath='{.items[0].spec.priorityClassName}/{.items[0].spec.priority}'
+        expect: { equals: "${Q2_PRIO_CLASS}/${Q2_PRIO_VALUE}" }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-route-spec
+        description: HTTPRoute ${Q2_NAME} attaches to traefik/traefik-gateway and routes ${Q2_ROUTE_SUB}.${Q2_NS}.lab to ${Q2_NAME}:${Q2_EXPOSE_PORT}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get httproute ${Q2_NAME} -o jsonpath='{.spec.parentRefs[0].name} {.spec.parentRefs[0].namespace} {.spec.hostnames[0]} {.spec.rules[0].backendRefs[0].name} {.spec.rules[0].backendRefs[0].port}'
+        expect: { equals: "traefik-gateway traefik ${Q2_ROUTE_SUB}.${Q2_NS}.lab ${Q2_NAME} ${Q2_EXPOSE_PORT}" }
+        weight: 1
+      - id: q2-route-reachable
+        description: ${Q2_ROUTE_SUB}.${Q2_NS}.lab answers HTTP 200 through Traefik on NodePort 30080
+        type: kubectl
+        run: "curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q2_ROUTE_SUB}.${Q2_NS}.lab' http://controlplane:30080/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-res-requests
+        description: requests are ${Q2_RES_CPU} CPU and 64Mi memory
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}/{.spec.template.spec.containers[0].resources.requests.memory}'
+        expect: { equals: "${Q2_RES_CPU}/64Mi" }
+        weight: 1
+      - id: q2-res-limits
+        description: limits are 1 CPU and ${Q2_RES_MEMORY} memory
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.containers[0].resources.limits.cpu}/{.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { equals: "1/${Q2_RES_MEMORY}" }
+        weight: 1
+      - id: q2-set-env-spec
+        description: ${Q2_SETENV_KEY}=${Q2_SETENV_VALUE} is in the Pod template
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="${Q2_SETENV_KEY}")].value}'
+        expect: { equals: "${Q2_SETENV_VALUE}" }
+        weight: 1
+      - id: q2-set-env-live
+        description: ${Q2_SETENV_KEY} is ${Q2_SETENV_VALUE} inside the container
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec deployment/${Q2_NAME} -- printenv ${Q2_SETENV_KEY}
+        expect: { equals: "${Q2_SETENV_VALUE}" }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-scale-spec
+        description: ${Q2_NAME} asks for ${Q2_SCALE_REPLICAS} replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.spec.replicas}'
+        expect: { equals: "${Q2_SCALE_REPLICAS}" }
+        weight: 1
+      - id: q2-scale-ready
+        description: ${Q2_NAME} has ${Q2_SCALE_REPLICAS} ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${Q2_SCALE_REPLICAS}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-restart-annotation
+        description: ${Q2_NAME} was restarted with kubectl rollout restart
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}'
+        expect: { notEmpty: true }
+        weight: 1
+      - id: q2-restart-revision
+        description: ${Q2_NAME} rolled out a new revision
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}'
+        expect: { gte: 2 }
+        weight: 1
+      - id: q2-strategy
+        description: ${Q2_NAME} rolls out with maxSurge ${Q2_STRATEGY_SURGE} and maxUnavailable ${Q2_STRATEGY_UNAVAILABLE}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.spec.strategy.type}/{.spec.strategy.rollingUpdate.maxSurge}/{.spec.strategy.rollingUpdate.maxUnavailable}'
+        expect: { equals: "RollingUpdate/${Q2_STRATEGY_SURGE}/${Q2_STRATEGY_UNAVAILABLE}" }
+        weight: 2
+      - id: q2-update-image
+        description: ${Q2_NAME} runs ${Q2_UPDATE_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q2_UPDATE_IMAGE}" }
+        weight: 1
+      - id: q2-update-revision
+        description: ${Q2_NAME} was updated in place (revision 2 or later)
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}'
+        expect: { gte: 2 }
+        weight: 1
+    hints:
+      - kubectl -n ${Q2_NS} create deployment ${Q2_NAME} --image=${Q2_IMAGE} --replicas=${Q2_REPLICAS} --dry-run=client -o yaml gives you a manifest to start from.
+      - kubectl -n ${Q2_NS} expose deployment ${Q2_NAME} --type=${Q2_EXPOSE_TYPE} --port=${Q2_EXPOSE_PORT} --target-port=80
+      - initContainers run to completion before the app starts; both mount the same emptyDir.
+      - Both are fields of the Deployment spec, next to replicas.
+      - "Without nodeTaintsPolicy: Honor the tainted control plane counts as an empty domain and some replicas stay Pending."
+      - "kubectl -n ${Q2_NS} create secret generic ${Q2_ENV_OBJ} --from-literal=${Q2_ENV_KEY}=${Q2_ENV_VALUE}; then env: [{name: ${Q2_ENV_KEY}, valueFrom: {secretKeyRef: {name: ${Q2_ENV_OBJ}, key: ${Q2_ENV_KEY}}}}]"
+      - "readinessProbe: {httpGet: {path: /, port: 80}, periodSeconds: N} and livenessProbe: {tcpSocket: {port: 80}, periodSeconds: N}"
+      - "kubectl -n ${Q2_NS} create serviceaccount ${Q2_SA_SA}; then serviceAccountName and automountServiceAccountToken: false in the Pod spec."
+      - kubectl -n ${Q2_NS} create ingress ${Q2_NAME} --class=traefik --rule="${Q2_INGRESS_SUB}.${Q2_NS}.lab/*=${Q2_NAME}:${Q2_EXPOSE_PORT}"
+      - kubectl create priorityclass ${Q2_PRIO_CLASS} --value=${Q2_PRIO_VALUE}; then priorityClassName in the Pod spec.
+      - kubectl explain httproute.spec shows the fields; the Gateway API docs have an HTTPRoute example with parentRefs, hostnames and backendRefs to start from.
+      - "resources: {requests: {cpu: ..., memory: ...}, limits: {cpu: ..., memory: ...}} goes on the container."
+      - kubectl -n ${Q2_NS} set env deployment/${Q2_NAME} ${Q2_SETENV_KEY}=${Q2_SETENV_VALUE}
+      - kubectl -n ${Q2_NS} scale deployment ${Q2_NAME} --replicas=${Q2_SCALE_REPLICAS}
+      - kubectl -n ${Q2_NS} rollout restart deployment/${Q2_NAME}
+      - "kubectl -n ${Q2_NS} edit deployment ${Q2_NAME}: spec.strategy.rollingUpdate."
+      - kubectl -n ${Q2_NS} set image deployment/${Q2_NAME} <container>=${Q2_UPDATE_IMAGE}, then kubectl rollout status.
+  - id: q3
+    title: PersistentVolumeClaim ${Q3_NAME}
+    points: 4
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - id: q3-deleted
+        description: PVC ${Q3_NAME} is deleted
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get pvc ${Q3_NAME} --ignore-not-found -o name
+        expect: { notEmpty: false }
+        weight: 2
+      - id: q3-released
+        description: ${Q3_NAME}-pv still exists and is Released
+        type: kubectl
+        run: kubectl get pv ${Q3_NAME}-pv -o jsonpath='{.status.phase}'
+        expect: { equals: Released }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl get pv ${Q3_NAME}-pv shows the class, access modes and capacity the claim must fit.
+      - kubectl get pv --show-labels; then spec.selector.matchLabels on the claim.
+      - A claim in use by a Pod stays Terminating until the Pod is gone. With reclaim policy Retain the PV becomes Released.
+  - id: q4
+    title: Restore etcd
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+    setupStage: 2
+    checks:
+      - id: q4-api
+        description: The API server answers
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 1
+        retrySeconds: 180
+      - id: q4-control-plane
+        description: node controlplane is Ready, and etcd, kube-apiserver, kube-controller-manager and kube-scheduler run Ready on it
+        type: kubectl
+        run: "{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}{end}' | sort; } | xargs"
+        expect: { equals: controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 1
+        retrySeconds: 180
+      - id: q4-rolled-back
+        description: Namespace ${Q4_NS} holds before-backup but no longer after-backup
+        type: kubectl
+        run: kubectl -n "${Q4_NS}" get configmaps -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -v kube-root-ca.crt | sort | xargs
+        expect: { equals: before-backup }
+        weight: 3
+        retrySeconds: 120
+      - type: ssh
+        node: controlplane
+        id: q4-data-dir
+        description: etcd runs from ${Q4_DATADIR}
+        run: test -d "${Q4_DATADIR}/member" && grep -q -- "${Q4_DATADIR}" /etc/kubernetes/manifests/etcd.yaml && echo restored || echo missing
+        expect: { equals: restored }
+        weight: 2
+    hints:
+      - etcdutl snapshot restore <file> --data-dir <dir> writes a new data directory; it does not need the endpoint or certificates.
+      - In /etc/kubernetes/manifests/etcd.yaml, change the hostPath of the etcd-data volume. The kubelet recreates the Pod, and the API server can take a minute or two to answer again.

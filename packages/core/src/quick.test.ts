@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { parseAllDocuments, parse as parseYaml } from 'yaml';
 import type { FieldInput, PartInput, QuickQuestion, RecipeField, ScenarioBundle } from '@cka/schema';
+import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import { selectFaults } from './faults';
 import { buildQuickBundle } from './quick';
 import { BUILDERS, CATEGORIES, composeCreate, faultList, recipeCatalog, type Builder, type PartBase } from './recipes';
@@ -201,11 +202,17 @@ describe('Create track', () => {
     }
 
     // Walking follow-ups first and add-ons backwards picks the other side of every conflict.
+    // Cap to Quick Create limits when going through buildQuickBundle.
     const alternatives = [compatible([...b.addons, ...b.followUps]), compatible([...b.followUps, ...[...b.addons].reverse()])];
     for (const [i, set] of alternatives.entries()) {
-      it(`${b.id} with every compatible part (set ${i + 1}) is valid, with unique check ids`, () => {
-        const addons = b.addons.filter((p) => set.includes(p));
-        const followUps = b.followUps.filter((p) => set.includes(p));
+      it(`${b.id} with a full-size compatible set (set ${i + 1}) is valid, with unique check ids`, () => {
+        const addons = b.addons.filter((p) => set.includes(p)).slice(0, QUICK_MAX_ADDONS);
+        const followUps = b.followUps.filter((p) => set.includes(p)).slice(0, QUICK_MAX_FOLLOWUPS);
+        const pick = (xs: PartBase[]) => xs.map((x) => ({ part: x, v: defaults(x.fields) }));
+        const fullAddons = b.addons.filter((p) => set.includes(p));
+        const fullFollowUps = b.followUps.filter((p) => set.includes(p));
+        const composed = composeCreate(b, defaults(b.fields), pick(fullAddons), pick(fullFollowUps));
+        assert.equal(new Set(composed.checks.map((c) => c.id)).size, composed.checks.length);
         for (const randomize of [false, true]) {
           const { build: res, issues } = build([createQ(b, addons, followUps, randomize)]);
           assert.deepEqual(issues, []);
@@ -217,6 +224,31 @@ describe('Create track', () => {
       });
     }
   }
+
+  it('rejects more than 3 add-ons or 2 Then steps, and accepts exactly those limits', () => {
+    const dep = BUILDERS.find((b) => b.id === 'deployment')!;
+    const by = (id: string) => [...dep.addons, ...dep.followUps].find((p) => p.id === id)!;
+    const fourAddons = [by('expose'), by('probes'), by('service-account'), by('priority-class')];
+    const threeFollowUps = [by('scale'), by('restart'), by('set-env')];
+    const threeAddons = fourAddons.slice(0, QUICK_MAX_ADDONS);
+    const twoFollowUps = threeFollowUps.slice(0, QUICK_MAX_FOLLOWUPS);
+
+    const tooManyAddons = buildQuickBundle({ id: 'over', title: 'Over', questions: [createQ(dep, fourAddons, [])] });
+    assert.equal(tooManyAddons.build, undefined);
+    assert.match(tooManyAddons.errors.join('\n'), /at most 3 add-ons per question \(got 4\)/);
+
+    const tooManyFollowUps = buildQuickBundle({ id: 'over', title: 'Over', questions: [createQ(dep, [], threeFollowUps)] });
+    assert.equal(tooManyFollowUps.build, undefined);
+    assert.match(tooManyFollowUps.errors.join('\n'), /at most 2 "Then" steps per question \(got 3\)/);
+
+    const { build: ok, errors } = buildQuickBundle({
+      id: 'cap',
+      title: 'At the cap',
+      questions: [createQ(dep, threeAddons, twoFollowUps)],
+    });
+    assert.deepEqual(errors, []);
+    assert.ok(ok);
+  });
 
   it('rejects missing prerequisites, conflicts and colliding values', () => {
     const dep = BUILDERS.find((b) => b.id === 'deployment')!;

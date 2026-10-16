@@ -1,0 +1,154 @@
+id: quick-lab-rdwxn3
+title: "etcd snapshot, broken Ingress route and Helm install"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 26
+points: 19
+tags: [ etcd, backup, troubleshooting, ingress, gateway-api, httproute, helm, replicas, nodeport, values-file ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_BACKUP: { oneOf: [ /opt/backups/etcd.db, /srv/etcd/snapshot.db, /root/etcd-backup.db ] }
+  Q1_MARKER: { oneOf: [ backup-marker, pre-backup, audit-mark ] }
+  Q2_NS: { oneOf: [ shop, media, portal ] }
+  Q2_APP: { oneOf: [ web, store, blog ] }
+  Q2_FAULT: { oneOf: [ ingress-service-name, ingress-service-port, ingress-class, ingress-path, route-parent, route-section, route-backend-port, ingress-host-typo, route-hostname-typo, route-parent-namespace ], hidden: true }
+  Q3_NS: { oneOf: [ apps, web, tools ] }
+  Q3_REL: { oneOf: [ frontend, shop, portal ] }
+  Q3_VERSION: { oneOf: [ 1.0.0, 1.1.0 ] }
+  Q3_REPLICAS_COUNT: { oneOf: [ 2, 3, 4 ] }
+  Q3_VALUES_OWNER: { oneOf: [ team-a, team-b, platform ] }
+tasks:
+  - id: q1
+    title: Back up etcd
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-snapshot-size
+        description: ${Q1_BACKUP} exists and is larger than 1 MB
+        run: stat -c %s "${Q1_BACKUP}" 2>/dev/null || echo 0
+        expect: { gte: 1000000 }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-snapshot-valid
+        description: ${Q1_BACKUP} is a valid etcd snapshot
+        run: ETCDCTL_API=3 etcdctl snapshot status "${Q1_BACKUP}" -w json 2>/dev/null | jq -r '.totalKey > 0'
+        expect: { equals: "true" }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-snapshot-fresh
+        description: The snapshot contains ConfigMap ${Q1_MARKER}
+        run: grep -qa -- "/registry/configmaps/default/${Q1_MARKER}" "${Q1_BACKUP}" 2>/dev/null && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+    hints:
+      - "The endpoint and certificate paths are in /etc/kubernetes/manifests/etcd.yaml: --listen-client-urls, --trusted-ca-file, --cert-file and --key-file."
+      - ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save <file>
+  - id: q2
+    title: ${Q2_APP} unreachable through the ingress
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-ingress-serves
+        description: www.${Q2_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: www.${Q2_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-route-serves
+        description: api.${Q2_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: api.${Q2_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-spec-ingress
+        description: Ingress ${Q2_APP} still serves host www.${Q2_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get ingress ${Q2_APP} -o jsonpath='{.spec.rules[0].host}'
+        expect: { equals: "www.${Q2_NS}.lab" }
+        weight: 1
+      - id: q2-spec-route
+        description: HTTPRoute ${Q2_APP} still serves host api.${Q2_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get httproute ${Q2_APP} -o jsonpath='{.spec.hostnames[0]}'
+        expect: { equals: "api.${Q2_NS}.lab" }
+        weight: 1
+      - id: q2-spec-backend
+        description: Deployment and Service ${Q2_APP} match the spec
+        type: kubectl
+        run: echo $(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
+        expect: { equals: "2 ${Q2_APP} ${Q2_APP} 80" }
+        weight: 1
+    hints:
+      - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
+      - "kubectl -n ${Q2_NS} describe ingress ${Q2_APP}: check the class, the path and the backend Service and port against kubectl -n ${Q2_NS} get svc ${Q2_APP}."
+      - "kubectl -n ${Q2_NS} describe httproute ${Q2_APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used."
+      - kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.
+  - id: q3
+    title: Helm release ${Q3_REL}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - type: kubectl
+        id: q3-release
+        description: release ${Q3_REL} is deployed from chart webapp-${Q3_VERSION}
+        run: helm -n ${Q3_NS} list -o json | jq -r '.[] | select(.name == "${Q3_REL}") | .status + "/" + .chart'
+        expect: { equals: "deployed/webapp-${Q3_VERSION}" }
+        weight: 2
+      - type: kubectl
+        id: q3-replicas-value
+        description: the release sets replicaCount ${Q3_REPLICAS_COUNT}
+        run: helm -n ${Q3_NS} get values ${Q3_REL} -o json | jq -r '.replicaCount | tostring'
+        expect: { equals: "${Q3_REPLICAS_COUNT}" }
+        weight: 1
+      - type: kubectl
+        id: q3-replicas-ready
+        description: ${Q3_REPLICAS_COUNT} replicas are ready
+        run: kubectl -n ${Q3_NS} get deployment -l app.kubernetes.io/instance=${Q3_REL} -o jsonpath='{.items[0].status.readyReplicas}'
+        expect: { equals: "${Q3_REPLICAS_COUNT}" }
+        weight: 1
+        retrySeconds: 90
+      - type: kubectl
+        id: q3-nodeport
+        description: the release Service is of type NodePort
+        run: kubectl -n ${Q3_NS} get service -l app.kubernetes.io/instance=${Q3_REL} -o jsonpath='{.items[0].spec.type}'
+        expect: { equals: NodePort }
+        weight: 1
+      - id: q3-values-file
+        description: /opt/course/helm/${Q3_REL}-values.yaml sets owner ${Q3_VALUES_OWNER}
+        type: file
+        node: controlplane
+        path: /opt/course/helm/${Q3_REL}-values.yaml
+        contains: "owner: ${Q3_VALUES_OWNER}"
+        weight: 1
+      - type: kubectl
+        id: q3-values-owner
+        description: the release's Pods carry the annotation owner=${Q3_VALUES_OWNER}
+        run: kubectl -n ${Q3_NS} get deployment -l app.kubernetes.io/instance=${Q3_REL} -o jsonpath='{.items[0].spec.template.metadata.annotations.owner}'
+        expect: { equals: "${Q3_VALUES_OWNER}" }
+        weight: 1
+    hints:
+      - helm repo add lab http://controlplane:8879, then helm search repo lab/webapp --versions.
+      - helm install <release> <chart> --version <v> -n <namespace>
+      - helm show values lab/webapp lists the keys; --set replicaCount=<n> sets one.
+      - The chart has a service.type value.
+      - "helm install <release> <chart> -f <file>: a values file holds the same keys as helm show values."

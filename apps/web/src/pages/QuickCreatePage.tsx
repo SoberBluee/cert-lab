@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { parseDocument } from 'yaml';
 import type { BuilderSummary, CategorySummary, PartSummary, RecipeField } from '@cka/schema';
+import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import { api, studioApi, type StudioJob } from '../api';
 import { JobPanel } from '../components/JobPanel';
 import { Button, Card, Difficulty, DomainBadge, ErrorBanner, Markdown } from '../components/ui';
@@ -176,25 +177,32 @@ function PartPicker({
   parts,
   chosen,
   all,
+  count,
+  max,
+  limitReason,
   onAdd,
 }: {
   label: string;
   parts: PartSummary[];
   chosen: Part[];
   all: PartSummary[];
+  count: number;
+  max: number;
+  limitReason: string;
   onAdd: (p: PartSummary) => void;
 }) {
   const [open, setOpen] = useState(false);
   if (!parts.length) return null;
+  const atLimit = count >= max;
   return (
     <div>
       <Button variant="ghost" onClick={() => setOpen(!open)}>
-        {open ? '−' : '+'} {label}
+        {open ? '−' : '+'} {label} ({count}/{max})
       </Button>
       {open && (
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           {parts.map((p) => {
-            const why = blocked(p, chosen, all);
+            const why = atLimit ? limitReason : blocked(p, chosen, all);
             return (
               <button
                 key={p.id}
@@ -261,12 +269,24 @@ function CreateBody({ q, onChange }: { q: Extract<Question, { type: 'create' }>;
         <PartCard key={p.key} p={p} prefix={`Step ${i + 2}: then`} onChange={(n) => replace('followUps', p.key, n)} onRemove={() => remove('followUps', p)} />
       ))}
       <div className="flex flex-col gap-2">
-        <PartPicker label="Add-on" parts={q.builder.addons} chosen={chosen} all={all} onAdd={(p) => onChange({ ...q, addons: [...q.addons, newPart(p)] })} />
+        <PartPicker
+          label="Add-on"
+          parts={q.builder.addons}
+          chosen={chosen}
+          all={all}
+          count={q.addons.length}
+          max={QUICK_MAX_ADDONS}
+          limitReason={`limit of ${QUICK_MAX_ADDONS} add-ons reached`}
+          onAdd={(p) => onChange({ ...q, addons: [...q.addons, newPart(p)] })}
+        />
         <PartPicker
           label="Then…"
           parts={q.builder.followUps}
           chosen={chosen}
           all={all}
+          count={q.followUps.length}
+          max={QUICK_MAX_FOLLOWUPS}
+          limitReason={`limit of ${QUICK_MAX_FOLLOWUPS} "Then" steps reached`}
           onAdd={(p) => onChange({ ...q, followUps: [...q.followUps, newPart(p)] })}
         />
       </div>
