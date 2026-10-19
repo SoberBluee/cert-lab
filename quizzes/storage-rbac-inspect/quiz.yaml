@@ -1,0 +1,126 @@
+id: storage-rbac-inspect
+title: Storage and RBAC — what to inspect next
+summary: PVC binding, access modes, reclaim, and Role versus ClusterRole. Match the symptom to the object you open first.
+track: cka
+topic: quiz-storage-rbac
+estimatedMinutes: 12
+questions:
+  - id: pvc-pending-class
+    prompt: |
+      A PersistentVolumeClaim stays `Pending`. `kubectl describe pvc` says `no persistent volumes available for this claim and no storage class is set`. A StorageClass named `manual` exists but is not the default.
+
+      What do you set?
+    choices:
+      - "The container liveness probe"
+      - "The Service selector"
+      - "A ClusterRoleBinding for the default user"
+      - "`spec.storageClassName: manual` on the claim (or make that class the default)"
+      - "The Ingress backend port"
+    answer: 3
+    explain: |
+      A claim with an empty storage class only binds to a PV that also has no class. Naming `manual` on the claim (the same name as the PV's class) is what makes the provisioner or the static PV eligible.
+
+  - id: access-mode
+    prompt: |
+      A PVC is `Pending`. The only PV is `Available`, same size and StorageClass, but the PV is `ReadOnlyMany` and the claim asks for `ReadWriteOnce`.
+
+      What do you align?
+    choices:
+      - "The Deployment replica count"
+      - "The kube-apiserver advertise address"
+      - "The NetworkPolicy egress ports"
+      - "The access mode: the claim's mode must be one the PV offers"
+      - "The CoreDNS Corefile"
+    answer: 3
+    explain: |
+      Binding requires the claim's access modes, size and class to be compatible with the PV. `ReadWriteOnce` does not match a volume that only offers `ReadOnlyMany`.
+
+  - id: reclaim-retain
+    prompt: |
+      You deleted a PVC. The PV is `Released`, still has the old `claimRef`, and its `persistentVolumeReclaimPolicy` is `Retain`. A new claim does not bind to it.
+
+      What is going on?
+    choices:
+      - "The volume was deleted from disk and must be recreated from a snapshot"
+      - "CoreDNS is still caching the claim name"
+      - "`Retain` keeps the volume and the claimRef. Clear `claimRef` before it can bind again"
+      - "The Pod must set `restartPolicy: OnFailure`"
+      - "The StorageClass must be changed to `immediate` on the node"
+    answer: 2
+    explain: |
+      `Delete` removes the PV when the claim goes away. `Retain` leaves it `Released` and still pointing at the old claim, so it will not bind. Remove `spec.claimRef` (after you mean to reuse the data) and it becomes `Available`.
+
+  - id: forbidden-secrets
+    prompt: |
+      `kubectl get secrets -n prod` returns `Forbidden: User "jane" cannot list resource "secrets" in API group "" in the namespace "prod"`.
+
+      What do you check?
+    choices:
+      - "The kubelet binary path on worker-1"
+      - "The Service `targetPort`"
+      - "A Role or ClusterRole that allows `get`/`list` on `secrets`, and a binding whose subject is `jane` in `prod`"
+      - "The Deployment revision history limit"
+      - "The default StorageClass"
+    answer: 2
+    explain: |
+      `Forbidden` is authorization. The user reached the API and was denied. Look for a Role (namespace `prod`) or ClusterRole, and a RoleBinding or ClusterRoleBinding that names `jane`. `Unauthorized` would mean the credentials were rejected before RBAC.
+
+  - id: clusterrole-nodes
+    prompt: |
+      A ServiceAccount in namespace `shop` must `get` and `list` nodes. A Role in `shop` granting those verbs on `nodes` is bound to the account, and calls still return `Forbidden`.
+
+      Why?
+    choices:
+      - "The Role must set `apiGroups: [apps]`"
+      - "The Deployment must set `serviceAccountName: default`"
+      - "Nodes are only readable with a certificate in `/etc/cni/net.d`"
+      - "`nodes` are cluster-scoped, so the grant has to be a ClusterRole and a ClusterRoleBinding"
+      - "The ServiceAccount must live in `kube-system`"
+    answer: 3
+    explain: |
+      A Role only covers namespaced resources in one namespace. Nodes, PersistentVolumes and StorageClasses are cluster-scoped, so they need a ClusterRole bound with a ClusterRoleBinding. A RoleBinding never grants access to nodes.
+
+  - id: wrong-sa
+    prompt: |
+      A Pod in `shop` should use ServiceAccount `reader`. `kubectl auth can-i list pods -n shop --as system:serviceaccount:shop:reader` says yes, but the Pod's token is denied. The Pod spec does not set `serviceAccountName`.
+
+      What is the Pod using?
+    choices:
+      - "The node identity from the kubelet"
+      - "The `reader` account in namespace `default`"
+      - "No token, so RBAC is skipped"
+      - "The `default` ServiceAccount in `shop`, because `serviceAccountName` was left unset"
+      - "Whatever account last created a RoleBinding"
+    answer: 3
+    explain: |
+      A Pod with no `serviceAccountName` runs as `default` in its own namespace. The binding on `shop:reader` does not apply. Set `serviceAccountName: reader` and confirm `automountServiceAccountToken` is not `false` if the process needs the token.
+
+  - id: binding-namespace
+    prompt: |
+      User `jane` must list Pods in `prod`. A Role in `prod` is correct, but the RoleBinding that names her was created in namespace `dev`.
+
+      What is wrong?
+    choices:
+      - "Jane must be a ServiceAccount"
+      - "The Role must be renamed to `cluster-admin`"
+      - "Pods cannot be listed by a Role, only by a ClusterRole"
+      - "A RoleBinding only grants the Role inside its own namespace. The binding has to be in `prod`"
+      - "The binding must set `apiGroup: apps`"
+    answer: 3
+    explain: |
+      RoleBindings are namespaced. A binding in `dev` applies the Role's rules in `dev`, even if `roleRef` points at a Role that was copied from `prod`. Create the RoleBinding in `prod`.
+
+  - id: pvc-selector
+    prompt: |
+      Two PVs are `Available` in the same class, both 1Gi, `ReadWriteOnce`. The claim uses a selector `volume: db` and stays `Pending`. Only one PV has label `volume: db`.
+
+      What decides which volume binds?
+    choices:
+      - "The alphabetically first PV name"
+      - "The Service named `db`"
+      - "Whichever node the Pod is scheduled to"
+      - "The reclaim policy `Recycle`"
+      - "The claim selector: the PV must have label `volume=db`, and the other volume is correctly ignored"
+    answer: 4
+    explain: |
+      `spec.selector` on a PVC limits which PVs match. If the labeled PV also mismatches size, class or access mode, the claim stays `Pending` even though another unlabeled PV looks free. Check the label on the PV you expect.

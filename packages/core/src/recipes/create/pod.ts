@@ -190,7 +190,7 @@ const security: Addon = {
   description: 'The main container runs as a given user with a read-only root filesystem.',
   points: 2,
   fields: [
-    numberField('USER', 'runAsUser', ['1000', '2000', '3000'], 1, 65535, {
+    numberField('USER', 'runAsUser', ['1000', '2000', '3000', '1001', '1500', '2500', '4000', '5000'], 1, 65535, {
       randomizeByDefault: true,
     }),
   ],
@@ -233,7 +233,7 @@ const pvcMount: Addon = {
   description: 'A PV exists; the student claims it and mounts it in the Pod.',
   points: 3,
   fields: [
-    nameField('CLAIM', 'Claim name', ['uploads', 'scratch', 'shared-data'], 'The PV is named <claim>-pv.'),
+    nameField('CLAIM', 'Claim name', ['uploads', 'scratch', 'shared-data', 'cache', 'workdir', 'tmp-vol', 'assets', 'state', 'spill', 'buffer'], 'The PV is named <claim>-pv.'),
     selectField('SIZE', 'Requested size', ['100Mi', '500Mi', '1Gi']),
     {
       key: 'MOUNT',
@@ -242,7 +242,7 @@ const pvcMount: Addon = {
       default: '/var/lib/app',
       pattern: '^/(?!data(/|$))[A-Za-z0-9._/-]+$',
       help: 'An absolute path inside the container, other than /data.',
-      pool: ['/var/lib/app', '/srv/files', '/mnt/store'],
+      pool: ['/var/lib/app', '/srv/files', '/mnt/store', '/opt/app/data', '/var/cache/app', '/home/app/data', '/mnt/vol', '/storage', '/var/lib/data', '/opt/data'],
     },
   ],
   apply(ctx, { CLAIM, SIZE, MOUNT }) {
@@ -309,8 +309,14 @@ const labelFollowUp = (kind: 'label' | 'annotate'): FollowUp => {
     description: `After creating it, add a ${what} to the running Pod.`,
     points: 1,
     fields: label
-      ? [nameField('KEY', 'Label key', ['tier', 'team', 'env']), nameField('VALUE', 'Label value', ['backend', 'blue', 'prod'])]
-      : [nameField('KEY', 'Annotation key', ['owner', 'contact', 'ticket']), nameField('VALUE', 'Annotation value', ['platform', 'ops-team', 'cka-42'])],
+      ? [
+          nameField('KEY', 'Label key', ['tier', 'team', 'env', 'app', 'role', 'zone', 'stage', 'component', 'version', 'owner']),
+          nameField('VALUE', 'Label value', ['backend', 'blue', 'prod', 'frontend', 'green', 'staging', 'canary', 'worker', 'api', 'batch']),
+        ]
+      : [
+          nameField('KEY', 'Annotation key', ['owner', 'contact', 'ticket', 'description', 'managed-by', 'team', 'cost-center', 'runbook', 'slack', 'pager']),
+          nameField('VALUE', 'Annotation value', ['platform', 'ops-team', 'cka-42', 'sre', 'devops', 'oncall', 'infra', 'product', 'security', 'finance']),
+        ],
     apply(ctx, { KEY, VALUE }) {
       const { NAME } = ctx.v;
       ctx.steps.push(`Then add the ${what} \`${KEY}=${VALUE}\` to the running Pod \`${NAME}\`, without recreating it.`);
@@ -336,7 +342,7 @@ const initContainer: Addon = {
   name: 'Init container',
   description: 'An init container prepares a file that the main container reads.',
   points: 2,
-  fields: [nameField('TEXT', 'Content of /init/ready (one word)', ['ready', 'warmed-up', 'seeded'])],
+  fields: [nameField('TEXT', 'Content of /init/ready (one word)', ['ready', 'warmed-up', 'seeded', 'initialized', 'bootstrapped', 'prepared', 'loaded', 'synced', 'ok', 'done'])],
   apply(ctx, { TEXT }) {
     const spec = ctx.podSpec();
     spec.volumes = [...(spec.volumes ?? []), { name: 'init', emptyDir: {} }];
@@ -370,14 +376,14 @@ const configVolume: Addon = {
   points: 3,
   fields: [
     { key: 'SOURCE', label: 'Source', type: 'select', default: 'ConfigMap', options: SOURCES },
-    nameField('OBJ', 'ConfigMap or Secret name', ['app-files', 'web-conf', 'tool-settings']),
+    nameField('OBJ', 'ConfigMap or Secret name', ['app-files', 'web-conf', 'tool-settings', 'runtime-config', 'app-secrets', 'env-files', 'nginx-conf', 'app-certs', 'feature-flags', 'credentials']),
     {
       key: 'FILE',
       label: 'Key (file name)',
       type: 'text',
       default: 'app.conf',
       pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$',
-      pool: ['app.conf', 'settings.ini', 'motd'],
+      pool: ['app.conf', 'settings.ini', 'motd', 'config.yaml', 'nginx.conf', 'app.env', 'limits.conf', 'hosts.extra', 'banner.txt', 'defaults.cfg'],
     },
     {
       key: 'VALUE',
@@ -385,7 +391,7 @@ const configVolume: Addon = {
       type: 'text',
       default: 'enabled',
       pattern: '^[A-Za-z0-9._-]+$',
-      pool: ['enabled', 'v2', 'hello'],
+      pool: ['enabled', 'v2', 'hello', 'true', 'production', 'debug', 'canary', 'on', 'active', 'ready'],
       randomizeByDefault: true,
     },
   ],
@@ -680,8 +686,24 @@ export const podBuilder: Builder = {
   points: 3,
   tags: ['pod'],
   fields: [
-    nsField(['apps', 'jobs', 'sandbox']),
-    nameField('NAME', 'Pod name', ['worker', 'logger', 'toolbox', 'frontend', 'backend', 'database', 'cache', 'queue', 'scheduler', 'monitor', 'gateway']),
+    nsField(['apps', 'jobs', 'sandbox', 'workloads', 'demo', 'lab', 'temp', 'scratch', 'tools', 'debug']),
+    nameField('NAME', 'Pod name', [
+      'worker',
+      'logger',
+      'toolbox',
+      'frontend',
+      'backend',
+      'database',
+      'cache',
+      'queue',
+      'scheduler',
+      'monitor',
+      'gateway',
+      'proxy',
+      'client',
+      'agent',
+      'runner',
+    ]),
     selectField('IMAGE', 'Image', ['busybox:1.36', 'busybox:1.37', 'nginx:1.28-alpine', 'httpd:2.4-alpine', 'alpine:3.20']),
   ],
   addons: [command, sidecar, envAddon, security, resourcesAddon, pvcMount, initContainer, configVolume, capabilities, execProbe, placement],

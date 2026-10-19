@@ -576,6 +576,21 @@ describe('Quick Create', () => {
       { id: 'nodeconfig', faults: ids('nodeconfig', 'kubelet-') },
     ]);
 
+    const apiserver = topics.find((t) => t.id === 'trouble-apiserver');
+    assert.deepEqual(apiserver?.categories, [
+      { id: 'controlplane', faults: ids('controlplane', 'apiserver-') },
+      { id: 'apiaccess', faults: ids('apiaccess', 'apiserver-') },
+    ]);
+    assert.ok(ids('controlplane', 'apiserver-').includes('apiserver-etcd-keyfile'));
+    assert.ok(ids('controlplane', 'etcd-').length >= 5);
+    assert.deepEqual(topics.find((t) => t.id === 'trouble-etcd')?.categories, [
+      { id: 'controlplane', faults: ids('controlplane', 'etcd-') },
+    ]);
+    assert.deepEqual(topics.find((t) => t.id === 'trouble-scheduler')?.categories, [
+      { id: 'controlplane', faults: ids('controlplane', 'scheduler-') },
+    ]);
+    assert.ok(ids('controlplane', 'scheduler-').includes('scheduler-manifest-removed'));
+
     const deployment = BUILDERS.find((b) => b.id === 'deployment')!;
     const addon = (id: string) => deployment.addons.find((a) => a.id === id)!;
     const ingressTask = build([createQ(deployment, [addon('expose'), addon('ingress')], [])]).build.bundle.files.find((f) => f.path === 'tasks/q1.md')!.content;

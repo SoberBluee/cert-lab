@@ -11,6 +11,9 @@ type Topics = Partial<Record<LessonTopic, { name: string; blurb: string }>>;
 const QUIZ_TOPIC_META: Record<QuizTopic, { name: string; blurb: string }> = {
   'quiz-errors': { name: 'Error messages', blurb: 'kubectl / API failures → what to check next' },
   'quiz-paths': { name: 'Paths and directories', blurb: 'CNI, kubelet, manifests, etcd, certs' },
+  'quiz-workloads': { name: 'Workloads', blurb: 'probes, rollouts, Jobs and scheduling' },
+  'quiz-networking': { name: 'Services and networking', blurb: 'Service, DNS, NetworkPolicy, Ingress and HTTPRoute' },
+  'quiz-storage-rbac': { name: 'Storage and RBAC', blurb: 'PVC binding, access modes, reclaim, Role versus ClusterRole' },
 };
 
 const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
@@ -32,7 +35,7 @@ const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
       'The Linux commands the CKA expects you to know cold, practised on the nodes of a real cluster. Each step turns green once you have run it; turn on Drill to hide the commands and type them from memory.',
     topics: {
       openssl: { name: 'openssl', blurb: 'keys, CSRs, signing and reading certificates' },
-      firewall: { name: 'Firewall', blurb: 'ufw and iptables: open, block and inspect ports' },
+      firewall: { name: 'Firewall', blurb: 'ufw and iptables: open ports, block traffic, and drill the everyday commands' },
       systemd: { name: 'systemd and logs', blurb: 'systemctl, drop-ins and journalctl' },
       networking: { name: 'Networking', blurb: 'ip, ss, curl, nc, DNS lookups and sysctl' },
       files: { name: 'Files and text', blurb: 'find, grep, sed, awk, base64, tar and permissions' },
@@ -125,7 +128,7 @@ export function LearnPage({ track }: { track: LessonTrack }) {
           <div>
             <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">Quick drills</h2>
             <p className="mt-1 text-xs text-zinc-500">
-              Offline multiple choice: error messages and cluster paths. No VMs — pick an answer and learn where to look next.
+              Offline multiple choice: error messages, cluster paths, workloads, services and networking, storage and RBAC. No VMs — pick an answer and learn where to look next.
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">

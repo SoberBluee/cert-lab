@@ -56,7 +56,7 @@ export const nodesCategory: FaultCategory = {
   disruptive: true,
   settleSeconds: 60,
   hidden: { NODE: WORKERS },
-  fields: [nsField(['ops', 'infra', 'platform'])],
+  fields: [nsField(['ops', 'infra', 'platform', 'cluster', 'nodes', 'kubelet-lab', 'workers', 'system', 'sre', 'fleet'])],
   shell: ({ NS }) => ({
     title: 'Unhealthy worker',
     text: `Something is wrong with one of the worker nodes. DaemonSet \`node-probe\` in namespace \`${NS}\` is meant to run a Pod on every worker.
@@ -269,6 +269,18 @@ systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain:
         'The last line of `/etc/containerd/config.toml` is an unclosed `[plugins` table, so containerd fails to start ("failed to load TOML"). The kubelet runs but cannot reach the runtime, and the node turns `NotReady`. `systemctl status containerd` and `journalctl -u containerd -n 20` point at the line. Remove it, then restart containerd and the kubelet.',
+    },
+    {
+      id: 'kubelet-conf-missing',
+      label: 'kubelet kubeconfig file is missing',
+      nodeBreak: `mv ${KUBELET_CONF} ${KUBELET_CONF}.cka-bak
+[[ ! -f ${KUBELET_CONF} ]]
+systemctl restart kubelet || true`,
+      settle: waitNotReady(NODE),
+      nodeFix: `mv ${KUBELET_CONF}.cka-bak ${KUBELET_CONF}
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain: `\`${KUBELET_CONF}\` was renamed, so the kubelet cannot authenticate to the API server and the node turns \`NotReady\`. \`journalctl -u kubelet\` mentions the missing kubeconfig; a backup sits at \`${KUBELET_CONF}.cka-bak\`. Move it back and restart the kubelet.`,
     },
   ],
 };

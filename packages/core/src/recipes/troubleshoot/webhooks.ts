@@ -17,7 +17,10 @@ export const webhooksCategory: FaultCategory = {
   points: 7,
   tags: ['troubleshooting', 'webhook', 'admission'],
   settleSeconds: 40,
-  fields: [nsField(['hooks', 'admit', 'gate']), nameField('APP', 'Deployment name', ['frontend', 'api', 'portal'])],
+  fields: [
+    nsField(['hooks', 'admit', 'gate', 'policy', 'validate', 'mutate', 'control', 'guard', 'policy-lab', 'admission']),
+    nameField('APP', 'Deployment name', ['frontend', 'api', 'portal', 'web', 'gateway', 'admin', 'console', 'dashboard', 'app', 'service']),
+  ],
   shell: ({ NS, APP }) => ({
     title: `Pods cannot be created in ${NS}`,
     text: `Deployment \`${APP}\` in namespace \`${NS}\` should run \`2\` ready replicas of \`${IMAGE}\`, but new Pods never come up.

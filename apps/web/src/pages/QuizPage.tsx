@@ -11,25 +11,45 @@ type Progress = {
   answers: Record<string, number>;
   /** Graded results keyed by question id. */
   graded: Record<string, QuizGradeItem>;
+  /** Indexes into the quiz file, in the order this attempt asks them. */
+  questionOrder: number[];
   finished?: boolean;
 };
 
-const storageKey = (id: string) => `cka.quiz.${id}`;
+const storageKey = (id: string) => `cka.quiz.v2.${id}`;
+
+const emptyProgress = (): Progress => ({ index: 0, answers: {}, graded: {}, questionOrder: [] });
+
+function shuffleOrder(n: number): number[] {
+  const order = Array.from({ length: n }, (_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j]!, order[i]!];
+  }
+  return order;
+}
 
 function loadProgress(id: string): Progress {
   try {
     const raw = localStorage.getItem(storageKey(id));
-    if (!raw) return { index: 0, answers: {}, graded: {} };
+    if (!raw) return emptyProgress();
     const p = JSON.parse(raw) as Progress;
+    if (!Array.isArray(p.questionOrder)) return emptyProgress();
     return {
       index: typeof p.index === 'number' ? p.index : 0,
       answers: p.answers ?? {},
       graded: p.graded ?? {},
+      questionOrder: p.questionOrder,
       finished: !!p.finished,
     };
   } catch {
-    return { index: 0, answers: {}, graded: {} };
+    return emptyProgress();
   }
+}
+
+function ensureQuestionOrder(p: Progress, count: number): Progress {
+  if (p.questionOrder.length === count) return p;
+  return { ...p, questionOrder: shuffleOrder(count) };
 }
 
 function saveProgress(id: string, p: Progress) {
@@ -52,9 +72,18 @@ export function QuizPage() {
     saveProgress(id, progress);
   }, [id, progress]);
 
-  const questions = quiz.data?.questions ?? [];
+  const fileQuestions = quiz.data?.questions ?? [];
+  const questions =
+    progress.questionOrder.length === fileQuestions.length
+      ? progress.questionOrder.map((i) => fileQuestions[i]!)
+      : fileQuestions;
   const current = questions[progress.index];
   const currentGraded = current ? progress.graded[current.id] : undefined;
+
+  useEffect(() => {
+    if (!quiz.data) return;
+    setProgress((p) => ensureQuestionOrder(p, quiz.data.questions.length));
+  }, [quiz.data]);
 
   useEffect(() => {
     if (!current) {
@@ -87,10 +116,13 @@ export function QuizPage() {
   }, [progress.graded, questions.length]);
 
   const retry = () => {
-    const fresh = { index: 0, answers: {}, graded: {} };
-    setProgress(fresh);
+    setProgress({
+      index: 0,
+      answers: {},
+      graded: {},
+      questionOrder: shuffleOrder(fileQuestions.length),
+    });
     setPicked(null);
-    localStorage.removeItem(storageKey(id));
   };
 
   if (quiz.isLoading) return <div className="p-6 text-sm text-zinc-500">Loading quiz…</div>;
@@ -153,7 +185,9 @@ export function QuizPage() {
     );
   }
 
-  if (!current) return null;
+  if (!current || progress.questionOrder.length !== fileQuestions.length) {
+    return <div className="p-6 text-sm text-zinc-500">Loading quiz…</div>;
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6">

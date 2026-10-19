@@ -73,4 +73,40 @@ describe('rollVars', () => {
     assert.equal(vars.PORT, '1');
     assert.match(vars.NODE, /^worker-[12]$/);
   });
+
+  it('keeps Quick Create Qn_NS values distinct when they would collide', () => {
+    // Always pick the first oneOf entry so every question would otherwise get "store".
+    const vars = rollVars(
+      {
+        Q1_NS: { oneOf: ['store', 'edge', 'api'] },
+        Q1_APP: { oneOf: ['web', 'backend'] },
+        Q2_NS: { oneOf: ['store', 'edge', 'api'] },
+        Q2_APP: { oneOf: ['web', 'backend'] },
+        Q3_NS: { oneOf: ['store', 'edge', 'api'] },
+        Q3_APP: { oneOf: ['web', 'backend'] },
+      },
+      2,
+      {},
+      () => 0,
+    );
+    assert.equal(vars.Q1_NS, 'store');
+    assert.equal(vars.Q2_NS, 'edge');
+    assert.equal(vars.Q3_NS, 'api');
+  });
+
+  it('synthesizes a unique namespace when the pool is exhausted', () => {
+    const vars = rollVars(
+      {
+        Q1_NS: { oneOf: ['store'] },
+        Q2_NS: { oneOf: ['store'] },
+        Q3_NS: { oneOf: ['store'] },
+      },
+      2,
+      {},
+      () => 0,
+    );
+    assert.equal(vars.Q1_NS, 'store');
+    assert.equal(vars.Q2_NS, 'q2-store');
+    assert.equal(vars.Q3_NS, 'q3-store');
+  });
 });

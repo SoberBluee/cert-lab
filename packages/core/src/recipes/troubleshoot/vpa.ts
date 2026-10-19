@@ -35,7 +35,10 @@ export const vpaCategory: FaultCategory = {
   points: 8,
   tags: ['troubleshooting', 'vpa', 'autoscaling', 'resources'],
   settleSeconds: 20,
-  fields: [nsField(['billing', 'reports', 'media']), nameField('APP', 'Deployment name', ['api', 'worker', 'renderer'])],
+  fields: [
+    nsField(['billing', 'reports', 'media', 'rightsizing', 'capacity', 'finops', 'workloads', 'compute', 'apps', 'services']),
+    nameField('APP', 'Deployment name', ['api', 'worker', 'renderer', 'batch', 'processor', 'encoder', 'analyzer', 'compiler', 'indexer', 'transformer']),
+  ],
   shell: ({ NS, APP }, state) => ({
     title: `VPA for ${APP} not working`,
     text: `VerticalPodAutoscaler \`${APP}-vpa\` in namespace \`${NS}\` should right-size Deployment \`${APP}\`, but the Pods of \`${APP}\` still run with the requests from the Deployment. Fix it so that it matches this spec:

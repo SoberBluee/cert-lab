@@ -46,13 +46,22 @@ app.get('/api/health', async () => ({ ok: true, driver: orch.driver.name }));
 app.get('/api/images', async () => orch.driver.listBaseImages());
 
 app.get<{
-  Querystring: { domain?: string; tag?: string; difficulty?: string; search?: string; status?: string; drafts?: string };
+  Querystring: {
+    domain?: string;
+    tag?: string;
+    difficulty?: string;
+    search?: string;
+    status?: string;
+    drafts?: string;
+    track?: string;
+  };
 }>('/api/scenarios', async (req) => {
-  const { domain, tag, difficulty, search, status, drafts } = req.query;
+  const { domain, tag, difficulty, search, status, drafts, track } = req.query;
   const q = search?.trim().toLowerCase();
   return {
     scenarios: summaries().filter((s) => {
       if (s.draft && drafts !== '1') return false;
+      if (track && s.track !== track) return false;
       if (domain && s.domain !== domain) return false;
       if (tag && !s.tags.includes(tag)) return false;
       if (difficulty && s.difficulty !== Number(difficulty)) return false;
@@ -119,13 +128,13 @@ app.get<{ Querystring: { track?: string } }>('/api/quizzes', async (req) => ({
 }));
 
 app.get<{ Params: { id: string } }>('/api/quizzes/:id', async (req) => {
-  const q = quizzes.get(req.params.id);
+  const q = quizzes.fresh(req.params.id);
   if (!q) throw new OrchestratorError(`Unknown quiz "${req.params.id}".`, 404);
   return toQuizView(q);
 });
 
 app.post<{ Params: { id: string }; Body: { answers?: Record<string, number> } }>('/api/quizzes/:id/grade', async (req) => {
-  const q = quizzes.get(req.params.id);
+  const q = quizzes.fresh(req.params.id);
   if (!q) throw new OrchestratorError(`Unknown quiz "${req.params.id}".`, 404);
   const answers = req.body?.answers ?? {};
   for (const [id, choice] of Object.entries(answers)) {

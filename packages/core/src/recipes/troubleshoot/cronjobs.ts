@@ -22,7 +22,10 @@ export const cronJobsCategory: FaultCategory = {
   points: 6,
   tags: ['troubleshooting', 'cronjob', 'job'],
   settleSeconds: 30,
-  fields: [nsField(['batch', 'nightly', 'reports']), nameField('APP', 'CronJob name', ['report', 'cleanup', 'export'])],
+  fields: [
+    nsField(['batch', 'nightly', 'reports', 'cron', 'jobs', 'scheduled', 'ops-jobs', 'maintenance', 'etl', 'automation']),
+    nameField('APP', 'CronJob name', ['report', 'cleanup', 'export', 'backup', 'rotate', 'sync', 'digest', 'purge', 'archive', 'reconcile']),
+  ],
   shell: ({ NS, APP }, state) => ({
     title: `CronJob ${APP} never succeeds`,
     text: `CronJob \`${APP}\` in namespace \`${NS}\` should complete a Job every minute, but none of its runs has succeeded.

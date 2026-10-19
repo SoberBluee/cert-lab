@@ -14,6 +14,7 @@ const QuizPage = lazy(() => import('./pages/QuizPage').then((m) => ({ default: m
 const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage').then((m) => ({ default: m.PlaygroundPage })));
 const StudioEditorPage = lazy(() => import('./pages/StudioEditorPage').then((m) => ({ default: m.StudioEditorPage })));
 const LinuxApp = lazy(() => import('./linux/LinuxApp').then((m) => ({ default: m.LinuxApp })));
+const ComingSoonApp = lazy(() => import('./components/ComingSoonApp').then((m) => ({ default: m.ComingSoonApp })));
 
 /** Exam mode hides hints, docs, solutions and grading until a single submit at the end. */
 function ExamToggle({ session }: { session?: SessionView | null }) {
@@ -58,7 +59,7 @@ function CkaShell() {
   return (
     <Shell section="cka" nav={CKA_NAV} actions={<ExamToggle session={session} />}>
       <Routes>
-        <Route path="/" element={<BrowserPage />} />
+        <Route path="/" element={<BrowserPage track="cka" />} />
         <Route path="/session" element={<SessionPage />} />
         <Route path="/learn" element={<LearnPage track="cka" />} />
         <Route
@@ -79,7 +80,9 @@ function CkaShell() {
   );
 }
 
-/** The session stream lives here, above both sections, so switching sections keeps it connected. */
+const shellFallback = <div className="p-5 text-sm text-zinc-500">Loading…</div>;
+
+/** The session stream lives here, above every section, so switching sections keeps it connected. */
 export function App() {
   useSessionStream();
   return (
@@ -87,8 +90,32 @@ export function App() {
       <Route
         path="/linux/*"
         element={
-          <Suspense fallback={<div className="p-5 text-sm text-zinc-500">Loading…</div>}>
+          <Suspense fallback={shellFallback}>
             <LinuxApp />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/terraform/*"
+        element={
+          <Suspense fallback={shellFallback}>
+            <ComingSoonApp section="terraform" />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/aws/*"
+        element={
+          <Suspense fallback={shellFallback}>
+            <ComingSoonApp section="aws" />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/docker/*"
+        element={
+          <Suspense fallback={shellFallback}>
+            <ComingSoonApp section="docker" />
           </Suspense>
         }
       />

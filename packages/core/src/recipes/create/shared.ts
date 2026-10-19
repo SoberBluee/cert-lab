@@ -74,7 +74,7 @@ export const envAddon: Addon = {
       default: 'ConfigMap',
       options: SOURCES,
     },
-    nameField('OBJ', 'ConfigMap or Secret name', ['app-config', 'app-settings', 'runtime-env']),
+    nameField('OBJ', 'ConfigMap or Secret name', ['app-config', 'app-settings', 'runtime-env', 'feature-flags', 'app-secrets', 'env-store', 'service-config', 'workload-env', 'runtime-flags', 'app-params']),
     {
       key: 'KEY',
       label: 'Key (and variable name)',
@@ -82,7 +82,7 @@ export const envAddon: Addon = {
       type: 'text',
       default: 'LOG_LEVEL',
       pattern: '^[A-Z][A-Z0-9_]*$',
-      pool: ['LOG_LEVEL', 'MODE', 'REGION'],
+      pool: ['LOG_LEVEL', 'MODE', 'REGION', 'APP_ENV', 'CLUSTER', 'STAGE', 'FEATURE_FLAG', 'TZ', 'ROLE', 'COLOR'],
     },
     {
       key: 'VALUE',
@@ -90,7 +90,7 @@ export const envAddon: Addon = {
       type: 'text',
       default: 'debug',
       pattern: '^[A-Za-z0-9._-]+$',
-      pool: ['debug', 'info', 'warn'],
+      pool: ['debug', 'info', 'warn', 'error', 'prod', 'staging', 'canary', 'eu-west', 'us-east', 'primary'],
       randomizeByDefault: true,
     },
   ],

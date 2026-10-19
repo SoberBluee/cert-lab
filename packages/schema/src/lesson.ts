@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LESSON_TRACKS } from './constants';
 import { CheckSchema, NodeNameSchema, StepSchema } from './scenario';
 
 export const LESSON_TOPICS = ['certificates', 'etcd', 'cluster', 'troubleshooting', 'openssl', 'firewall', 'systemd', 'networking', 'files'] as const;
@@ -6,7 +7,7 @@ export const LessonTopicSchema = z.enum(LESSON_TOPICS);
 export type LessonTopic = z.infer<typeof LessonTopicSchema>;
 
 /** Which section of the app lists the lesson: CKA Labs or Linux Labs. */
-export const LESSON_TRACKS = ['cka', 'linux'] as const;
+export { LESSON_TRACKS };
 export const LessonTrackSchema = z.enum(LESSON_TRACKS);
 export type LessonTrack = z.infer<typeof LessonTrackSchema>;
 

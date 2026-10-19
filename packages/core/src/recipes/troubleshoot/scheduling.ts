@@ -21,7 +21,10 @@ export const schedulingCategory: FaultCategory = {
   points: 5,
   tags: ['troubleshooting', 'scheduling', 'resourcequota', 'limitrange', 'affinity'],
   settleSeconds: 20,
-  fields: [nsField(['batch', 'reports', 'analytics']), nameField('APP', 'Deployment name', ['worker', 'renderer', 'indexer'])],
+  fields: [
+    nsField(['batch', 'reports', 'analytics', 'jobs', 'compute', 'pipeline', 'etl', 'ml', 'spark', 'queue']),
+    nameField('APP', 'Deployment name', ['worker', 'renderer', 'indexer', 'processor', 'aggregator', 'transformer', 'crawler', 'builder', 'compiler', 'runner']),
+  ],
   shell: ({ NS, APP }, state) => ({
     title: `Deployment ${APP} not running`,
     text: `Deployment \`${APP}\` in namespace \`${NS}\` should run \`2\` ready replicas, but it does not. Fix it so that it matches this spec and both Pods run:

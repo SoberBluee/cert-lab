@@ -8,6 +8,9 @@ export const DOMAINS = [
 
 export const BASES = ['bare', 'cluster'] as const;
 
+/** Which product section owns a lesson, quiz, or scenario. */
+export const LESSON_TRACKS = ['cka', 'linux'] as const;
+
 /** Cap for Quick Create "create" questions so a single question stays exam-sized. */
 export const QUICK_MAX_ADDONS = 3;
 export const QUICK_MAX_FOLLOWUPS = 2;

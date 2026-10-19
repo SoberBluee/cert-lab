@@ -16,7 +16,10 @@ export const servicesCategory: FaultCategory = {
   points: 6,
   tags: ['troubleshooting', 'service', 'endpoints', 'networkpolicy'],
   settleSeconds: 20,
-  fields: [nsField(['store', 'edge', 'api']), nameField('APP', 'Deployment and Service name', ['web', 'backend', 'gateway'])],
+  fields: [
+    nsField(['store', 'edge', 'api', 'shop', 'retail', 'checkout', 'cdn', 'mesh', 'traffic', 'front']),
+    nameField('APP', 'Deployment and Service name', ['web', 'backend', 'gateway', 'api', 'cart', 'catalog', 'auth', 'proxy', 'orders', 'payments']),
+  ],
   shell: ({ NS, APP }) => ({
     title: `Service ${APP} unreachable`,
     text: `In namespace \`${NS}\`, Pod \`client\` can no longer reach Service \`${APP}\`: \`kubectl -n ${NS} exec client -- wget -qO- -T 3 http://${APP}\` times out or fails.
@@ -199,6 +202,8 @@ kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
     {
       id: 'kube-proxy-down',
       label: 'kube-proxy runs on no node',
+      // Cluster-wide: stage/fix before other Service questions or their waits fail with kube-proxy still down.
+      disruptive: true,
       break: `kubectl -n kube-system patch daemonset kube-proxy -p '{"spec":{"template":{"spec":{"nodeSelector":{"kube-proxy":"disabled"}}}}}'
 kubectl -n kube-system wait --for=delete pod -l k8s-app=kube-proxy --timeout=180s >/dev/null 2>&1 || true`,
       fix: `kubectl -n kube-system patch daemonset kube-proxy --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector/kube-proxy"}]'

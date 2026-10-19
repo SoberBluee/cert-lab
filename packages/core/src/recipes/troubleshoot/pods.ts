@@ -17,7 +17,10 @@ export const podsCategory: FaultCategory = {
   minutes: 8,
   points: 8,
   tags: ['troubleshooting', 'pods', 'deployment'],
-  fields: [nsField(['retail', 'media', 'portal']), nameField('APP', 'Deployment name', ['storefront', 'ledger', 'checkout'])],
+  fields: [
+    nsField(['retail', 'media', 'portal', 'shop', 'catalog', 'orders', 'content', 'store', 'frontend', 'apps']),
+    nameField('APP', 'Deployment name', ['storefront', 'ledger', 'checkout', 'cart', 'catalog', 'inventory', 'payments', 'search', 'recommend', 'notify']),
+  ],
   shell: ({ NS, APP }, state) => ({
     title: `Unhealthy Deployment ${APP}`,
     text: `Deployment \`${APP}\` in namespace \`${NS}\` is not healthy, or a required rollout cannot finish. Fix it so that it matches this spec and all its Pods are ready and stable:

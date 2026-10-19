@@ -60,6 +60,58 @@ export function rollVariable(def: VariableDef, workers: number, rng: () => numbe
   return Array.from({ length: def.random }, (_, i) => pick(i === 0 ? [...ALNUM.slice(0, 26)] : [...ALNUM])).join('');
 }
 
+/**
+ * Quick Create questions set up in parallel lanes. Many templates create fixed names
+ * (`client`, `web`) or the same `${APP}` Deployment in `${NS}`, so two questions that
+ * roll the same namespace collide with AlreadyExists. Keep every `Qn_NS` distinct when
+ * the pools allow it; otherwise suffix a unique `qN-` name.
+ */
+function uniquifyQuestionNamespaces(
+  out: Vars,
+  variables: Record<string, VariableDef>,
+  pinned: Vars,
+  rng: () => number,
+): void {
+  const nsVars = Object.keys(variables)
+    .map((key) => {
+      const m = /^Q(\d+)_NS$/.exec(key);
+      return m ? { key, n: Number(m[1]), def: variables[key]! } : null;
+    })
+    .filter((x): x is { key: string; n: number; def: VariableDef } => !!x)
+    .sort((a, b) => a.n - b.n);
+  if (nsVars.length < 2) return;
+
+  const used = new Set<string>();
+  const pick = <T>(xs: T[]) => xs[Math.floor(rng() * xs.length)]!;
+
+  for (const { key, n, def } of nsVars) {
+    let val = out[key]!;
+    if (used.has(val) && !Object.hasOwn(pinned, key)) {
+      if ('oneOf' in def) {
+        const free = def.oneOf.map(String).filter((v) => !used.has(v));
+        val = free.length ? pick(free) : uniqueNamespaced(val, n, used);
+      } else {
+        val = uniqueNamespaced(val, n, used);
+      }
+      out[key] = val;
+    }
+    used.add(out[key]!);
+  }
+}
+
+/** DNS-1123 label derived from the collided value, unique among `used`. */
+function uniqueNamespaced(base: string, n: number, used: Set<string>): string {
+  const root = `q${n}-${base}`.replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 63);
+  const label = root || `q${n}-ns`;
+  if (!used.has(label)) return label;
+  for (let i = 2; i < 1000; i++) {
+    const suffix = `-${i}`;
+    const candidate = `${label.slice(0, Math.max(1, 63 - suffix.length))}${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `${label}-${Date.now().toString(36)}`.slice(0, 63);
+}
+
 export function rollVars(
   variables: Record<string, VariableDef>,
   workers: number,
@@ -70,5 +122,6 @@ export function rollVars(
   for (const [name, def] of Object.entries(variables)) {
     out[name] = Object.hasOwn(pinned, name) ? pinned[name] : rollVariable(def, workers, rng);
   }
+  uniquifyQuestionNamespaces(out, variables, pinned, rng);
   return out;
 }

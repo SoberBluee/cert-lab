@@ -1,8 +1,14 @@
+import { lazy, Suspense } from 'react';
 import { Link, Navigate, Route, Routes } from 'react-router-dom';
 import { Shell, type NavItem } from '../components/Shell';
 import { buttonClass } from '../components/ui';
+import { BrowserPage } from '../pages/BrowserPage';
+import { HistoryPage } from '../pages/HistoryPage';
 import { LearnPage } from '../pages/LearnPage';
 import { SessionPage } from '../pages/SessionPage';
+import { LinuxStudioPage } from './LinuxStudioPage';
+
+const QuickCreatePage = lazy(() => import('../pages/QuickCreatePage').then((m) => ({ default: m.QuickCreatePage })));
 
 const NAV: NavItem[] = [
   { to: '/linux/scenarios', label: 'Scenarios' },
@@ -33,10 +39,18 @@ export function LinuxApp() {
         <Route index element={<Navigate to="learn" replace />} />
         <Route path="learn" element={<LearnPage track="linux" />} />
         <Route path="session" element={<SessionPage />} />
-        <Route path="scenarios" element={<ComingSoon title="Scenarios" />} />
+        <Route path="scenarios" element={<BrowserPage track="linux" />} />
         <Route path="playground" element={<ComingSoon title="Playground" />} />
-        <Route path="history" element={<ComingSoon title="History" />} />
-        <Route path="studio" element={<ComingSoon title="Studio" />} />
+        <Route path="history" element={<HistoryPage />} />
+        <Route path="studio" element={<LinuxStudioPage />} />
+        <Route
+          path="studio/new"
+          element={
+            <Suspense fallback={<div className="p-5 text-sm text-zinc-500">Loading…</div>}>
+              <QuickCreatePage basePath="/linux" emptyCatalog />
+            </Suspense>
+          }
+        />
         <Route path="*" element={<Navigate to="learn" replace />} />
       </Routes>
     </Shell>

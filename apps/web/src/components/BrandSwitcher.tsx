@@ -2,15 +2,20 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { lastPath, SECTIONS, type Section } from '../section';
 
+const BADGE: Record<Section, { className: string; label: string }> = {
+  cka: { className: 'bg-[#326ce5] text-white', label: 'k8s' },
+  linux: { className: 'bg-emerald-600 text-white', label: '$_' },
+  terraform: { className: 'bg-violet-700 text-white', label: 'tf' },
+  aws: { className: 'bg-orange-600 text-white', label: 'aws' },
+  docker: { className: 'bg-sky-700 text-white', label: 'dk' },
+};
+
 function Badge({ section }: { section: Section }) {
-  return section === 'cka' ? (
-    <span className="rounded bg-[#326ce5] px-1.5 py-0.5 font-mono text-xs text-white">k8s</span>
-  ) : (
-    <span className="rounded bg-emerald-600 px-1.5 py-0.5 font-mono text-xs text-white">$_</span>
-  );
+  const b = BADGE[section];
+  return <span className={`rounded px-1.5 py-0.5 font-mono text-xs ${b.className}`}>{b.label}</span>;
 }
 
-/** The logo; hovering (or clicking) it opens a menu to move between CKA Labs and Linux Labs. */
+/** The logo; hovering (or clicking) it opens a menu to move between product sections. */
 export function BrandSwitcher({ section }: { section: Section }) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
@@ -39,7 +44,7 @@ export function BrandSwitcher({ section }: { section: Section }) {
       </button>
       {open && (
         <div role="menu" className="absolute top-full left-0 z-20 pt-1">
-          <div className="w-60 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
+          <div className="w-64 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
             {(Object.keys(SECTIONS) as Section[]).map((s) => (
               <button
                 key={s}
@@ -53,7 +58,7 @@ export function BrandSwitcher({ section }: { section: Section }) {
                 <Badge section={s} />
                 <span className="flex-1">
                   {SECTIONS[s].name}
-                  <span className="block text-xs text-zinc-500">{s === 'cka' ? 'Kubernetes scenarios and drills' : 'Linux commands for the CKA'}</span>
+                  <span className="block text-xs text-zinc-500">{SECTIONS[s].blurb}</span>
                 </span>
                 {s === section && <span className="text-xs text-emerald-400">✓</span>}
               </button>

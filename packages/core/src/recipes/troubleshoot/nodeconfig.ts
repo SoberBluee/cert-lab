@@ -33,7 +33,7 @@ export const nodeConfigCategory: FaultCategory = {
   disruptive: true,
   settleSeconds: 60,
   hidden: { NODE: WORKERS },
-  fields: [nsField(['fleet', 'edge', 'infra'])],
+  fields: [nsField(['fleet', 'edge', 'infra', 'nodes', 'config', 'workers', 'daemon', 'system', 'host-ops', 'platform'])],
   shell: ({ NS }) => ({
     title: 'Worker after a configuration change',
     text: `During maintenance, someone tuned the kubelet configuration on one of the workers, and that node has not been healthy since. DaemonSet \`node-agent\` in namespace \`${NS}\` is meant to run a Pod on every worker.
@@ -221,6 +221,15 @@ for _ in $(seq 1 60); do
   sleep 3
 done`,
       explain: `\`${CONFIG}\` sets \`evictionHard.memory.available: "99%"\`, so the kubelet constantly reports MemoryPressure and evicts workload Pods even though the node stays Ready. \`kubectl describe node\` shows the pressure condition and eviction events. Restore the previous kubelet config (or remove that evictionHard entry) and restart the kubelet.`,
+    },
+    {
+      id: 'kubelet-cgroup-driver',
+      label: 'kubelet cgroup driver is invalid',
+      nodeBreak: `${edit(CONFIG, 's#^cgroupDriver: systemd$#cgroupDriver: invalid#', '^cgroupDriver: invalid$')}\n${restart}`,
+      settle: waitNotReady(NODE),
+      nodeFix: `${edit(CONFIG, 's#^cgroupDriver: invalid$#cgroupDriver: systemd#', '^cgroupDriver: systemd$')}\nsystemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain: `\`cgroupDriver\` in \`${CONFIG}\` is \`invalid\`, so the kubelet exits at startup. \`journalctl -u kubelet\` names the bad value; containerd and a healthy worker use \`systemd\`. Set \`cgroupDriver: systemd\` and restart the kubelet.`,
     },
   ],
 };

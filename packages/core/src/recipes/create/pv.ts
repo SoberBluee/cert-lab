@@ -40,7 +40,7 @@ const labels: Addon = {
   name: 'Label for selectors',
   description: 'A tier label that claims can select on.',
   points: 1,
-  fields: [nameField('TIER', 'Value of the tier label', ['premium', 'standard', 'archive'])],
+  fields: [nameField('TIER', 'Value of the tier label', ['premium', 'standard', 'archive', 'gold', 'silver', 'bronze', 'fast', 'cold', 'hot', 'backup'])],
   apply(ctx, { TIER }) {
     const m = ctx.manifests[0];
     m.metadata.labels = { ...m.metadata.labels, tier: TIER };
@@ -65,7 +65,7 @@ const claim: Addon = {
   points: 1,
   replacesChecks: ['phase'],
   conflicts: ['reserve'],
-  fields: [nsField(['vault', 'records', 'ledger'])],
+  fields: [nsField(['vault', 'records', 'ledger', 'storage', 'volumes', 'persist', 'data-lab', 'files', 'archive-ns', 'claims'])],
   apply(ctx, { NS }) {
     const { NAME, CAPACITY, ACCESS } = ctx.v;
     ctx.ns = NS;
@@ -128,7 +128,10 @@ const reserve: FollowUp = {
   description: 'After creating it, pre-bind the volume to a claim that does not exist yet.',
   points: 2,
   conflicts: ['claim'],
-  fields: [nsField(['inventory', 'payroll', 'catalogue']), nameField('CLAIM', 'Claim name', ['future-claim', 'reserved-app', 'next-db'])],
+  fields: [
+    nsField(['inventory', 'payroll', 'catalogue', 'reservations', 'waiting', 'prebind', 'storage', 'claims', 'volumes', 'data-lab']),
+    nameField('CLAIM', 'Claim name', ['future-claim', 'reserved-app', 'next-db', 'pending-vol', 'prebind-pvc', 'queued-data', 'hold-claim', 'next-claim', 'staged-vol', 'ready-claim']),
+  ],
   apply(ctx, { NS, CLAIM }) {
     const { NAME } = ctx.v;
     ctx.steps.push(`Then reserve \`${NAME}\` for a claim \`${CLAIM}\` in namespace \`${NS}\` that will be created later, so no other claim can take it.`);
@@ -208,7 +211,7 @@ export const pvBuilder: Builder = {
   points: 4,
   tags: ['pv'],
   fields: [
-    nameField('NAME', 'PersistentVolume name', ['data-pv', 'logs-pv', 'media-pv']),
+    nameField('NAME', 'PersistentVolume name', ['data-pv', 'logs-pv', 'media-pv', 'cache-pv', 'backup-pv', 'assets-pv', 'db-pv', 'scratch-pv', 'shared-pv', 'archive-pv']),
     selectField('CAPACITY', 'Capacity', CAPACITIES),
     selectField('ACCESS', 'Access mode', ['ReadWriteOnce', 'ReadWriteMany', 'ReadOnlyMany']),
     selectField('RECLAIM', 'Reclaim policy', ['Retain', 'Delete']),

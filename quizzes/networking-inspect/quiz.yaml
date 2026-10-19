@@ -1,0 +1,126 @@
+id: networking-inspect
+title: Services and networking — what to inspect next
+summary: Service, DNS, NetworkPolicy, Ingress and HTTPRoute. Match the symptom to the object you open first.
+track: cka
+topic: quiz-networking
+estimatedMinutes: 12
+questions:
+  - id: endpoints-empty
+    prompt: |
+      A ClusterIP Service exists, but `kubectl get endpoints` shows no addresses. The Pods are `Running` and `Ready`.
+
+      What do you compare first?
+    choices:
+      - "The RoleBinding subject"
+      - "The Service selector against the labels on those Pods"
+      - "The Ingress class name"
+      - "The container memory limit"
+      - "The PersistentVolume `claimRef`"
+    answer: 1
+    explain: |
+      Endpoints (or EndpointSlices) are Pods whose labels match the Service selector and which are ready. An empty set with ready Pods is almost always a selector or label mismatch, not DNS or Ingress.
+
+  - id: target-port
+    prompt: |
+      The Service has endpoints, but a client calling the Service port gets `connection refused`. The Pod listens on container port 8080. The Service says `port: 80` and `targetPort: 80`.
+
+      What is wrong?
+    choices:
+      - "CoreDNS must be scaled to 3 replicas"
+      - "`targetPort` must be 8080, the port the container listens on. `port` is what clients use"
+      - "The Pod needs `hostNetwork: true`"
+      - "The Service type must be NodePort before any client can connect"
+      - "The Deployment needs a liveness probe"
+    answer: 1
+    explain: |
+      `port` is the Service's port. `targetPort` is where kube-proxy sends the traffic on the Pod. If the process listens on 8080, `targetPort` has to be 8080 (or the named port that means 8080).
+
+  - id: dns-short-name
+    prompt: |
+      A Pod in namespace `shop` can resolve `web.shop.svc.cluster.local` but `web` returns `NXDOMAIN`.
+
+      What do you check next?
+    choices:
+      - "The StorageClass binding mode"
+      - "The container image pull policy"
+      - "The Pod's `dnsPolicy` and `/etc/resolv.conf` search domains, and which namespace the Service is in"
+      - "The Ingress host rule for `web`"
+      - "The kube-apiserver `--etcd-servers` flag"
+    answer: 2
+    explain: |
+      A short name only works when the Service is in the Pod's namespace and resolv.conf still searches `svc.cluster.local`. A Service in another namespace must be addressed as `name.namespace` or the full `name.namespace.svc.cluster.local`.
+
+  - id: coredns-down
+    prompt: |
+      Every Pod fails DNS, including `kubernetes.default`. `kubectl -n kube-system get pods -l k8s-app=kube-dns` shows `0/1` and no ready CoreDNS Pods.
+
+      What do you check first?
+    choices:
+      - "etcd peer URLs"
+      - "The default ServiceAccount in the app namespace"
+      - "Why the CoreDNS Pods are not ready: logs, image, and the Corefile ConfigMap"
+      - "A PVC in the default namespace"
+      - "The app Deployment's replica count"
+    answer: 2
+    explain: |
+      Cluster DNS is CoreDNS behind the `kube-dns` Service. If those Pods are not ready, nothing in the cluster resolves. Start with the CoreDNS Pods and the `coredns` ConfigMap, not the application.
+
+  - id: network-policy
+    prompt: |
+      A client Pod cannot open TCP 80 to a Service. From a Pod in another namespace, with no NetworkPolicy, the same Service works. `kubectl get networkpolicy` in the server namespace shows a policy selecting the server Pods.
+
+      What do you read next?
+    choices:
+      - "The etcd certificate flags"
+      - "The kubelet config on worker-2"
+      - "That NetworkPolicy's ingress rules: ports and the from selectors for the client"
+      - "The server Deployment's image tag"
+      - "The StorageClass reclaim policy"
+    answer: 2
+    explain: |
+      A NetworkPolicy that selects Pods and specifies ingress replaces the default allow. The client is blocked when its labels or namespace do not match an ingress `from` rule, or the port is not listed. Check the policy, not the image.
+
+  - id: ingress-class
+    prompt: |
+      An Ingress object exists and the backend Service has endpoints, but requests to the host return the controller's default 404. `kubectl describe ingress` shows no address and events about the class.
+
+      What do you check?
+    choices:
+      - "Whether the Deployment uses a Recreate strategy"
+      - "`spec.ingressClassName` matches the class the installed controller watches (here, `traefik`)"
+      - "The ClusterRole of the default ServiceAccount"
+      - "`/var/lib/etcd` permissions"
+      - "The Pod's CPU request"
+    answer: 1
+    explain: |
+      A controller only programs Ingresses of its class. A missing or wrong `ingressClassName` leaves the object unclaimed, so the host never reaches the Service. Confirm the class, then the host and backend service name and port.
+
+  - id: httproute-parent
+    prompt: |
+      An HTTPRoute is applied. `kubectl describe httproute` shows `Accepted: False` and mentions the parent. The Gateway `traefik-gateway` lives in namespace `traefik`. The route's `parentRefs` only set `name: traefik-gateway`.
+
+      What is missing?
+    choices:
+      - "The Deployment must set `hostNetwork: true`"
+      - "`parentRefs.namespace` must be `traefik`, because the Gateway is not in the route's namespace"
+      - "The route must also create a Service of type LoadBalancer"
+      - "The route must be a ClusterRole"
+      - "CoreDNS must forward the hostname"
+    answer: 1
+    explain: |
+      `parentRefs` without a namespace means "in this namespace". A Gateway in `traefik` needs `namespace: traefik` (and the listener name in `sectionName` when the task names one). The backend Service is a separate field.
+
+  - id: nodeport
+    prompt: |
+      You must reach a Service from outside the cluster with `curl node:30080`. The Service is `ClusterIP` and the Pods are ready.
+
+      What do you change?
+    choices:
+      - "The Deployment replica count to 1"
+      - "The namespace of the Pods to `kube-system`"
+      - "The kube-scheduler image tag"
+      - "The Service type to `NodePort` (or keep using the ClusterIP from inside the cluster)"
+      - "The container command to `sleep`"
+    answer: 3
+    explain: |
+      `ClusterIP` is only reachable from inside the cluster. A port on the node, such as 30080, requires `type: NodePort` and `nodePort: 30080` (or an Ingress/Gateway that already binds that port).
