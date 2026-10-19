@@ -9,7 +9,6 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 20
-draft: true
 variables:
   Q1_NS: { oneOf: [ shop, intranet, search ] }
   Q1_FAULT: { oneOf: [ corefile-typo, scaled-to-zero, cluster-domain, kube-dns-selector, client-dns-policy, corefile-loop, coredns-rbac, kube-dns-target-port, corefile-key, coredns-image, coredns-config-volume, coredns-memory-limit ], hidden: true }

@@ -200,6 +200,33 @@ const nodePort: Addon = {
   },
 };
 
+const repoUrl: Addon = {
+  id: 'repo-url',
+  key: 'REPOURL',
+  name: 'Record the repository URL',
+  description: 'Write the lab Helm chart repository URL to a file on controlplane.',
+  points: 1,
+  fields: [],
+  apply(ctx) {
+    const file = '/opt/course/nginx-helm-url.txt';
+    ctx.bullets.push(
+      `Write the Helm repository URL (exactly \`http://controlplane:8879\`) to \`${file}\` on \`controlplane\`.`,
+    );
+    ctx.setup.push(`mkdir -p /opt/course\nrm -f "${file}"\nchown -R ubuntu:ubuntu /opt/course`);
+    ctx.solution.push(`echo -n 'http://controlplane:8879' > "${file}"\nchown ubuntu:ubuntu "${file}"`);
+    ctx.checks.push({
+      id: 'repo-url-file',
+      description: `${file} holds http://controlplane:8879`,
+      type: 'ssh',
+      node: 'controlplane',
+      run: `tr -d '[:space:]' <${file} 2>/dev/null || true`,
+      expect: { equals: 'http://controlplane:8879' },
+      weight: 1,
+    });
+    ctx.hints.push('helm repo list shows the URL you added for the lab repository.');
+  },
+};
+
 const valuesFile: Addon = {
   id: 'values-file',
   key: 'VALUES',
@@ -325,7 +352,7 @@ export const helmBuilder: Builder = {
     nameField('REL', 'Release name', ['frontend', 'shop', 'portal']),
     selectField('VERSION', 'Chart version', ['1.0.0', '1.1.0'], { randomizeByDefault: true }),
   ],
-  addons: [replicas, nodePort, valuesFile],
+  addons: [replicas, nodePort, valuesFile, repoUrl],
   followUps: [upgrade, rollback, manifest],
   build(v) {
     const { NS, REL, VERSION } = v;

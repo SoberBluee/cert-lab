@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyError } from 'fastify';
-import { createOrchestrator, OrchestratorError, repoRoot, Studio, toLessonSummary, toSummary } from '@cka/core';
+import { createOrchestrator, gradeQuiz, OrchestratorError, repoRoot, Studio, toLessonSummary, toQuizSummary, toQuizView, toSummary } from '@cka/core';
 import type { AttemptRecord, Mode, ScenarioDetail, ScenarioSummary } from '@cka/schema';
 import { registerStudio } from './studio';
 import { registerTerminal } from './terminal';
@@ -13,7 +13,7 @@ const HOST = process.env.CKA_HOST ?? '127.0.0.1';
 const WEB_DIST = join(repoRoot, 'apps', 'web', 'dist');
 
 const orch = createOrchestrator('api');
-const { sessions, library, lessons, store, log } = orch;
+const { sessions, library, lessons, quizzes, store, log } = orch;
 
 const app = Fastify({ logger: false });
 
@@ -69,6 +69,7 @@ app.get<{
 app.post('/api/scenarios/reload', async () => {
   library.reload();
   lessons.reload();
+  quizzes.reload();
   return { count: library.list().length, errors: library.errors };
 });
 
@@ -108,6 +109,32 @@ app.post<{ Params: { id: string } }>('/api/lessons/:id/start', async (req, reply
 });
 
 app.post('/api/sessions/current/learn/skip', async () => sessions.skipLearnStep());
+
+app.get<{ Querystring: { track?: string } }>('/api/quizzes', async (req) => ({
+  quizzes: quizzes
+    .list()
+    .filter((q) => !req.query.track || q.def.track === req.query.track)
+    .map(toQuizSummary),
+  errors: quizzes.errors.map((e) => ({ file: e.file, messages: e.messages })),
+}));
+
+app.get<{ Params: { id: string } }>('/api/quizzes/:id', async (req) => {
+  const q = quizzes.get(req.params.id);
+  if (!q) throw new OrchestratorError(`Unknown quiz "${req.params.id}".`, 404);
+  return toQuizView(q);
+});
+
+app.post<{ Params: { id: string }; Body: { answers?: Record<string, number> } }>('/api/quizzes/:id/grade', async (req) => {
+  const q = quizzes.get(req.params.id);
+  if (!q) throw new OrchestratorError(`Unknown quiz "${req.params.id}".`, 404);
+  const answers = req.body?.answers ?? {};
+  for (const [id, choice] of Object.entries(answers)) {
+    if (!Number.isInteger(choice) || choice < 0 || choice > 4) {
+      throw new OrchestratorError(`Invalid choice for question "${id}"; use an integer 0–4.`, 400);
+    }
+  }
+  return gradeQuiz(q, answers);
+});
 
 app.get('/api/sessions/current', async () => ({ session: sessions.current() }));
 

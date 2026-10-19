@@ -1,0 +1,129 @@
+id: quick-lab-z0yvyk
+title: "Quick lab: HTTPRoute / Gateway"
+domain: workloads
+difficulty: 1
+estimatedMinutes: 16
+points: 18
+tags: [ deployment, expose, httproute ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ web, shop, team-a ] }
+  Q1_NAME: { oneOf: [ frontend, api, catalog ] }
+  Q1_IMAGE: { oneOf: [ nginx:1.26-alpine, nginx:1.27-alpine ] }
+  Q1_REPLICAS: { oneOf: [ 2, 3, 4 ] }
+  Q1_EXPOSE_PORT: { oneOf: [ 80, 8080, 3000 ] }
+  Q1_EXPOSE_TYPE: { oneOf: [ ClusterIP, NodePort ] }
+  Q1_ROUTE_SUB: { oneOf: [ api, edge, gw ] }
+  Q2_NS: { oneOf: [ web, shop, team-a ] }
+  Q2_NAME: { oneOf: [ frontend, api, catalog ] }
+  Q2_IMAGE: { oneOf: [ nginx:1.26-alpine, nginx:1.27-alpine ] }
+  Q2_REPLICAS: { oneOf: [ 2, 3, 4 ] }
+  Q2_EXPOSE_PORT: { oneOf: [ 80, 8080, 3000 ] }
+  Q2_EXPOSE_TYPE: { oneOf: [ ClusterIP, NodePort ] }
+  Q2_ROUTE_SUB: { oneOf: [ api, edge, gw ] }
+tasks:
+  - id: q1
+    title: Deployment ${Q1_NAME}
+    points: 9
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: Deployment ${Q1_NAME} has ${Q1_REPLICAS} ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${Q1_REPLICAS}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-image
+        description: ${Q1_NAME} runs ${Q1_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment/${Q1_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q1_IMAGE}" }
+        weight: 1
+      - id: q1-expose-service
+        description: Service ${Q1_NAME} is a ${Q1_EXPOSE_TYPE} mapping port ${Q1_EXPOSE_PORT} to 80
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get svc ${Q1_NAME} -o jsonpath='{.spec.type}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+        expect: { equals: "${Q1_EXPOSE_TYPE}/${Q1_EXPOSE_PORT}/80" }
+        weight: 1
+      - id: q1-expose-reachable
+        description: Service ${Q1_NAME} answers HTTP 200 on port ${Q1_EXPOSE_PORT}
+        type: kubectl
+        run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q1_NS} get svc ${Q1_NAME} -o jsonpath='{.spec.clusterIP}'):${Q1_EXPOSE_PORT}/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-route-spec
+        description: HTTPRoute ${Q1_NAME} attaches to traefik/traefik-gateway and routes ${Q1_ROUTE_SUB}.${Q1_NS}.lab to ${Q1_NAME}:${Q1_EXPOSE_PORT}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get httproute ${Q1_NAME} -o jsonpath='{.spec.parentRefs[0].name} {.spec.parentRefs[0].namespace} {.spec.hostnames[0]} {.spec.rules[0].backendRefs[0].name} {.spec.rules[0].backendRefs[0].port}'
+        expect: { equals: "traefik-gateway traefik ${Q1_ROUTE_SUB}.${Q1_NS}.lab ${Q1_NAME} ${Q1_EXPOSE_PORT}" }
+        weight: 1
+      - id: q1-route-reachable
+        description: ${Q1_ROUTE_SUB}.${Q1_NS}.lab answers HTTP 200 through Traefik on NodePort 30080
+        type: kubectl
+        run: "curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q1_ROUTE_SUB}.${Q1_NS}.lab' http://controlplane:30080/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl -n ${Q1_NS} create deployment ${Q1_NAME} --image=${Q1_IMAGE} --replicas=${Q1_REPLICAS} --dry-run=client -o yaml gives you a manifest to start from.
+      - kubectl -n ${Q1_NS} expose deployment ${Q1_NAME} --type=${Q1_EXPOSE_TYPE} --port=${Q1_EXPOSE_PORT} --target-port=80
+      - kubectl explain httproute.spec shows the fields; the Gateway API docs have an HTTPRoute example with parentRefs, hostnames and backendRefs to start from.
+  - id: q2
+    title: Deployment ${Q2_NAME}
+    points: 9
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - id: q2-ready
+        description: Deployment ${Q2_NAME} has ${Q2_REPLICAS} ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${Q2_REPLICAS}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-image
+        description: ${Q2_NAME} runs ${Q2_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment/${Q2_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q2_IMAGE}" }
+        weight: 1
+      - id: q2-expose-service
+        description: Service ${Q2_NAME} is a ${Q2_EXPOSE_TYPE} mapping port ${Q2_EXPOSE_PORT} to 80
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get svc ${Q2_NAME} -o jsonpath='{.spec.type}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+        expect: { equals: "${Q2_EXPOSE_TYPE}/${Q2_EXPOSE_PORT}/80" }
+        weight: 1
+      - id: q2-expose-reachable
+        description: Service ${Q2_NAME} answers HTTP 200 on port ${Q2_EXPOSE_PORT}
+        type: kubectl
+        run: curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q2_NS} get svc ${Q2_NAME} -o jsonpath='{.spec.clusterIP}'):${Q2_EXPOSE_PORT}/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-route-spec
+        description: HTTPRoute ${Q2_NAME} attaches to traefik/traefik-gateway and routes ${Q2_ROUTE_SUB}.${Q2_NS}.lab to ${Q2_NAME}:${Q2_EXPOSE_PORT}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get httproute ${Q2_NAME} -o jsonpath='{.spec.parentRefs[0].name} {.spec.parentRefs[0].namespace} {.spec.hostnames[0]} {.spec.rules[0].backendRefs[0].name} {.spec.rules[0].backendRefs[0].port}'
+        expect: { equals: "traefik-gateway traefik ${Q2_ROUTE_SUB}.${Q2_NS}.lab ${Q2_NAME} ${Q2_EXPOSE_PORT}" }
+        weight: 1
+      - id: q2-route-reachable
+        description: ${Q2_ROUTE_SUB}.${Q2_NS}.lab answers HTTP 200 through Traefik on NodePort 30080
+        type: kubectl
+        run: "curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q2_ROUTE_SUB}.${Q2_NS}.lab' http://controlplane:30080/"
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl -n ${Q2_NS} create deployment ${Q2_NAME} --image=${Q2_IMAGE} --replicas=${Q2_REPLICAS} --dry-run=client -o yaml gives you a manifest to start from.
+      - kubectl -n ${Q2_NS} expose deployment ${Q2_NAME} --type=${Q2_EXPOSE_TYPE} --port=${Q2_EXPOSE_PORT} --target-port=80
+      - kubectl explain httproute.spec shows the fields; the Gateway API docs have an HTTPRoute example with parentRefs, hostnames and backendRefs to start from.

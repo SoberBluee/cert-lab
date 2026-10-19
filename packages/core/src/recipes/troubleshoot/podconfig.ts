@@ -30,7 +30,7 @@ export const podConfigCategory: FaultCategory = {
 - the page \`index.html\` from ConfigMap \`${APP}-content\`, mounted at \`/usr/share/nginx/html\`
 - key \`token\` of Secret \`${APP}-secret\`, mounted as the file \`/etc/${APP}/token\`
 
-Do not change the ConfigMap or the Secret, and do not delete or recreate the Deployment.`,
+Do not delete or recreate the Deployment. Prefer fixing mounts and securityContext on the Pod template; replace the ConfigMap or Secret only if they cannot be patched (for example when marked immutable).`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -113,10 +113,10 @@ ${waitUnhealthy(NS, `app=${APP}`)}
       },
       {
         id: 'spec-volumes',
-        description: 'the volumes still come from the ConfigMap and the Secret',
+        description: 'the volumes still come from a ConfigMap and the Secret',
         type: 'kubectl',
-        run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[*].configMap.name} {.spec.template.spec.volumes[*].secret.secretName}'`,
-        expect: { equals: `${IMAGE} ${APP}-content ${APP}-secret` },
+        run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[?(@.configMap)].configMap.name} {.spec.template.spec.volumes[?(@.secret)].secret.secretName}'`,
+        expect: { matches: `^${IMAGE} \\S+ ${APP}-secret$` },
         weight: 1,
       },
     ],
@@ -165,6 +165,17 @@ ${waitUnhealthy(NS, `app=${APP}`)}
       fix: dropSecurityContext(NS, APP),
       explain:
         'The container sets `readOnlyRootFilesystem: true`. nginx needs to write its cache and pid files, so it exits at startup and the Pods go into `CrashLoopBackOff`; `kubectl logs --previous` shows `Read-only file system`. Remove the securityContext, or mount writable `emptyDir` volumes where nginx writes.',
+    },
+    {
+      id: 'immutable-configmap',
+      label: 'Immutable ConfigMap has the wrong page',
+      break: `kubectl -n "${NS}" delete configmap "${APP}-content" --wait=true
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"'"${APP}"'-content","namespace":"'"${NS}"'"},"immutable":true,"data":{"index.html":"<h1>wrong page</h1>"}}'`,
+      fix: `kubectl -n "${NS}" create configmap "${APP}-content-fixed" --from-literal=index.html="<h1>${APP} is up</h1>"
+${jsonPatch(NS, APP, `[{"op":"replace","path":"/spec/template/spec/volumes/0/configMap/name","value":"${APP}-content-fixed"}]`)}
+${rollout(NS, APP)}
+kubectl -n "${NS}" delete configmap "${APP}-content" --ignore-not-found`,
+      explain: `ConfigMap \`${APP}-content\` is \`immutable: true\` and serves the wrong \`index.html\`. Edits are rejected, and recreating it under the same name often leaves the kubelet serving the cached immutable object. Create a new ConfigMap with the correct page, point the Deployment volume at it, then delete the old ConfigMap.`,
     },
   ],
 };

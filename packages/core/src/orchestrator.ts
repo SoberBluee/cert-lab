@@ -7,6 +7,7 @@ import { readImagesMeta, type DriverLog } from '@cka/driver-vm-common';
 import { LessonLibrary } from './lessons';
 import { createLogger, type Logger } from './logger';
 import { dataDir, repoRoot } from './paths';
+import { QuizLibrary } from './quizzes';
 import { ScenarioLibrary } from './scenarios';
 import { SessionManager } from './session';
 import { Store } from './store';
@@ -16,6 +17,7 @@ export interface Orchestrator {
   store: Store;
   library: ScenarioLibrary;
   lessons: LessonLibrary;
+  quizzes: QuizLibrary;
   sessions: SessionManager;
   log: Logger;
 }
@@ -47,6 +49,8 @@ export function createOrchestrator(component: string): Orchestrator {
   for (const e of library.errors) log.warn({ file: e.file, errors: e.messages }, 'invalid scenario skipped');
   const lessons = new LessonLibrary();
   for (const e of lessons.errors) log.warn({ file: e.file, errors: e.messages }, 'invalid lesson skipped');
+  const quizzes = new QuizLibrary();
+  for (const e of quizzes.errors) log.warn({ file: e.file, errors: e.messages }, 'invalid quiz skipped');
   const sessions = new SessionManager(driver, store, library, log, lessons);
-  return { driver, store, library, lessons, sessions, log };
+  return { driver, store, library, lessons, quizzes, sessions, log };
 }

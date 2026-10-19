@@ -1,0 +1,40 @@
+id: kk2-request-exceeds-limit
+title: Fix Pod memory request above limit
+domain: workloads
+difficulty: 1
+estimatedMinutes: 5
+points: 5
+tags: [workloads, resources, memory]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  POD: { oneOf: [ app-wl, mem-pod, limit-pod ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: running
+    description: Pod ${POD} is Running
+    type: kubectl
+    run: kubectl get pod ${POD} -o jsonpath='{.status.phase}'
+    expect: { equals: "Running" }
+    weight: 2
+    retrySeconds: 60
+  - id: limit
+    description: memory limit is still 100Mi
+    type: kubectl
+    run: kubectl get pod ${POD} -o jsonpath='{.spec.containers[0].resources.limits.memory}'
+    expect: { equals: "100Mi" }
+    weight: 2
+  - id: request
+    description: memory request is at most 100Mi
+    type: script
+    node: controlplane
+    script: checks/req.sh
+    expect: { equals: "ok" }
+    weight: 1
+hints:
+  - "kubectl apply -f /opt/course/app-wl/${POD}.yaml: requests must be ≤ limits."
+  - "Do not raise the memory limit; lower the request instead."

@@ -37,11 +37,11 @@ export const storageCategory: FaultCategory = {
 
 Get it running. The intended setup is:
 
-- PersistentVolume \`${CLAIM}-pv\` (StorageClass \`manual\`, \`1Gi\`, \`ReadWriteOnce\`) already exists and must not be changed
+- PersistentVolume \`${CLAIM}-pv\` (StorageClass \`manual\`, \`1Gi\`, \`ReadWriteOnce\`, reclaim \`Retain\`) already exists; keep its capacity, class and access mode
 - PersistentVolumeClaim \`${CLAIM}\` requests \`500Mi\` with StorageClass \`manual\` and access mode \`ReadWriteOnce\`, and binds to \`${CLAIM}-pv\`
 - Pod \`${CLAIM}-app\` (image \`busybox:1.36\`, command \`sleep 1d\`) mounts the claim at \`${MOUNT}\`
 
-You may delete and re-create the claim and the Pod.`,
+You may delete and re-create the claim and the Pod. If the volume is stuck \`Released\`, clear its stale \`claimRef\` so a new claim can bind.`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -124,6 +124,27 @@ sleep 10
       break: 'size=2Gi',
       fix: recreate(NS, CLAIM),
       explain: `The claim requests \`2Gi\` and \`${CLAIM}-pv\` holds only \`1Gi\`, so it can never bind. Re-create it requesting \`500Mi\`.`,
+    },
+    {
+      id: 'pv-released-claimref',
+      label: 'PV stuck Released with a stale claimRef',
+      break: `kubectl apply -f - <<< ${claimAndPod(NS, CLAIM, 'manual', 'ReadWriteOnce', '500Mi')}
+kubectl -n "${NS}" wait --for=jsonpath='{.status.phase}'=Bound "pvc/${CLAIM}" --timeout=60s
+kubectl -n "${NS}" delete pod "${CLAIM}-app" --wait=true
+kubectl -n "${NS}" delete pvc "${CLAIM}" --wait=true
+for _ in $(seq 1 30); do
+  [[ "$(kubectl get pv "${CLAIM}-pv" -o jsonpath='{.status.phase}')" == Released ]] && break
+  sleep 1
+done
+[[ "$(kubectl get pv "${CLAIM}-pv" -o jsonpath='{.status.phase}')" == Released ]] || { echo "PV is not Released" >&2; exit 1; }
+sc=manual mode=ReadWriteOnce size=500Mi`,
+      fix: `kubectl patch pv "${CLAIM}-pv" --type=json -p '[{"op":"remove","path":"/spec/claimRef"}]'
+for _ in $(seq 1 30); do
+  [[ "$(kubectl -n "${NS}" get pvc "${CLAIM}" -o jsonpath='{.status.phase}')" == Bound ]] && break
+  sleep 2
+done
+kubectl -n "${NS}" wait --for=condition=Ready "pod/${CLAIM}-app" --timeout=180s`,
+      explain: `PersistentVolume \`${CLAIM}-pv\` is \`Released\` with reclaim policy \`Retain\` and still holds a \`claimRef\` to a deleted PVC. The new claim matches the volume but cannot bind until that \`claimRef\` is removed (\`kubectl patch pv ${CLAIM}-pv --type=json -p '[{"op":"remove","path":"/spec/claimRef"}]'\`).`,
     },
   ],
 };

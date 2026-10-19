@@ -151,6 +151,23 @@ kubectl -n "${NS}" rollout status daemonset/node-probe --timeout=240s`,
         'The container runtime was stopped and disabled. The kubelet keeps running but reports `container runtime is down` / `NotReady`, and its log is full of CRI connection errors. `systemctl enable --now containerd` fixes it.',
     },
     {
+      id: 'ip-forward-and-containerd',
+      label: 'IP forwarding off and containerd disabled',
+      nodeBreak: `sysctl -w net.ipv4.ip_forward=0 >/dev/null
+rm -f /etc/sysctl.d/k8s.conf
+systemctl disable --now containerd >/dev/null 2>&1 || true
+[[ "$(sysctl -n net.ipv4.ip_forward)" == "0" ]]
+[[ "$(systemctl is-enabled containerd 2>/dev/null || true)" != "enabled" ]]`,
+      settle: waitNotReady(NODE),
+      nodeFix: `printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/k8s.conf
+sysctl --system >/dev/null 2>&1 || sysctl -w net.ipv4.ip_forward=1 >/dev/null
+systemctl enable --now containerd
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain:
+        '`net.ipv4.ip_forward` is 0, `/etc/sysctl.d/k8s.conf` is missing, and `containerd` was stopped and disabled. The node turns `NotReady`. Put `net.ipv4.ip_forward=1` in `/etc/sysctl.d/k8s.conf`, apply with `sysctl --system`, and `systemctl enable --now containerd`.',
+    },
+    {
       id: 'kubelet-binary-path',
       label: 'kubelet unit points at the wrong binary',
       nodeBreak: `${DROPIN}

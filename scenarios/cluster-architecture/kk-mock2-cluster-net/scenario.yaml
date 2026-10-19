@@ -1,0 +1,239 @@
+id: kk-mock2-cluster-net
+title: "Mock 2 practice: cluster and networking"
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 60
+points: 34
+tags:
+  [
+    helm,
+    etcd,
+    restore,
+    coredns,
+    dns,
+    gateway-api,
+    httproute,
+    ingress,
+    cni,
+    calico,
+    sysctl,
+    containerd,
+  ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q2_SNAPSHOT: { oneOf: [/opt/course/etcd-backup.db, /opt/course/cluster-snapshot.db] }
+  Q2_DATADIR: { oneOf: [/opt/course/default.etcd, /opt/course/etcd-restore] }
+  Q4_NS: { oneOf: [external, public, edge] }
+  Q4_APP: { oneOf: [external-app, public-web, edge-api] }
+  Q5_NODE: { node: workers }
+solution:
+  - node: controlplane
+    script: setup/q3-solution.sh
+    timeoutSeconds: 300
+  - node: worker-1
+    script: setup/q5-solution.sh
+  - node: worker-2
+    script: setup/q5-solution.sh
+  - node: controlplane
+    script: setup/q6-solution.sh
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 600
+tasks:
+  - id: q1
+    title: Record the lab Helm repository URL
+    points: 3
+    setup:
+      - node: controlplane
+        script: setup/chartrepo.sh
+        timeoutSeconds: 300
+        lane: q1
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-url
+        description: /opt/course/nginx-helm-url.txt holds http://controlplane:8879
+        type: ssh
+        node: controlplane
+        run: tr -d '[:space:]' </opt/course/nginx-helm-url.txt 2>/dev/null || true
+        expect: { equals: "http://controlplane:8879" }
+        weight: 3
+    hints:
+      - "helm repo list (as ubuntu) shows the lab chart repository URL."
+      - "Write only the URL into /opt/course/nginx-helm-url.txt."
+
+  - id: q2
+    title: Restore an etcd snapshot
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - id: q2-dir
+        description: data directory ${Q2_DATADIR} exists
+        type: ssh
+        node: controlplane
+        run: test -d "${Q2_DATADIR}" && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 2
+      - id: q2-member
+        description: the restore wrote member data under ${Q2_DATADIR} and kept the snapshot
+        type: ssh
+        node: controlplane
+        run: test -d "${Q2_DATADIR}/member" && test -s "${Q2_SNAPSHOT}" && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 4
+    hints:
+      - "sudo etcdutl snapshot restore <file> --data-dir <dir> (directory must not exist yet)."
+      - "Do not point the live etcd static Pod at the new directory."
+
+  - id: q3
+    title: Add DNS domain cka.local
+    points: 6
+    setupStage: 1
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+
+    checks:
+      - id: q3-corefile
+        description: Corefile kubernetes plugin lists cka.local and cluster.local
+        type: kubectl
+        run: kubectl -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' | tr '\n' ' ' | grep -E 'kubernetes[[:space:]]+.*cka\.local' | grep -q cluster.local && echo ok || echo bad
+        expect: { equals: "ok" }
+        weight: 2
+      - id: q3-cluster-local
+        description: kubernetes.default.svc.cluster.local resolves
+        type: script
+        node: controlplane
+        script: checks/q3-dns.sh
+        expect: { equals: "ok" }
+        weight: 2
+        retrySeconds: 90
+      - id: q3-cka-local
+        description: kubernetes.default.svc.cka.local resolves
+        type: script
+        node: controlplane
+        script: checks/q3-dns-cka.sh
+        expect: { equals: "ok" }
+        weight: 2
+        retrySeconds: 90
+    hints:
+      - "kubectl -n kube-system edit cm coredns — add cka.local next to cluster.local on the kubernetes plugin line."
+      - "kubectl -n kube-system rollout restart deploy/coredns"
+
+  - id: q4
+    title: Replace Ingress with HTTPRoute
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+        lane: q4
+    checks:
+      - id: q4-ingress-gone
+        description: Ingress ${Q4_APP} is removed
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get ingress ${Q4_APP} >/dev/null 2>&1 && echo present || echo gone
+        expect: { equals: "gone" }
+        weight: 1
+      - id: q4-route
+        description: HTTPRoute ${Q4_APP}-route attaches to traefik-gateway
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get httproute ${Q4_APP}-route -o jsonpath='{.spec.parentRefs[0].name}/{.spec.parentRefs[0].namespace}/{.spec.rules[0].backendRefs[0].name}'
+        expect: { equals: "traefik-gateway/traefik/${Q4_APP}" }
+        weight: 3
+      - id: q4-curl
+        description: curl Host ${Q4_APP}.${Q4_NS}.lab on :30080 returns the page via HTTPRoute
+        type: script
+        node: controlplane
+        script: checks/q4-curl.sh
+        expect: { equals: "ok" }
+        weight: 3
+        retrySeconds: 90
+      - id: q4-svc
+        description: Service ${Q4_APP} still exists and HTTPRoute is in place
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get httproute ${Q4_APP}-route >/dev/null 2>&1 && kubectl -n ${Q4_NS} get svc ${Q4_APP} -o jsonpath='{.spec.ports[0].port}' || echo missing
+        expect: { equals: "80" }
+        weight: 1
+    hints:
+      - "Attach HTTPRoute parentRefs to Gateway traefik-gateway in namespace traefik (listener web)."
+      - "Delete the Ingress after the route works. Test with curl -H 'Host: ...' http://controlplane:30080/"
+
+  - id: q5
+    title: Restore CNI on a worker
+    points: 6
+    setupStage: 1
+    setup:
+      - node: worker-1
+        script: setup/q5.sh
+        lane: q5-w1
+      - node: worker-2
+        script: setup/q5.sh
+        lane: q5-w2
+    checks:
+      - id: q5-node
+        description: ${Q5_NODE} is Ready
+        type: kubectl
+        run: kubectl get node ${Q5_NODE} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 180
+      - id: q5-cni
+        description: CNI conflist is back under /etc/cni/net.d on ${Q5_NODE}
+        type: ssh
+        node: ${Q5_NODE}
+        run: ls /etc/cni/net.d/*.conflist >/dev/null 2>&1 && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 2
+      - id: q5-pod
+        description: a probe Pod can run on ${Q5_NODE}
+        type: script
+        node: controlplane
+        script: checks/q5-probe.sh
+        expect: { equals: "ok" }
+        weight: 2
+        retrySeconds: 180
+    hints:
+      - "kubectl describe node ${Q5_NODE}: NetworkNotReady / CNI plugin not initialized."
+      - "ls /etc/cni/net.d and /root/cni-backup on the broken worker; move the conflist back, restart containerd and kubelet."
+
+  - id: q6
+    title: IP forwarding and containerd
+    points: 5
+    setupStage: 1
+    setup:
+      - node: controlplane
+        script: setup/q6.sh
+
+    checks:
+      - id: q6-forward
+        description: net.ipv4.ip_forward is 1
+        type: ssh
+        node: controlplane
+        run: sysctl -n net.ipv4.ip_forward
+        expect: { equals: "1" }
+        weight: 2
+      - id: q6-sysctl-file
+        description: /etc/sysctl.d/k8s.conf sets ip_forward=1
+        type: ssh
+        node: controlplane
+        run: grep -E '^[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=[[:space:]]*1' /etc/sysctl.d/k8s.conf >/dev/null && echo ok || echo missing
+        expect: { equals: "ok" }
+        weight: 1
+      - id: q6-containerd
+        description: containerd is active and enabled
+        type: ssh
+        node: controlplane
+        run: echo $(systemctl is-active containerd) $(systemctl is-enabled containerd)
+        expect: { equals: "active enabled" }
+        weight: 2
+    hints:
+      - "Put net.ipv4.ip_forward=1 in /etc/sysctl.d/k8s.conf, then sysctl --system (or sysctl -p)."
+      - "systemctl enable --now containerd"

@@ -189,5 +189,38 @@ systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain: `\`${CONFIG}\` sets \`maxPods: 2\`. calico-node and kube-proxy already fill those two slots, so the kubelet rejects the \`node-agent\` Pod with \`OutOfpods\` and the DaemonSet never gets ready there, although the node stays \`Ready\`. \`kubectl describe node\` shows \`pods: 2\` under Capacity, and \`kubectl get pods -o wide\` shows the rejected Pods. Remove \`maxPods\` (the default is 110) and restart the kubelet.`,
     },
+    {
+      id: 'kubelet-eviction-hard',
+      label: 'kubelet evictionHard memory threshold is absurd',
+      nodeBreak: `cp -a ${CONFIG} ${CONFIG}.cka-bak
+sed -i '/^evictionHard:/,/^[^[:space:]]/{ /^evictionHard:/d; /^[[:space:]]/d; }' ${CONFIG} || true
+printf '%s\\n' 'evictionHard:' '  memory.available: "99%"' >> ${CONFIG}
+grep -q 'memory.available: "99%"' ${CONFIG} || { echo "could not set evictionHard" >&2; exit 1; }
+${restart}`,
+      settle: `for _ in $(seq 1 90); do
+  press=$(kubectl get node "${NODE}" -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}' 2>/dev/null || true)
+  agents=$(kubectl -n "${NS}" get pods -l app=node-agent --field-selector "spec.nodeName=${NODE}" --no-headers 2>/dev/null | grep -c Running || true)
+  [[ "$press" == True || "$agents" == 0 ]] && exit 0
+  sleep 2
+done
+echo "node-agent still running without MemoryPressure" >&2
+exit 1`,
+      nodeFix: `if [[ -f ${CONFIG}.cka-bak ]]; then cp -a ${CONFIG}.cka-bak ${CONFIG}; else
+  sed -i '/^evictionHard:/,/^[^[:space:]]/{ /^evictionHard:/d; /^[[:space:]]/d; }' ${CONFIG} || true
+  sed -i '/memory.available: "99%"/d' ${CONFIG} || true
+fi
+systemctl restart kubelet`,
+      wait: `for _ in $(seq 1 90); do
+  [[ "$(kubectl get node "${NODE}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" == True ]] && break
+  sleep 2
+done
+for _ in $(seq 1 60); do
+  ready=$(kubectl -n "${NS}" get daemonset node-agent -o jsonpath='{.status.numberReady}')
+  want=$(kubectl -n "${NS}" get daemonset node-agent -o jsonpath='{.status.desiredNumberScheduled}')
+  [[ "$ready" == "$want" && -n "$ready" ]] && break
+  sleep 3
+done`,
+      explain: `\`${CONFIG}\` sets \`evictionHard.memory.available: "99%"\`, so the kubelet constantly reports MemoryPressure and evicts workload Pods even though the node stays Ready. \`kubectl describe node\` shows the pressure condition and eviction events. Restore the previous kubelet config (or remove that evictionHard entry) and restart the kubelet.`,
+    },
   ],
 };

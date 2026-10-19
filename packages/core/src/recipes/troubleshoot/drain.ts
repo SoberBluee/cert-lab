@@ -1,0 +1,142 @@
+import { createNs, nameField, nsField } from '../types';
+import { WORKERS } from './compose';
+import type { FaultCategory } from './types';
+
+const IMAGE = 'nginx:1.27-alpine';
+
+export const drainCategory: FaultCategory = {
+  id: 'drain',
+  name: 'Node drain',
+  description: 'A PodDisruptionBudget blocks draining a worker that must be emptied.',
+  domain: 'troubleshooting',
+  difficulty: 3,
+  minutes: 12,
+  points: 8,
+  tags: ['troubleshooting', 'drain', 'pdb', 'disruption'],
+  disruptive: true,
+  settleSeconds: 60,
+  hidden: { NODE: WORKERS },
+  fields: [nsField(['maintain', 'fleet', 'ops']), nameField('APP', 'Deployment name', ['checkout', 'cart', 'orders'])],
+  shell: ({ NS, APP, NODE }) => ({
+    title: 'Node drain is stuck',
+    text: `Maintenance requires one worker to be drained: it must be cordoned and carry no Pods from Deployment \`${APP}\` in namespace \`${NS}\`.
+
+\`${APP}\` must keep \`2\` ready replicas on the remaining nodes when you are done.
+
+Something is blocking the drain. Find the worker that still hosts \`${APP}\`, fix the cluster objects that stand in the way, then drain that worker (\`kubectl drain <node> --ignore-daemonsets --delete-emptydir-data\`).
+
+Do not delete Deployment \`${APP}\`.`,
+    before: `${createNs(NS)}
+kubectl label node "${NODE}" drain-lab=yes --overwrite
+for n in ${WORKERS.map((w) => `"${w}"`).join(' ')}; do
+  [[ "$n" == "${NODE}" ]] || kubectl label node "$n" drain-lab- --overwrite >/dev/null 2>&1 || true
+done
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP}
+  namespace: ${NS}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: ${APP} }
+  template:
+    metadata:
+      labels: { app: ${APP} }
+    spec:
+      nodeSelector: { drain-lab: "yes" }
+      containers:
+        - name: web
+          image: ${IMAGE}
+          ports: [{ containerPort: 80 }]
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ${APP}-pdb
+  namespace: ${NS}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: ${APP} }
+EOF
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
+    after: `kubectl uncordon "${NODE}" >/dev/null 2>&1 || true
+# Prove a naive drain is blocked by the PDB while pods are pinned here.
+if kubectl drain "${NODE}" --ignore-daemonsets --delete-emptydir-data --timeout=20s >/dev/null 2>&1; then
+  echo "drain succeeded unexpectedly" >&2
+  kubectl uncordon "${NODE}" >/dev/null 2>&1 || true
+  exit 1
+fi
+kubectl uncordon "${NODE}" >/dev/null 2>&1 || true
+kubectl -n "${NS}" get pdb "${APP}-pdb" >/dev/null`,
+    checks: [
+      {
+        id: 'cordoned',
+        description: 'exactly one worker is cordoned',
+        type: 'kubectl',
+        run: `kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.spec.unschedulable}{"\\n"}{end}' | grep -c '^true$' || true`,
+        expect: { equals: '1' },
+        weight: 2,
+      },
+      {
+        id: 'empty',
+        description: `no ${APP} Pods remain on a cordoned worker`,
+        type: 'kubectl',
+        run: `kubectl -n ${NS} get pods -l app=${APP} -o jsonpath='{range .items[*]}{.spec.nodeName}{"\\n"}{end}' | sort -u | xargs -I{} kubectl get node {} -o jsonpath='{.spec.unschedulable}{"\\n"}' | grep -c '^true$' || true`,
+        expect: { equals: '0' },
+        weight: 2,
+        retrySeconds: 60,
+      },
+      {
+        id: 'ready',
+        description: `${APP} still has 2 ready replicas`,
+        type: 'kubectl',
+        run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}'`,
+        expect: { equals: '2' },
+        weight: 2,
+        retrySeconds: 120,
+      },
+      {
+        id: 'pdb-loose',
+        description: `PDB ${APP}-pdb allows disruption (or is gone)`,
+        type: 'kubectl',
+        run: `kubectl -n ${NS} get pdb ${APP}-pdb -o jsonpath='{.spec.minAvailable}' 2>/dev/null || echo gone`,
+        expect: { matches: '^(0|1|gone)$' },
+        weight: 2,
+      },
+    ],
+    hints: [
+      'kubectl drain <node> --ignore-daemonsets --delete-emptydir-data — read the error about the disruption budget.',
+      `kubectl -n ${NS} get pdb,pods -o wide — minAvailable equal to the replica count blocks every eviction.`,
+      'Pods are pinned with nodeSelector drain-lab=yes; after loosening the PDB, remove that pin so replicas can land elsewhere, then drain.',
+    ],
+  }),
+  faults: ({ NS, APP, NODE }) => [
+    {
+      id: 'pdb-blocks-drain',
+      label: 'PDB minAvailable equals replica count',
+      // Objects are created healthy-but-undrainable in before; break is a no-op marker.
+      break: `kubectl -n "${NS}" get pdb "${APP}-pdb" >/dev/null
+kubectl get node "${NODE}" -o jsonpath='{.metadata.labels.drain-lab}' | grep -q yes`,
+      fix: `kubectl -n "${NS}" patch pdb "${APP}-pdb" --type=merge -p '{"spec":{"minAvailable":0}}'
+kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]'
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s
+kubectl drain "${NODE}" --ignore-daemonsets --delete-emptydir-data --force --timeout=180s`,
+      wait: `for _ in $(seq 1 60); do
+  unsched=$(kubectl get node "${NODE}" -o jsonpath='{.spec.unschedulable}')
+  left=$(kubectl -n "${NS}" get pods -l "app=${APP}" --field-selector "spec.nodeName=${NODE}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  ready=$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.status.readyReplicas}')
+  [[ "$unsched" == true && "$left" == 0 && "$ready" == 2 ]] && break
+  sleep 3
+done`,
+      explain: `PodDisruptionBudget \`${APP}-pdb\` sets \`minAvailable: 2\` while the Deployment also has 2 replicas, so every eviction is denied and \`kubectl drain\` hangs. The Pods are also pinned to the maintenance worker with \`nodeSelector: drain-lab=yes\`. Lower \`minAvailable\` (or delete the PDB), remove the nodeSelector so replicas can schedule elsewhere, then drain that worker.`,
+    },
+  ],
+};

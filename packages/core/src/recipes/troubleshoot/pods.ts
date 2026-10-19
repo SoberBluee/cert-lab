@@ -20,7 +20,7 @@ export const podsCategory: FaultCategory = {
   fields: [nsField(['retail', 'media', 'portal']), nameField('APP', 'Deployment name', ['storefront', 'ledger', 'checkout'])],
   shell: ({ NS, APP }, state) => ({
     title: `Unhealthy Deployment ${APP}`,
-    text: `Deployment \`${APP}\` in namespace \`${NS}\` is not healthy. Fix it so that it matches this spec and all its Pods are ready and stable:
+    text: `Deployment \`${APP}\` in namespace \`${NS}\` is not healthy, or a required rollout cannot finish. Fix it so that it matches this spec and all its Pods are ready and stable:
 
 - \`2\` replicas of image \`${IMAGE}\`, container \`web\` listening on port \`80\`
 - requests \`50m\` CPU and \`32Mi\` memory; limits \`250m\` CPU and \`128Mi\` memory
@@ -168,6 +168,26 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
         'A `command` override starts nginx with an unknown directive, so it exits immediately and the Pods go into `CrashLoopBackOff`. `kubectl logs --previous` shows the nginx error. Remove the command so the image default runs.',
     },
     {
+      id: 'busybox-bash',
+      label: 'Command uses /bin/bash on an image without it',
+      break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["/bin/bash","-c","nginx -g daemon off;"]}]}}}}`),
+      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]', 'json')}\n${rollout(NS, APP)}`,
+      explain:
+        'The container `command` starts with `/bin/bash`, which this alpine-based image does not ship. Events show `exec: "/bin/bash": no such file` and the Pods CrashLoop. Remove the command override (or use `/bin/sh`) so nginx starts again.',
+    },
+    {
+      id: 'probe-type-delay',
+      label: 'Liveness probe fires before the container is ready',
+      break: patch(
+        NS,
+        APP,
+        `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["/bin/sh","-c","sleep 8; exec nginx -g daemon off;"],"livenessProbe":{"tcpSocket":{"port":80},"initialDelaySeconds":1,"periodSeconds":2,"failureThreshold":1}}]}}}}`,
+      ),
+      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"},{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe","value":{"tcpSocket":{"port":80}}}]', 'json')}\n${rollout(NS, APP)}`,
+      explain:
+        'A startup `sleep` delays nginx, but the liveness probe uses `initialDelaySeconds: 1` and `failureThreshold: 1`, so the kubelet kills the container before it listens. Restarts climb with `Liveness probe failed`. Remove the command override and restore a normal liveness probe on port 80.',
+    },
+    {
       id: 'configmap-key',
       label: 'ConfigMap key missing (CreateContainerConfigError)',
       break: `kubectl -n "${NS}" patch configmap "${APP}-config" --type=json -p '[{"op":"move","from":"/data/mode","path":"/data/mod"}]'`,
@@ -207,6 +227,24 @@ ${rollout(NS, APP)}`,
       fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]', 'json')}\n${rollout(NS, APP)}`,
       explain:
         "A `nodeSelector` of `disktype=ssd` matches no node, so the Pods stay `Pending` with `didn't match Pod's node affinity/selector` in the Events. The spec allows any worker: remove the nodeSelector.",
+    },
+    {
+      id: 'rollout-zero-surge',
+      label: 'Rollout paused with maxSurge zero',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" --type=strategic -p '{"spec":{"paused":true,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":0,"maxUnavailable":1}}}}'`,
+      settle: `kubectl -n "${NS}" patch deployment "${APP}" --type=strategic -p '{"spec":{"template":{"metadata":{"annotations":{"cka.lab/roll":"1"}}}}}'
+for _ in $(seq 1 30); do
+  paused=$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.spec.paused}')
+  updated=$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.status.updatedReplicas}')
+  desired=$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.spec.replicas}')
+  if [[ "$paused" == true ]] && { [[ -z "$updated" ]] || [[ "$updated" != "$desired" ]]; }; then exit 0; fi
+  sleep 2
+done
+kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.spec.paused}' | grep -qx true`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=strategic -p '{"spec":{"paused":false,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"}}}}'
+${rollout(NS, APP)}`,
+      explain:
+        'The Deployment is paused (`spec.paused: true`) after a template change, and `maxSurge: 0` so no surge Pods can help the rollout. Existing Pods look fine, but `updatedReplicas` never catches up and `kubectl rollout status` hangs. Set `paused: false`, restore a normal surge/unavailable (for example `25%`), and let the rollout finish.',
     },
   ],
 };

@@ -1,0 +1,29 @@
+id: kk2-node-capacity-files
+title: Record worker-1 capacity
+domain: workloads
+difficulty: 1
+estimatedMinutes: 4
+points: 3
+tags: [workloads, node, capacity]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 15
+checks:
+  - id: cpu
+    description: /opt/course/worker-1-cpu.txt matches worker-1 Capacity cpu
+    type: script
+    node: controlplane
+    script: checks/cpu.sh
+    expect: { equals: "ok" }
+    weight: 2
+  - id: memory
+    description: /opt/course/worker-1-memory.txt matches worker-1 Capacity memory
+    type: script
+    node: controlplane
+    script: checks/mem.sh
+    expect: { equals: "ok" }
+    weight: 1
+hints:
+  - "kubectl describe node worker-1 (or kubectl get node worker-1 -o yaml) shows Capacity."
+  - "Write exactly: cpu: <value> and memory: <value> (same units kubectl prints)."

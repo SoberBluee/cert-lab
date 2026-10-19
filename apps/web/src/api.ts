@@ -8,6 +8,9 @@ import type {
   LessonTrack,
   QuickCreateRequest,
   QuickPreview,
+  QuizGradeResult,
+  QuizSummary,
+  QuizView,
   RecipeCatalog,
   ScenarioBundle,
   ScenarioDetail,
@@ -70,6 +73,11 @@ export const api = {
     request<{ lessons: LessonSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/lessons${track ? `?track=${track}` : ''}`),
   startLesson: (id: string) => request<SessionView>('POST', `/lessons/${encodeURIComponent(id)}/start`),
   skipStep: () => request<SessionView>('POST', '/sessions/current/learn/skip'),
+  quizzes: (track?: LessonTrack) =>
+    request<{ quizzes: QuizSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/quizzes${track ? `?track=${track}` : ''}`),
+  quiz: (id: string) => request<QuizView>('GET', `/quizzes/${encodeURIComponent(id)}`),
+  gradeQuiz: (id: string, answers: Record<string, number>) =>
+    request<QuizGradeResult>('POST', `/quizzes/${encodeURIComponent(id)}/grade`, { answers }),
 };
 
 export interface StudioJob {

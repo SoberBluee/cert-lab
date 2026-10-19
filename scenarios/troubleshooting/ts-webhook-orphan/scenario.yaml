@@ -1,0 +1,49 @@
+id: ts-webhook-orphan
+title: Pods cannot be created
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 12
+points: 7
+tags: [troubleshooting, webhook, admission]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 40
+variables:
+  NS: { oneOf: [ hooks, admit, gate ] }
+  APP: { oneOf: [ frontend, api, portal ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: ready
+    description: ${APP} has 2 ready replicas
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}/{.status.replicas}'
+    expect: { equals: "2/2" }
+    weight: 3
+    retrySeconds: 90
+  - id: no-orphan-webhook
+    description: ValidatingWebhookConfiguration orphan-validate is gone
+    type: kubectl
+    run: kubectl get validatingwebhookconfiguration orphan-validate >/dev/null 2>&1 && echo present || echo gone
+    expect: { equals: "gone" }
+    weight: 2
+  - id: image
+    description: ${APP} still runs nginx:1.27-alpine
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image}'
+    expect: { equals: "nginx:1.27-alpine" }
+    weight: 1
+  - id: can-create
+    description: a throwaway Pod can be created in the namespace
+    type: kubectl
+    run: kubectl -n ${NS} delete pod webhook-probe --ignore-not-found --wait=false >/dev/null 2>&1; kubectl -n ${NS} run webhook-probe --image=busybox:1.36 --restart=Never --command -- true >/dev/null 2>&1 && kubectl -n ${NS} wait --for=jsonpath='{.status.phase}'=Succeeded pod/webhook-probe --timeout=60s >/dev/null 2>&1 && echo ok || echo fail
+    expect: { equals: "ok" }
+    weight: 1
+    retrySeconds: 60
+hints:
+  - "kubectl -n ${NS} describe rs -l app=${APP}: look for FailedCreate / admission webhook errors."
+  - "kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration — does any webhook target Pods with failurePolicy Fail?"
+  - "A webhook whose Service no longer exists will time out every create when failurePolicy is Fail."

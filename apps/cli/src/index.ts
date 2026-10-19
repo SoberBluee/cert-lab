@@ -7,6 +7,7 @@ import {
   dataDir,
   dryRun,
   lintLessons,
+  lintQuizzes,
   lintScenarios,
   logFile,
   readImagesMeta,
@@ -286,14 +287,15 @@ program
     action(() => {
       const { issues: scenarioIssues, scenarioCount } = lintScenarios();
       const { issues: lessonIssues, lessonCount } = lintLessons();
-      const issues = [...scenarioIssues, ...lessonIssues];
+      const { issues: quizIssues, quizCount } = lintQuizzes();
+      const issues = [...scenarioIssues, ...lessonIssues, ...quizIssues];
       for (const i of issues) {
         const tag = i.level === 'error' ? c.red('error  ') : c.yellow('warning');
         console.log(`${tag} ${i.where}: ${i.message}`);
       }
       const errors = issues.filter((i) => i.level === 'error').length;
       const warnings = issues.length - errors;
-      console.log(`\n${scenarioCount} scenarios, ${lessonCount} lessons, ${errors} errors, ${warnings} warnings`);
+      console.log(`\n${scenarioCount} scenarios, ${lessonCount} lessons, ${quizCount} quizzes, ${errors} errors, ${warnings} warnings`);
       return errors ? 1 : 0;
     }),
   );

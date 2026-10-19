@@ -1,0 +1,40 @@
+id: kk2-busybox-bash
+title: Pod keeps crashing on busybox
+domain: troubleshooting
+difficulty: 1
+estimatedMinutes: 5
+points: 5
+tags: [troubleshooting, crashloop, busybox, command]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  POD: { oneOf: [ check-time, tick-clock, time-writer ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: running
+    description: Pod ${POD} is Running
+    type: kubectl
+    run: kubectl get pod ${POD} -o jsonpath='{.status.phase}'
+    expect: { equals: "Running" }
+    weight: 2
+    retrySeconds: 60
+  - id: shell
+    description: the command uses /bin/sh
+    type: kubectl
+    run: kubectl get pod ${POD} -o jsonpath='{.spec.containers[0].command[0]}'
+    expect: { equals: "/bin/sh" }
+    weight: 2
+  - id: writes
+    description: the Pod keeps writing timestamps to /tmp/now.txt
+    type: kubectl
+    run: kubectl exec ${POD} -- sh -c 'test -s /tmp/now.txt && wc -l </tmp/now.txt'
+    expect: { gte: 1 }
+    weight: 1
+    retrySeconds: 30
+hints:
+  - "kubectl describe pod / get events: look for exec: \"/bin/bash\": no such file."
+  - "busybox images have /bin/sh, not /bin/bash. Recreate the Pod after editing the command."

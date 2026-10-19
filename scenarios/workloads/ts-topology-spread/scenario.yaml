@@ -1,0 +1,42 @@
+id: ts-topology-spread
+title: Pods Pending on a zone topology spread
+domain: workloads
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [troubleshooting, scheduling, topology-spread]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [ batch, compute, jobs ] }
+  APP: { oneOf: [ worker, runner, agent ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: ready
+    description: ${APP} has 2 ready replicas
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}/{.status.replicas}'
+    expect: { equals: "2/2" }
+    weight: 3
+    retrySeconds: 90
+  - id: no-zone-spread
+    description: topology spread does not require topology.kubernetes.io/zone
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.topologySpreadConstraints[*].topologyKey}'
+    expect: { matches: "^(?!.*topology\\.kubernetes\\.io/zone).*$" }
+    weight: 2
+  - id: image
+    description: ${APP} still runs nginx:1.27-alpine
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image}'
+    expect: { equals: "nginx:1.27-alpine" }
+    weight: 1
+hints:
+  - "kubectl -n ${NS} describe pod <pending>: look for topology spread / zone labels."
+  - "kubectl get nodes --show-labels — do any nodes have topology.kubernetes.io/zone?"
+  - "Remove topologySpreadConstraints, or switch topologyKey to kubernetes.io/hostname."

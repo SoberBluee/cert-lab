@@ -1,0 +1,49 @@
+id: ts-pv-released
+title: PVC stuck Pending against a Released PV
+domain: storage
+difficulty: 3
+estimatedMinutes: 10
+points: 5
+tags: [troubleshooting, pvc, pv, claimref, retain]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [ files, backups, media-store ] }
+  CLAIM: { oneOf: [ archive, assets, cache-data ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: bound
+    description: PVC ${CLAIM} is Bound to ${CLAIM}-pv
+    type: kubectl
+    run: kubectl -n ${NS} get pvc ${CLAIM} -o jsonpath='{.status.phase}/{.spec.volumeName}'
+    expect: { equals: "Bound/${CLAIM}-pv" }
+    weight: 2
+    retrySeconds: 60
+  - id: spec-claim
+    description: PVC ${CLAIM} matches the spec
+    type: kubectl
+    run: kubectl -n ${NS} get pvc ${CLAIM} -o jsonpath='{.spec.storageClassName} {.spec.accessModes[0]} {.spec.resources.requests.storage}'
+    expect: { equals: "manual ReadWriteOnce 500Mi" }
+    weight: 1
+  - id: pod-running
+    description: Pod ${CLAIM}-app is Running with the claim at /data
+    type: kubectl
+    run: kubectl -n ${NS} get pod ${CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+    expect: { matches: "^Running ${CLAIM} .*/data" }
+    weight: 1
+    retrySeconds: 60
+  - id: pv-kept
+    description: PV ${CLAIM}-pv is unchanged
+    type: kubectl
+    run: kubectl get pv ${CLAIM}-pv -o jsonpath='{.spec.storageClassName} {.spec.capacity.storage} {.spec.accessModes[0]}'
+    expect: { equals: "manual 1Gi ReadWriteOnce" }
+    weight: 1
+hints:
+  - "kubectl get pv ${CLAIM}-pv -o yaml: look at status.phase and spec.claimRef."
+  - "A Retain volume stuck Released keeps a stale claimRef until you clear it."
+  - "kubectl patch pv ${CLAIM}-pv --type=json -p '[{\"op\":\"remove\",\"path\":\"/spec/claimRef\"}]'"

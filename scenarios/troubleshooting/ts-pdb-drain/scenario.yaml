@@ -1,0 +1,54 @@
+id: ts-pdb-drain
+title: Node drain is stuck
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 12
+points: 8
+tags: [troubleshooting, drain, pdb, disruption]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  NS: { oneOf: [ maintain, fleet, ops ] }
+  APP: { oneOf: [ checkout, cart, orders ] }
+  NODE: { node: workers }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 360
+solution:
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 360
+checks:
+  - id: cordoned
+    description: ${NODE} is cordoned
+    type: kubectl
+    run: kubectl get node ${NODE} -o jsonpath='{.spec.unschedulable}'
+    expect: { equals: "true" }
+    weight: 2
+  - id: empty
+    description: ${NODE} has no ${APP} Pods
+    type: kubectl
+    run: kubectl -n ${NS} get pods -l app=${APP} --field-selector spec.nodeName=${NODE} --no-headers 2>/dev/null | wc -l | tr -d ' '
+    expect: { equals: "0" }
+    weight: 2
+    retrySeconds: 60
+  - id: ready
+    description: ${APP} still has 2 ready replicas
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}'
+    expect: { equals: "2" }
+    weight: 2
+    retrySeconds: 120
+  - id: pdb-loose
+    description: PDB ${APP}-pdb allows disruption (or is gone)
+    type: kubectl
+    run: kubectl -n ${NS} get pdb ${APP}-pdb -o jsonpath='{.spec.minAvailable}' 2>/dev/null || echo gone
+    expect: { matches: "^(0|1|gone)$" }
+    weight: 2
+hints:
+  - "kubectl drain ${NODE} --ignore-daemonsets --delete-emptydir-data — read the error about the disruption budget."
+  - "kubectl -n ${NS} get pdb,pods -o wide — minAvailable equal to the replica count blocks every eviction."
+  - "Pods are pinned with nodeSelector drain-lab=yes; after loosening the PDB, remove that pin so replicas can land elsewhere, then drain."

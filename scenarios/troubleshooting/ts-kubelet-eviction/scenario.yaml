@@ -1,0 +1,59 @@
+id: ts-kubelet-eviction
+title: Worker evicts Pods under MemoryPressure
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 12
+points: 7
+tags: [troubleshooting, kubelet, eviction, memorypressure]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  NS: { oneOf: [ fleet, edge, infra ] }
+  NODE: { node: workers }
+setup:
+  - node: controlplane
+    script: setup/agent.sh
+    timeoutSeconds: 300
+  - node: ${NODE}
+    script: setup/break-kubelet.sh
+  - node: controlplane
+    script: setup/wait.sh
+    timeoutSeconds: 240
+solution:
+  - node: ${NODE}
+    script: solution-node.sh
+checks:
+  - id: all-ready
+    description: every node is Ready
+    type: kubectl
+    run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+    expect: { equals: "True" }
+    weight: 2
+    retrySeconds: 90
+  - id: no-pressure
+    description: ${NODE} is not under MemoryPressure
+    type: kubectl
+    run: kubectl get node ${NODE} -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}'
+    expect: { equals: "False" }
+    weight: 2
+    retrySeconds: 90
+  - id: agent
+    description: node-agent has a ready Pod on every worker
+    type: kubectl
+    run: kubectl -n ${NS} get daemonset node-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
+    expect: { equals: "2/2" }
+    weight: 2
+    retrySeconds: 90
+  - id: kubelet
+    description: kubelet is active and enabled on ${NODE}
+    type: ssh
+    node: ${NODE}
+    run: echo $(systemctl is-active kubelet) $(systemctl is-enabled kubelet)
+    expect: { equals: "active enabled" }
+    weight: 1
+hints:
+  - "kubectl describe node ${NODE}: MemoryPressure and eviction events point at kubelet thresholds."
+  - "Compare /var/lib/kubelet/config.yaml on the broken worker with a healthy one — look for evictionHard."
+  - "Restore the previous thresholds and systemctl restart kubelet."

@@ -1,0 +1,44 @@
+id: kk2-coredns-cka-local
+title: Add DNS domain cka.local
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 10
+points: 6
+tags: [coredns, dns]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+setup:
+  - node: controlplane
+    script: setup/break.sh
+solution:
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 300
+checks:
+  - id: corefile
+    description: Corefile kubernetes plugin lists cka.local and cluster.local
+    type: kubectl
+    run: kubectl -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' | tr '\n' ' ' | grep -E 'kubernetes[[:space:]]+.*cka\.local' | grep -q cluster.local && echo ok || echo bad
+    expect: { equals: "ok" }
+    weight: 2
+  - id: cluster-local
+    description: kubernetes.default.svc.cluster.local resolves
+    type: script
+    node: controlplane
+    script: checks/dns.sh
+    expect: { equals: "ok" }
+    weight: 2
+    retrySeconds: 90
+  - id: cka-local
+    description: kubernetes.default.svc.cka.local resolves
+    type: script
+    node: controlplane
+    script: checks/dns-cka.sh
+    expect: { equals: "ok" }
+    weight: 2
+    retrySeconds: 90
+hints:
+  - "kubectl -n kube-system edit cm coredns — add cka.local next to cluster.local on the kubernetes plugin line."
+  - "kubectl -n kube-system rollout restart deploy/coredns"

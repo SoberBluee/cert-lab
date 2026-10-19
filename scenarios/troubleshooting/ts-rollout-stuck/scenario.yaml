@@ -1,0 +1,48 @@
+id: ts-rollout-stuck
+title: Deployment rollout never finishes
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [troubleshooting, deployment, rollout, surge]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 40
+variables:
+  NS: { oneOf: [ retail, media, portal ] }
+  APP: { oneOf: [ storefront, ledger, checkout ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 360
+checks:
+  - id: ready
+    description: ${APP} has 2 ready updated replicas
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+    expect: { equals: "2/2/2" }
+    weight: 3
+    retrySeconds: 120
+  - id: unpaused
+    description: Deployment is not paused
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.paused}'
+    expect: { matches: "^(false)?$" }
+    weight: 1
+  - id: surge
+    description: RollingUpdate maxSurge is not zero
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.strategy.rollingUpdate.maxSurge}'
+    expect: { matches: "^(?!0$)(?!0%).+$" }
+    weight: 1
+  - id: image
+    description: ${APP} still runs nginx:1.27-alpine
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image}'
+    expect: { equals: "nginx:1.27-alpine" }
+    weight: 1
+hints:
+  - "kubectl -n ${NS} rollout status deployment/${APP} — does it hang?"
+  - "kubectl -n ${NS} get deploy ${APP} -o yaml — is spec.paused true? What is maxSurge?"
+  - "Unpause the Deployment, restore a normal surge (for example 25%), and let the rollout finish."

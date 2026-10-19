@@ -1,0 +1,47 @@
+id: kk2-apiserver-etcd-flags
+title: kubectl fails on the control plane
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 12
+points: 8
+tags: [troubleshooting, kube-apiserver, etcd, static-pod]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+solution:
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 900
+checks:
+  - id: api-ready
+    description: the API server reports ready
+    type: kubectl
+    run: kubectl get --raw /readyz
+    expect: { equals: "ok" }
+    weight: 3
+    retrySeconds: 180
+  - id: components
+    description: control-plane static Pods are Ready
+    type: kubectl
+    run: kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort | xargs
+    expect: { equals: "etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True" }
+    weight: 2
+    retrySeconds: 180
+  - id: etcd-flags
+    description: apiserver talks to etcd with https and the etcd CA
+    type: ssh
+    node: controlplane
+    run: |
+      m=/etc/kubernetes/manifests/kube-apiserver.yaml
+      grep -qE -- '- --etcd-servers=https://127.0.0.1:2379$' $m \
+        && grep -qE -- '- --etcd-cafile=/etc/kubernetes/pki/etcd/ca.crt$' $m && echo ok || echo wrong
+    expect: { equals: "ok" }
+    weight: 3
+hints:
+  - "kubectl fails, so work on controlplane: sudo crictl ps -a | grep kube-apiserver, then sudo crictl logs <id>."
+  - "Compare /etc/kubernetes/manifests/kube-apiserver.yaml with etcd.yaml: flag name --etcd-servers (plural), https, and --etcd-cafile under pki/etcd/."

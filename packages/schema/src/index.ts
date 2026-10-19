@@ -1,5 +1,6 @@
 export * from './scenario';
 export * from './lesson';
+export * from './quiz';
 export * from './driver';
 export * from './api';
 export * from './vars';

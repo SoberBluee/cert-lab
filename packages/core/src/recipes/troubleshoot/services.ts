@@ -27,7 +27,7 @@ Restore access. The intended setup is:
 - Service \`${APP}\`: \`ClusterIP\`, selecting \`app=${APP}\`, port \`80\` forwarding to the target port named \`http\`
 - any Pod in the namespace may connect to \`${APP}\` on port \`80\`
 
-Do not delete or recreate the Deployment or the Service.`,
+Do not delete or recreate the Deployment. You may patch the Service (including its type) so it matches the spec again.`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -259,6 +259,16 @@ kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
       fix: `kubectl -n "${NS}" delete networkpolicy deny-egress`,
       wait: waitServing(NS, APP),
       explain: `NetworkPolicy \`deny-egress\` selects every Pod and lists \`Egress\` with no allow rules, so the client cannot leave the Pod network (DNS and HTTP both fail) even though the Service and endpoints look fine. Delete \`deny-egress\`.`,
+    },
+    {
+      id: 'service-externalname',
+      label: 'Service type flipped to ExternalName',
+      break: `kubectl -n "${NS}" delete service "${APP}" --wait=true
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata":{"name":"'"${APP}"'","namespace":"'"${NS}"'"},"spec":{"type":"ExternalName","externalName":"nowhere.invalid"}}'`,
+      fix: `kubectl -n "${NS}" delete service "${APP}" --wait=true
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata":{"name":"'"${APP}"'","namespace":"'"${NS}"'"},"spec":{"selector":{"app":"'"${APP}"'"},"ports":[{"port":80,"targetPort":"http"}]}}'`,
+      wait: waitServing(NS, APP),
+      explain: `Service \`${APP}\` was changed to \`type: ExternalName\` pointing at \`nowhere.invalid\`, so it no longer has a ClusterIP or selectors even though the Deployment looks fine. Recreate (or patch) it as a ClusterIP Service selecting \`app=${APP}\` with port \`80\` → named target port \`http\`.`,
     },
   ],
 };

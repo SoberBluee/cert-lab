@@ -1,0 +1,50 @@
+id: ts-immutable-cm
+title: Immutable ConfigMap serves the wrong page
+domain: workloads
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [troubleshooting, configmap, immutable]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [ brochure, docs, landing ] }
+  APP: { oneOf: [ site, welcome, promo ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: ready
+    description: ${APP} has 2 ready replicas
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+    expect: { equals: "2/2/2" }
+    weight: 2
+    retrySeconds: 60
+  - id: page
+    description: ${APP} serves the page from ${APP}-content
+    type: kubectl
+    run: kubectl -n ${NS} exec deployment/${APP} -- wget -qO- -T 3 http://localhost:80/
+    expect: { contains: "${APP} is up" }
+    weight: 2
+    retrySeconds: 30
+  - id: token
+    description: the token from ${APP}-secret is readable at /etc/${APP}/token
+    type: kubectl
+    run: kubectl -n ${NS} exec deployment/${APP} -- cat /etc/${APP}/token
+    expect: { equals: "s3cr3t-${APP}" }
+    weight: 1
+    retrySeconds: 30
+  - id: spec-volumes
+    description: the volumes still come from a ConfigMap and the Secret
+    type: kubectl
+    run: kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[?(@.configMap)].configMap.name} {.spec.template.spec.volumes[?(@.secret)].secret.secretName}'
+    expect: { matches: "^nginx:1.27-alpine \\S+ ${APP}-secret$" }
+    weight: 1
+hints:
+  - "kubectl -n ${NS} get configmap ${APP}-content -o yaml — is it immutable? Can you patch data?"
+  - "Immutable ConfigMaps cannot be updated in place. Recreating under the same name can leave the kubelet cache serving the old object — create a new ConfigMap and point the Deployment volume at it."
+  - "The page must contain \"${APP} is up\"."

@@ -1,0 +1,216 @@
+id: paths-cluster
+title: Paths — kubelet, CNI, etcd, certs
+summary: Memorize where manifests, CNI, kubelet, etcd data and PKI live so you know where to look under pressure.
+track: cka
+topic: quiz-paths
+estimatedMinutes: 20
+questions:
+  - id: cni-backup-restore
+    prompt: |
+      Networking on worker-1 is down. You find a backup file that contains a CNI config named `10-calico.conflist` (or similar).
+
+      What is the correct next step?
+    choices:
+      - "Place the conflist under `/etc/cni/net.d/` on that node (and ensure the CNI/agent can reload)"
+      - "Copy it to `/etc/kubernetes/manifests/` on the control plane"
+      - "Store it in `/var/lib/etcd/` and restart etcd"
+      - "Put it in `/var/lib/kubelet/pki/` and restart kube-proxy"
+      - "Apply it with `kubectl apply -f` in the `default` namespace"
+    answer: 0
+    explain: |
+      The kubelet/CNI plugins read conflists from `/etc/cni/net.d/` on **each node**. Restoring a backup means putting the file back there on the broken worker (not into etcd or manifests).
+
+  - id: static-pod-manifests
+    prompt: |
+      You need to edit the kube-apiserver flags (for example etcd client settings).
+
+      Which path holds the live static Pod manifest on a typical kubeadm control plane?
+    choices:
+      - "`/etc/kubernetes/manifests/kube-apiserver.yaml`"
+      - "`/var/lib/kubelet/config.yaml`"
+      - "`/etc/cni/net.d/10-calico.conflist`"
+      - "`/etc/kubernetes/admin.conf`"
+      - "`/var/lib/etcd/member/snap`"
+    answer: 0
+    explain: |
+      kubeadm drops control-plane static Pods in `/etc/kubernetes/manifests/`. The kubelet watches that directory and recreates Pods when files change.
+
+  - id: kubelet-config
+    prompt: |
+      You suspect `evictionHard` or `maxPods` was changed on a worker.
+
+      Which file is the usual kubelet config path?
+    choices:
+      - "`/var/lib/kubelet/config.yaml`"
+      - "`/etc/kubernetes/manifests/kube-scheduler.yaml`"
+      - "`/etc/cni/net.d/`"
+      - "`/var/lib/etcd/member/wal`"
+      - "`/etc/kubernetes/pki/apiserver.crt`"
+    answer: 0
+    explain: |
+      On kubeadm nodes the kubelet loads `/var/lib/kubelet/config.yaml` (referenced by `--config` in the kubeadm systemd drop-in).
+
+  - id: kubelet-kubeconfig
+    prompt: |
+      The kubelet will not start. Logs say it cannot load its kubeconfig.
+
+      Which path is the standard kubelet kubeconfig on kubeadm?
+    choices:
+      - "`/etc/kubernetes/kubelet.conf`"
+      - "`/etc/kubernetes/admin.conf`"
+      - "`/etc/kubernetes/controller-manager.conf`"
+      - "`/root/.kube/config`"
+      - "`/var/lib/kubelet/kubeconfig.yaml`"
+    answer: 0
+    explain: |
+      The kubelet authenticates with `/etc/kubernetes/kubelet.conf`. `admin.conf` is for the admin user, not the kubelet.
+
+  - id: etcd-data-dir
+    prompt: |
+      You are preparing an etcd restore and need the data directory used by the etcd static Pod.
+
+      Which path is the usual etcd data dir?
+    choices:
+      - "`/var/lib/etcd`"
+      - "`/etc/kubernetes/manifests`"
+      - "`/var/lib/kubelet`"
+      - "`/etc/cni/net.d`"
+      - "`/opt/cni/bin`"
+    answer: 0
+    explain: |
+      kubeadm etcd stores its data under `/var/lib/etcd` (mounted into the etcd static Pod). Restores target that directory (or the path your manifest uses).
+
+  - id: etcd-pki
+    prompt: |
+      You need the etcd CA and server certificates referenced by kube-apiserver.
+
+      Where do they usually live?
+    choices:
+      - "`/etc/kubernetes/pki/etcd/`"
+      - "`/var/lib/kubelet/pki/`"
+      - "`/etc/ssl/etcd/`"
+      - "`/etc/cni/net.d/pki/`"
+      - "`/opt/kubernetes/certs/etcd/`"
+    answer: 0
+    explain: |
+      kubeadm puts etcd PKI in `/etc/kubernetes/pki/etcd/` (`ca.crt`, `server.crt`, `server.key`, `peer.*`, `healthcheck-client.*`).
+
+  - id: cluster-ca
+    prompt: |
+      You need the cluster CA certificate that signs the apiserver and kubelet client certs.
+
+      Which file?
+    choices:
+      - "`/etc/kubernetes/pki/ca.crt`"
+      - "`/etc/kubernetes/pki/apiserver-etcd-client.crt`"
+      - "`/var/lib/kubelet/pki/kubelet.crt`"
+      - "`/etc/kubernetes/pki/front-proxy-ca.crt`"
+      - "`/etc/ssl/certs/ca-certificates.crt`"
+    answer: 0
+    explain: |
+      The Kubernetes cluster CA is `/etc/kubernetes/pki/ca.crt` (with `ca.key`). Front-proxy and etcd CAs are separate files beside it.
+
+  - id: kubeadm-dropin
+    prompt: |
+      `systemctl cat kubelet` shows an overridden `--config` or `--kubeconfig` flag.
+
+      Where does kubeadm usually put that drop-in?
+    choices:
+      - "A drop-in under `/etc/systemd/system/kubelet.service.d/` (often `10-kubeadm.conf`)"
+      - "`/etc/kubernetes/manifests/kubelet.yaml`"
+      - "`/var/lib/kubelet/drop-ins/`"
+      - "`/etc/cni/net.d/kubelet.conf`"
+      - "`/usr/lib/kubectl/kubelet.env`"
+    answer: 0
+    explain: |
+      kubeadm installs kubelet flags via systemd drop-ins in `/etc/systemd/system/kubelet.service.d/` (commonly `10-kubeadm.conf`). After edits: `daemon-reload` and restart kubelet.
+
+  - id: admin-kubeconfig
+    prompt: |
+      On the control plane you want a root shell to talk to the API like the exam environment.
+
+      Which kubeconfig is the usual admin file?
+    choices:
+      - "`/etc/kubernetes/admin.conf`"
+      - "`/etc/kubernetes/kubelet.conf`"
+      - "`/etc/kubernetes/scheduler.conf`"
+      - "`/var/lib/kubelet/config.yaml`"
+      - "`/etc/cni/net.d/admin.conf`"
+    answer: 0
+    explain: |
+      Cluster-admin credentials from kubeadm are in `/etc/kubernetes/admin.conf` (often copied to `~/.kube/config`).
+
+  - id: cni-bin
+    prompt: |
+      CNI plugins themselves (binaries like `bridge`, `loopback`, vendor plugins) are missing from a node.
+
+      Which directory holds those binaries by default?
+    choices:
+      - "`/opt/cni/bin`"
+      - "`/etc/cni/net.d`"
+      - "`/var/lib/cni/bin`"
+      - "`/usr/libexec/kubernetes/cni`"
+      - "`/etc/kubernetes/cni/bin`"
+    answer: 0
+    explain: |
+      Plugin **binaries** live in `/opt/cni/bin`. Configuration JSON/conflist files live in `/etc/cni/net.d` — do not confuse the two.
+
+  - id: containerd-config
+    prompt: |
+      The kubelet cannot talk to the runtime. You need containerd’s main config.
+
+      Which path is standard on many distros?
+    choices:
+      - "`/etc/containerd/config.toml`"
+      - "`/var/lib/kubelet/containerd.toml`"
+      - "`/etc/kubernetes/containerd.yaml`"
+      - "`/etc/cni/net.d/containerd.toml`"
+      - "`/run/containerd/config.toml`"
+    answer: 0
+    explain: |
+      containerd is usually configured via `/etc/containerd/config.toml`. The CRI socket is commonly `/run/containerd/containerd.sock`.
+
+  - id: static-pod-path-config
+    prompt: |
+      A static Pod on a worker never appears. You want to confirm which directory the kubelet watches for static manifests.
+
+      Where is that setting?
+    choices:
+      - "`staticPodPath` in `/var/lib/kubelet/config.yaml` (often `/etc/kubernetes/manifests`)"
+      - "`/etc/cni/net.d/staticPods`"
+      - "The `kube-proxy` ConfigMap"
+      - "`/var/lib/etcd/static`"
+      - "`KUBELET_STATIC_PODS` in `/etc/environment`"
+    answer: 0
+    explain: |
+      The kubelet’s `staticPodPath` (in its config file) defines the watched directory — on kubeadm this is typically `/etc/kubernetes/manifests` on every node that should run static Pods.
+
+  - id: resolve-conf-pod
+    prompt: |
+      Inside a Pod you want to see which nameservers kubelet injected for cluster DNS.
+
+      Which file do you read in the container?
+    choices:
+      - "`/etc/resolv.conf`"
+      - "`/etc/hosts` only"
+      - "`/var/run/secrets/kubernetes.io/resolv`"
+      - "`/etc/cni/net.d/resolv.conf`"
+      - "`/etc/kubernetes/dns.conf`"
+    answer: 0
+    explain: |
+      Pod DNS config is visible as `/etc/resolv.conf` inside the container (nameserver usually the `kube-dns` Service IP). Host CNI paths are not mounted there by default.
+
+  - id: crictl-yaml
+    prompt: |
+      On a node, `crictl ps` fails until you point it at the right runtime endpoint.
+
+      Which small config file often sets that for crictl?
+    choices:
+      - "`/etc/crictl.yaml`"
+      - "`/etc/kubernetes/crictl.conf`"
+      - "`/var/lib/kubelet/crictl.yaml`"
+      - "`/etc/cni/net.d/crictl.yaml`"
+      - "`~/.crictl/config`"
+    answer: 0
+    explain: |
+      Many clusters ship `/etc/crictl.yaml` with `runtime-endpoint` / `image-endpoint` pointing at the CRI socket (e.g. containerd).

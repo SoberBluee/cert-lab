@@ -1,0 +1,42 @@
+id: ts-svc-externalname
+title: Service type flipped to ExternalName
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [troubleshooting, service, externalname]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  NS: { oneOf: [ store, edge, api ] }
+  APP: { oneOf: [ web, backend, gateway ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: reachable
+    description: client reaches Service ${APP}
+    type: kubectl
+    run: kubectl -n ${NS} exec client -- wget -qO- -T 3 http://${APP} | grep -q nginx && echo ok || echo fail
+    expect: { equals: "ok" }
+    weight: 3
+    retrySeconds: 60
+  - id: type
+    description: Service ${APP} is ClusterIP
+    type: kubectl
+    run: kubectl -n ${NS} get svc ${APP} -o jsonpath='{.spec.type}'
+    expect: { equals: "ClusterIP" }
+    weight: 2
+  - id: selector
+    description: Service selects app=${APP} on port 80 → http
+    type: kubectl
+    run: kubectl -n ${NS} get svc ${APP} -o jsonpath='{.spec.selector.app}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+    expect: { equals: "${APP}/80/http" }
+    weight: 1
+hints:
+  - "kubectl -n ${NS} get svc ${APP} -o yaml — what is type? Is there a ClusterIP?"
+  - "ExternalName Services have no selector or ClusterIP; recreate as ClusterIP selecting app=${APP}."
+  - "kubectl -n ${NS} exec client -- wget -qO- -T 3 http://${APP}"

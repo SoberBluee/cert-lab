@@ -405,6 +405,69 @@ kubectl -n "${ctx.ns}" patch "deployment/${NAME}" -p "{\\"spec\\": {\\"strategy\
   },
 };
 
+const migrateToHttpRoute: FollowUp = {
+  id: 'migrate-to-httproute',
+  key: 'MIGRATE',
+  name: 'Replace Ingress with HTTPRoute',
+  description: 'After publishing with an Ingress, migrate the same host to an HTTPRoute and delete the Ingress.',
+  points: 3,
+  requires: ['ingress'],
+  conflicts: ['httproute'],
+  replacesChecks: ['ingress-spec', 'ingress-reachable'],
+  fields: [],
+  apply(ctx) {
+    const { name, port } = ctx.service!;
+    const ing = ctx.manifests.find((m) => m.kind === 'Ingress');
+    const host = String(ing?.spec?.rules?.[0]?.host ?? `${name}.${ctx.ns}.lab`);
+    const route = `${name}-route`;
+    ctx.steps.push(
+      `Then replace Ingress \`${name}\` with HTTPRoute \`${route}\` attached to Gateway \`traefik-gateway\` in namespace \`traefik\` (listener \`web\`), host \`${host}\`, backend Service \`${name}\` on port \`${port}\`. Delete the Ingress afterwards. Traefik still serves on NodePort \`30080\`.`,
+    );
+    ctx.solution.push(`kubectl -n "${ctx.ns}" apply -f - <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ${route}
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  hostnames: ["${host}"]
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      backendRefs:
+        - name: ${name}
+          port: ${bare(port)}
+EOF
+kubectl -n "${ctx.ns}" delete ingress "${name}" --ignore-not-found
+for _ in $(seq 1 30); do [[ "$(${ingressCode(host)})" == 200 ]] && break; sleep 2; done`);
+    ctx.checks.push(
+      {
+        id: 'migrate-ingress-gone',
+        description: `Ingress ${name} is removed`,
+        type: 'kubectl',
+        run: `kubectl -n ${ctx.ns} get ingress ${name} >/dev/null 2>&1 && echo present || echo gone`,
+        expect: { equals: 'gone' },
+        weight: 1,
+      },
+      {
+        id: 'migrate-route',
+        description: `HTTPRoute ${route} attaches to traefik-gateway and routes to ${name}`,
+        type: 'kubectl',
+        run: `kubectl -n ${ctx.ns} get httproute ${route} -o jsonpath='{.spec.parentRefs[0].name}/{.spec.parentRefs[0].namespace}/{.spec.rules[0].backendRefs[0].name}'`,
+        expect: { equals: `traefik-gateway/traefik/${name}` },
+        weight: 2,
+      },
+      { id: 'migrate-reachable', ...reachable(host) },
+    );
+    ctx.hints.push(
+      'Attach HTTPRoute parentRefs to Gateway traefik-gateway in namespace traefik (sectionName web), then delete the Ingress.',
+    );
+  },
+};
+
 const rollback: FollowUp = {
   id: 'rollback',
   key: 'ROLLBACK',
@@ -878,7 +941,7 @@ export const deploymentBuilder: Builder = {
     priorityClass,
     revisionSettings,
   ],
-  followUps: [updateImage, scale, strategy, rollback, changeCause, setEnv, restart, setResources, autoscale],
+  followUps: [updateImage, scale, strategy, rollback, changeCause, setEnv, restart, setResources, autoscale, migrateToHttpRoute],
   build(v) {
     const { NS, NAME, IMAGE, REPLICAS } = v;
     const dep: Manifest = {

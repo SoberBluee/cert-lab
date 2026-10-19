@@ -1,0 +1,42 @@
+id: kk2-svc-selector-typo
+title: Service is unreachable
+domain: troubleshooting
+difficulty: 1
+estimatedMinutes: 6
+points: 6
+tags: [troubleshooting, service, endpoints, selector]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [ default, apps, demo ] }
+  APP: { oneOf: [ curlme, echo-app, hello ] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 300
+checks:
+  - id: curl
+    description: curlpod reaches http://${APP}-svc
+    type: kubectl
+    run: kubectl -n ${NS} exec curlpod -- wget -qO- -T 5 http://${APP}-svc
+    expect: { contains: nginx }
+    weight: 3
+    retrySeconds: 60
+  - id: selector
+    description: Service selector matches the Pod label run=${APP}
+    type: kubectl
+    run: kubectl -n ${NS} get svc ${APP}-svc -o jsonpath='{.spec.selector.run}'
+    expect: { equals: "${APP}" }
+    weight: 2
+  - id: port
+    description: Service still listens on port 80
+    type: kubectl
+    run: kubectl -n ${NS} get svc ${APP}-svc -o jsonpath='{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+    expect: { equals: "80/80" }
+    weight: 1
+hints:
+  - "kubectl describe svc: Endpoints empty means the selector does not match any Pod."
+  - "Compare the selector with kubectl get pods --show-labels; a single wrong character is enough."
+  - "You may delete and recreate the Service, but keep name, port and type the same."

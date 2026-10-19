@@ -1,0 +1,35 @@
+id: kk2-etcd-restore-offline
+title: Restore an etcd snapshot offline
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [etcd, restore]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 15
+variables:
+  SNAPSHOT: { oneOf: [/opt/course/etcd-backup.db, /opt/course/cluster-snapshot.db] }
+  DATADIR: { oneOf: [/opt/course/default.etcd, /opt/course/etcd-restore] }
+setup:
+  - node: controlplane
+    script: setup/break.sh
+checks:
+  - id: dir
+    description: data directory ${DATADIR} exists
+    type: ssh
+    node: controlplane
+    run: test -d "${DATADIR}" && echo ok || echo missing
+    expect: { equals: "ok" }
+    weight: 2
+  - id: member
+    description: the restore wrote member data under ${DATADIR} and kept the snapshot
+    type: ssh
+    node: controlplane
+    run: test -d "${DATADIR}/member" && test -s "${SNAPSHOT}" && echo ok || echo missing
+    expect: { equals: "ok" }
+    weight: 4
+hints:
+  - "sudo etcdutl snapshot restore <file> --data-dir <dir> (directory must not exist yet)."
+  - "Do not point the live etcd static Pod at the new directory."

@@ -4,7 +4,8 @@ import { basename, join, sep } from 'node:path';
 import { readImagesMeta, type ImagesMeta } from '@cka/driver-vm-common';
 import { hiddenVarNames, varRefs, type Step } from '@cka/schema';
 import { LessonLibrary } from './lessons';
-import { blueprintsDir, dataDir, lessonsDir, scenariosDir } from './paths';
+import { blueprintsDir, dataDir, lessonsDir, quizzesDir, scenariosDir } from './paths';
+import { QuizLibrary } from './quizzes';
 import { ScenarioLibrary, taskFile, type LoadedScenario } from './scenarios';
 
 export interface LintIssue {
@@ -217,4 +218,24 @@ export function lintLessons(root = lessonsDir): { issues: LintIssue[]; lessonCou
     }
   }
   return { issues, lessonCount: library.list().length };
+}
+
+export function lintQuizzes(root = quizzesDir): { issues: LintIssue[]; quizCount: number } {
+  const issues: LintIssue[] = [];
+  const library = new QuizLibrary(root);
+  for (const e of library.errors) {
+    const where = 'quizzes/' + (e.file.startsWith(root) ? e.file.slice(root.length + 1) : e.file);
+    for (const m of e.messages) issues.push({ level: 'error', where, message: m });
+  }
+  for (const q of library.list()) {
+    const where = `quizzes/${q.def.id}`;
+    for (const question of q.def.questions) {
+      if (!question.prompt.trim()) issues.push({ level: 'error', where, message: `question ${question.id} has an empty prompt` });
+      if (!question.explain.trim()) issues.push({ level: 'warning', where, message: `question ${question.id} has no explanation` });
+      if (new Set(question.choices).size !== question.choices.length) {
+        issues.push({ level: 'warning', where, message: `question ${question.id} has duplicate choices` });
+      }
+    }
+  }
+  return { issues, quizCount: library.list().length };
 }

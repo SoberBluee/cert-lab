@@ -66,6 +66,8 @@ export const labTopics = (): LabTopic[] => {
     trouble('trouble-nodeconfig', 'Worker node configuration', [{ id: 'nodeconfig' }]),
     trouble('trouble-controlplane', 'Control plane', [{ id: 'controlplane' }]),
     trouble('trouble-apiaccess', 'API access', [{ id: 'apiaccess' }]),
+    trouble('trouble-webhooks', 'Admission webhooks', [{ id: 'webhooks' }]),
+    trouble('trouble-drain', 'Node drain', [{ id: 'drain' }]),
   ];
   for (const topic of topics) {
     if (topic.group === 'create') {

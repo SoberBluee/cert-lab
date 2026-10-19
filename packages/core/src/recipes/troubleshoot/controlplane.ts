@@ -189,6 +189,22 @@ ${edit(
       explain: `\`--etcd-certfile\` in \`${M}/kube-apiserver.yaml\` points at \`/etc/kubernetes/pki/etcd/apiserver-etcd-client.crt\`, which does not exist. The certificate lives one directory up, in \`/etc/kubernetes/pki/\`. The API server exits at startup with "no such file or directory", which \`crictl logs\` shows.`,
     },
     {
+      id: 'apiserver-etcd-flags',
+      label: 'API server etcd flag name, scheme and CA are wrong',
+      break: `${scaleUp(NS)}
+sed -i -E 's#^([[:space:]]*- --etcd-servers=)https://127.0.0.1:2379$#\\1http://127.0.0.1:2379#' ${M}/kube-apiserver.yaml
+sed -i -E 's#^([[:space:]]*- --)etcd-servers=#\\1etcd-server=#' ${M}/kube-apiserver.yaml
+grep -qE -- '- --etcd-server=http://127.0.0.1:2379$' ${M}/kube-apiserver.yaml || { echo "could not break --etcd-servers" >&2; exit 1; }
+sed -i -E 's#^([[:space:]]*- --etcd-cafile=)/etc/kubernetes/pki/etcd/ca.crt$#\\1/etc/kubernetes/pki/ca.crt#' ${M}/kube-apiserver.yaml
+grep -qE -- '- --etcd-cafile=/etc/kubernetes/pki/ca.crt$' ${M}/kube-apiserver.yaml || { echo "could not break --etcd-cafile" >&2; exit 1; }`,
+      settle: apiDown,
+      fix: `sed -i -E 's#^([[:space:]]*- --)etcd-server=#\\1etcd-servers=#' ${M}/kube-apiserver.yaml
+sed -i -E 's#^([[:space:]]*- --etcd-servers=)http://127.0.0.1:2379$#\\1https://127.0.0.1:2379#' ${M}/kube-apiserver.yaml
+sed -i -E 's#^([[:space:]]*- --etcd-cafile=)/etc/kubernetes/pki/ca.crt$#\\1/etc/kubernetes/pki/etcd/ca.crt#' ${M}/kube-apiserver.yaml`,
+      wait: waitHealthy(NS),
+      explain: `\`--etcd-servers\` was renamed to \`--etcd-server\` (singular), downgraded to \`http://\`, and \`--etcd-cafile\` points at the cluster CA instead of \`/etc/kubernetes/pki/etcd/ca.crt\`. The API server cannot talk to etcd and keeps exiting. \`crictl logs\` of kube-apiserver and a side-by-side with \`etcd.yaml\` show the correct flag name, \`https\`, and etcd CA path.`,
+    },
+    {
       id: 'etcd-cert-path',
       label: 'etcd server certificate path is wrong',
       break: `${scaleUp(NS)}

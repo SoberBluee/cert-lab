@@ -1,0 +1,195 @@
+id: kk-mock2-workloads
+title: "Mock 2 practice: workloads and storage"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 45
+points: 28
+tags:
+  [
+    workloads,
+    sidecar,
+    emptyDir,
+    native-sidecar,
+    hpa,
+    autoscaling,
+    resources,
+    node,
+    capacity,
+    logging,
+  ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_POD: { oneOf: [ grape-pod, berry-pod, melon-pod ] }
+  Q1_VOL: { oneOf: [ grape-vol, berry-vol, melon-vol ] }
+  Q3_NS: { oneOf: [ shop, web, apps ] }
+  Q3_APP: { oneOf: [ webapp, storefront, catalog ] }
+  Q4_POD: { oneOf: [ app-wl, mem-pod, limit-pod ] }
+  Q5_POD: { oneOf: [ elastic-app, log-app, writer-app ] }
+tasks:
+  - id: q1
+    title: Shared emptyDir Pod ${Q1_POD}
+    points: 6
+    checks:
+      - id: q1-running
+        description: Pod ${Q1_POD} is Running
+        type: kubectl
+        run: kubectl get pod ${Q1_POD} -o jsonpath='{.status.phase}'
+        expect: { equals: "Running" }
+        weight: 2
+        retrySeconds: 90
+      - id: q1-nginx-mount
+        description: nginx mounts ${Q1_VOL} at /var/log/nginx
+        type: kubectl
+        run: kubectl get pod ${Q1_POD} -o jsonpath='{.spec.containers[?(@.name=="nginx")].volumeMounts[?(@.name=="${Q1_VOL}")].mountPath}'
+        expect: { equals: "/var/log/nginx" }
+        weight: 1
+      - id: q1-sidecar-mount
+        description: busybox-sidecar mounts ${Q1_VOL} at /usr/src
+        type: kubectl
+        run: kubectl get pod ${Q1_POD} -o jsonpath='{.spec.initContainers[?(@.name=="busybox-sidecar")].volumeMounts[?(@.name=="${Q1_VOL}")].mountPath}/{.spec.initContainers[?(@.name=="busybox-sidecar")].restartPolicy}'
+        expect: { equals: "/usr/src/Always" }
+        weight: 2
+      - id: q1-emptydir
+        description: volume ${Q1_VOL} is emptyDir
+        type: kubectl
+        run: kubectl get pod ${Q1_POD} -o jsonpath='{.spec.volumes[?(@.name=="${Q1_VOL}")].emptyDir}'
+        expect: { notEmpty: true }
+        weight: 1
+    hints:
+      - "A native sidecar is an initContainer with restartPolicy: Always (kubectl explain pod.spec.initContainers.restartPolicy)."
+      - "Both containers mount the same emptyDir volume under different paths."
+
+  - id: q2
+    title: Record worker-1 capacity
+    points: 3
+    checks:
+      - id: q2-cpu
+        description: /opt/course/worker-1-cpu.txt matches worker-1 Capacity cpu
+        type: script
+        node: controlplane
+        script: checks/q2-cpu.sh
+        expect: { equals: "ok" }
+        weight: 2
+      - id: q2-memory
+        description: /opt/course/worker-1-memory.txt matches worker-1 Capacity memory
+        type: script
+        node: controlplane
+        script: checks/q2-mem.sh
+        expect: { equals: "ok" }
+        weight: 1
+    hints:
+      - "kubectl describe node worker-1 (or kubectl get node worker-1 -o yaml) shows Capacity."
+      - "Write exactly: cpu: <value> and memory: <value> (same units kubectl prints)."
+
+  - id: q3
+    title: HPA for ${Q3_APP}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - id: q3-target
+        description: HPA targets Deployment ${Q3_APP}
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_APP}-hpa -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}'
+        expect: { equals: "Deployment/${Q3_APP}" }
+        weight: 1
+      - id: q3-cpu
+        description: CPU target is 50%
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_APP}-hpa -o jsonpath='{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "50" }
+        weight: 2
+      - id: q3-range
+        description: min 1 max 3 replicas
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_APP}-hpa -o jsonpath='{.spec.minReplicas}/{.spec.maxReplicas}'
+        expect: { equals: "1/3" }
+        weight: 2
+      - id: q3-window
+        description: scaleDown stabilizationWindowSeconds is 300
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get hpa ${Q3_APP}-hpa -o jsonpath='{.spec.behavior.scaleDown.stabilizationWindowSeconds}'
+        expect: { equals: "300" }
+        weight: 2
+    hints:
+      - "Use autoscaling/v2 HorizontalPodAutoscaler YAML for behavior.scaleDown.stabilizationWindowSeconds."
+      - "kubectl explain hpa.spec.behavior"
+
+  - id: q4
+    title: Fix ${Q4_POD} resources
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        lane: q4
+    checks:
+      - id: q4-running
+        description: Pod ${Q4_POD} is Running
+        type: kubectl
+        run: kubectl get pod ${Q4_POD} -o jsonpath='{.status.phase}'
+        expect: { equals: "Running" }
+        weight: 2
+        retrySeconds: 60
+      - id: q4-limit
+        description: memory limit is still 100Mi
+        type: kubectl
+        run: kubectl get pod ${Q4_POD} -o jsonpath='{.spec.containers[0].resources.limits.memory}'
+        expect: { equals: "100Mi" }
+        weight: 2
+      - id: q4-request
+        description: memory request is at most 100Mi
+        type: script
+        node: controlplane
+        script: checks/q4-req.sh
+        expect: { equals: "ok" }
+        weight: 1
+    hints:
+      - "kubectl apply -f /opt/course/app-wl/${Q4_POD}.yaml: requests must be ≤ limits."
+      - "Do not raise the memory limit; lower the request instead."
+
+  - id: q5
+    title: Logging sidecar for ${Q5_POD}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        lane: q5
+    checks:
+      - id: q5-running
+        description: Pod ${Q5_POD} is Running with elastic-app and busybox containers
+        type: kubectl
+        run: kubectl get pod ${Q5_POD} -o jsonpath='{.status.phase}/{.spec.containers[0].name}/{.spec.containers[1].name}'
+        expect: { equals: "Running/elastic-app/busybox" }
+        weight: 2
+        retrySeconds: 90
+      - id: q5-tail
+        description: busybox tails /var/log/elastic-app.log
+        type: kubectl
+        run: kubectl get pod ${Q5_POD} -o jsonpath='{.spec.containers[?(@.name=="busybox")].args[*]}'
+        expect: { contains: "tail -f /var/log/elastic-app.log" }
+        weight: 2
+      - id: q5-share
+        description: both containers mount the same emptyDir at /var/log
+        type: kubectl
+        run: |
+          a=$(kubectl get pod ${Q5_POD} -o jsonpath='{.spec.containers[0].volumeMounts[?(@.mountPath=="/var/log")].name}')
+          b=$(kubectl get pod ${Q5_POD} -o jsonpath='{.spec.containers[1].volumeMounts[?(@.mountPath=="/var/log")].name}')
+          t=$(kubectl get pod ${Q5_POD} -o jsonpath="{.spec.volumes[?(@.name==\"$a\")].emptyDir}")
+          [[ -n "$a" && "$a" == "$b" && -n "$t" ]] && echo ok || echo bad
+        expect: { equals: "ok" }
+        weight: 2
+      - id: q5-logs
+        description: kubectl logs -c busybox shows log lines
+        type: kubectl
+        run: kubectl logs ${Q5_POD} -c busybox --tail=5
+        expect: { contains: "INFO" }
+        weight: 1
+        retrySeconds: 30
+    hints:
+      - "Edit /opt/course/${Q5_POD}.yaml: add a second container and a shared emptyDir for /var/log."
+      - "kubectl replace -f ... --force recreates an immutable Pod."

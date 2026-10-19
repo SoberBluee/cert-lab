@@ -3,6 +3,7 @@ import { apiAccessCategory } from './apiaccess';
 import { controlPlaneCategory } from './controlplane';
 import { cronJobsCategory } from './cronjobs';
 import { dnsCategory } from './dns';
+import { drainCategory } from './drain';
 import { hpaCategory } from './hpa';
 import { ingressCategory } from './ingress';
 import { netpolCategory } from './netpol';
@@ -16,6 +17,7 @@ import { servicesCategory } from './services';
 import { storageCategory } from './storage';
 import type { FaultCategory } from './types';
 import { vpaCategory } from './vpa';
+import { webhooksCategory } from './webhooks';
 
 export { composeTrouble, WORKERS } from './compose';
 export type { Fault, FaultCategory, Shell } from './types';
@@ -37,6 +39,8 @@ export const CATEGORIES: FaultCategory[] = [
   nodeConfigCategory,
   controlPlaneCategory,
   apiAccessCategory,
+  webhooksCategory,
+  drainCategory,
 ];
 
 export const getCategory = (id: string): FaultCategory | undefined => CATEGORIES.find((c) => c.id === id);

@@ -1,4 +1,4 @@
-import { createNs, nameField, nsField } from '../types';
+import { createNs, nameField, nsField, sq } from '../types';
 import type { FaultCategory } from './types';
 import { waitUnhealthy } from './wait';
 
@@ -146,6 +146,15 @@ ${retry(NS, APP)}`,
       wait: waitReady(NS, APP),
       explain:
         'The Pod template asks for PriorityClass `critical-batch`, which does not exist, so the ReplicaSet\'s creates fail with "no PriorityClass with name critical-batch was found". The spec wants the default priority: remove `priorityClassName`.',
+    },
+    {
+      id: 'topology-spread-zone',
+      label: 'Topology spread requires a zone label no node has',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p ${sq(`[{"op":"add","path":"/spec/template/spec/topologySpreadConstraints","value":[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"DoNotSchedule","labelSelector":{"matchLabels":{"app":"${APP}"}}}]}]`)}`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/topologySpreadConstraints"}]'`,
+      wait: waitReady(NS, APP),
+      explain:
+        'The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`).',
     },
   ],
 };

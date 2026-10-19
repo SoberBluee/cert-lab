@@ -10,6 +10,7 @@ import { SessionPage } from './pages/SessionPage';
 const StudioPage = lazy(() => import('./pages/StudioPage').then((m) => ({ default: m.StudioPage })));
 const QuickCreatePage = lazy(() => import('./pages/QuickCreatePage').then((m) => ({ default: m.QuickCreatePage })));
 const LearnPage = lazy(() => import('./pages/LearnPage').then((m) => ({ default: m.LearnPage })));
+const QuizPage = lazy(() => import('./pages/QuizPage').then((m) => ({ default: m.QuizPage })));
 const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage').then((m) => ({ default: m.PlaygroundPage })));
 const StudioEditorPage = lazy(() => import('./pages/StudioEditorPage').then((m) => ({ default: m.StudioEditorPage })));
 const LinuxApp = lazy(() => import('./linux/LinuxApp').then((m) => ({ default: m.LinuxApp })));
@@ -60,6 +61,14 @@ function CkaShell() {
         <Route path="/" element={<BrowserPage />} />
         <Route path="/session" element={<SessionPage />} />
         <Route path="/learn" element={<LearnPage track="cka" />} />
+        <Route
+          path="/learn/quiz/:id"
+          element={
+            <Suspense fallback={<div className="p-5 text-sm text-zinc-500">Loading…</div>}>
+              <QuizPage />
+            </Suspense>
+          }
+        />
         <Route path="/playground" element={<PlaygroundPage />} />
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/studio" element={<StudioPage />} />
