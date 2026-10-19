@@ -239,8 +239,8 @@ export const hpaBuilder: Builder = {
   points: 4,
   tags: ['hpa', 'autoscaling', 'metrics-server'],
   fields: [
-    nsField(['shop', 'frontend', 'web-tier']),
-    nameField('NAME', 'Deployment and autoscaler name', ['web', 'api', 'catalog']),
+    nsField(['shop', 'frontend', 'web-tier', 'scale', 'traffic', 'storefront', 'api-tier', 'edge', 'loadtest', 'elastic']),
+    nameField('NAME', 'Deployment and autoscaler name', ['web', 'api', 'catalog', 'frontend', 'gateway', 'search', 'checkout', 'cart', 'auth', 'proxy']),
     numberField('MIN', 'Minimum replicas', ['1', '2'], 1, 3),
     numberField('MAX', 'Maximum replicas', ['5', '6', '8'], 4, 10),
     numberField('CPU', 'Target CPU utilization (%)', ['50', '60', '70'], 10, 100, { randomizeByDefault: true }),
@@ -477,8 +477,8 @@ export const vpaBuilder: Builder = {
   points: 4,
   tags: ['vpa', 'autoscaling', 'resources'],
   fields: [
-    nsField(['shop', 'billing', 'reports']),
-    nameField('NAME', 'Deployment name', ['web', 'api', 'worker']),
+    nsField(['shop', 'billing', 'reports', 'rightsizing', 'finops', 'workloads', 'compute', 'media', 'batch', 'services']),
+    nameField('NAME', 'Deployment name', ['web', 'api', 'worker', 'renderer', 'encoder', 'processor', 'analyzer', 'indexer', 'compiler', 'transformer']),
     selectField('MODE', 'Update mode', ['Off', 'Initial', 'Recreate'], { randomizeByDefault: true }),
   ],
   addons: [bounds, cpuOnly, requestsOnly, excludeSidecar],

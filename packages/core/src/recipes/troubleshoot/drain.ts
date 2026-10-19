@@ -16,7 +16,10 @@ export const drainCategory: FaultCategory = {
   disruptive: true,
   settleSeconds: 60,
   hidden: { NODE: WORKERS },
-  fields: [nsField(['maintain', 'fleet', 'ops']), nameField('APP', 'Deployment name', ['checkout', 'cart', 'orders'])],
+  fields: [
+    nsField(['maintain', 'fleet', 'ops', 'upgrade', 'rolling', 'cluster-ops', 'node-ops', 'infra', 'platform', 'sre']),
+    nameField('APP', 'Deployment name', ['checkout', 'cart', 'orders', 'payments', 'inventory', 'shipping', 'notify', 'search', 'catalog', 'loyalty']),
+  ],
   shell: ({ NS, APP, NODE }) => ({
     title: 'Node drain is stuck',
     text: `Maintenance requires one worker to be drained: it must be cordoned and carry no Pods from Deployment \`${APP}\` in namespace \`${NS}\`.

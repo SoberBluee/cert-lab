@@ -11,12 +11,12 @@ questions:
 
       What do you check next?
     choices:
-      - "The kube-apiserver static Pod manifest etcd cert flags under `/etc/kubernetes/manifests/`"
-      - "`/etc/cni/net.d/` on worker-1"
-      - "The CoreDNS ConfigMap Corefile"
-      - "`kubectl delete pod -n kube-system -l k8s-app=kube-dns`"
       - "`/var/lib/kubelet/config.yaml` on worker-2"
-    answer: 0
+      - "`kubectl delete pod -n kube-system -l k8s-app=kube-dns`"
+      - "`/etc/cni/net.d/` on worker-1"
+      - "The kube-apiserver static Pod manifest etcd cert flags under `/etc/kubernetes/manifests/`"
+      - "The CoreDNS ConfigMap Corefile"
+    answer: 3
     explain: |
       Apiserver↔etcd trust is configured on the apiserver Pod (`--etcd-cafile`, `--etcd-certfile`, `--etcd-keyfile`). Start in `/etc/kubernetes/manifests/kube-apiserver.yaml`, then open the PEM paths those flags name (usually under `/etc/kubernetes/pki/etcd/`).
 
@@ -26,12 +26,12 @@ questions:
 
       What is the best next check?
     choices:
-      - "Whether `kube-apiserver` is running (static Pod / container) on the control plane"
-      - "Whether the nginx Deployment has a readiness probe"
-      - "`/etc/cni/net.d/10-calico.conflist` on every worker"
-      - "The ServiceAccount token of the default namespace"
       - "`ufw status` on worker-1"
-    answer: 0
+      - "`/etc/cni/net.d/10-calico.conflist` on every worker"
+      - "Whether `kube-apiserver` is running (static Pod / container) on the control plane"
+      - "The ServiceAccount token of the default namespace"
+      - "Whether the nginx Deployment has a readiness probe"
+    answer: 2
     explain: |
       Connection refused on `:6443` means nothing is listening for the API — usually the apiserver container crashed or never started. On the control plane: `crictl ps -a`, the static Pod manifest, and `journalctl` / kubelet logs for why it exits.
 
@@ -41,12 +41,12 @@ questions:
 
       What do you check next?
     choices:
-      - "RBAC: Role/ClusterRole and RoleBinding/ClusterRoleBinding for user `jane`"
-      - "The etcd data directory under `/var/lib/etcd`"
-      - "containerd config on the node where jane's laptop runs"
       - "The Ingress controller TLS secret"
       - "`/var/lib/kubelet/pki/` on worker-1"
-    answer: 0
+      - "RBAC: Role/ClusterRole and RoleBinding/ClusterRoleBinding for user `jane`"
+      - "containerd config on the node where jane's laptop runs"
+      - "The etcd data directory under `/var/lib/etcd`"
+    answer: 2
     explain: |
       `Forbidden` is authorization (RBAC), not networking or etcd. Inspect Roles/ClusterRoles and bindings for that user (or their group / ServiceAccount).
 
@@ -56,12 +56,12 @@ questions:
 
       What is the next step?
     choices:
-      - "Fix the image name/tag on the Pod or Deployment (typo in the tag)"
-      - "Delete `/etc/cni/net.d` and reboot the node"
       - "Recreate the etcd server certificate"
+      - "Delete `/etc/cni/net.d` and reboot the node"
       - "Raise `maxPods` in the kubelet config"
+      - "Fix the image name/tag on the Pod or Deployment (typo in the tag)"
       - "Patch the Service selector to match the Pod"
-    answer: 0
+    answer: 3
     explain: |
       `not found` on pull almost always means a bad image reference. Correct the image on the workload; do not chase CNI or etcd for ImagePullBackOff.
 
@@ -71,12 +71,12 @@ questions:
 
       What do you check next?
     choices:
-      - "The ConfigMap keys vs the `configMapKeyRef` / volume `items` in the Pod spec"
-      - "The kube-scheduler static Pod manifest"
       - "`net.ipv4.ip_forward` on the control plane"
       - "The Gateway API HTTPRoute hostnames"
       - "Whether the node is cordoned"
-    answer: 0
+      - "The ConfigMap keys vs the `configMapKeyRef` / volume `items` in the Pod spec"
+      - "The kube-scheduler static Pod manifest"
+    answer: 3
     explain: |
       `CreateContainerConfigError` with a missing key points at ConfigMap/Secret projection. Compare the object’s `data` keys with what the Pod template references.
 
@@ -86,12 +86,12 @@ questions:
 
       What do you check next?
     choices:
-      - "The Pod’s CPU `requests` (and node allocatable) — lower requests or free capacity"
-      - "The apiserver `--etcd-servers` flag"
       - "`/etc/kubernetes/pki/ca.crt` permissions"
-      - "Whether CoreDNS has 2 replicas"
+      - "The Pod’s CPU `requests` (and node allocatable) — lower requests or free capacity"
       - "The Ingress `pathType`"
-    answer: 0
+      - "The apiserver `--etcd-servers` flag"
+      - "Whether CoreDNS has 2 replicas"
+    answer: 1
     explain: |
       `Insufficient cpu` is a scheduler resource fit problem. Inspect requests/limits and `kubectl describe node` allocatable/allocated CPU — not control-plane certs or DNS.
 
@@ -101,12 +101,12 @@ questions:
 
       What do you check next?
     choices:
-      - "The Pod `nodeSelector` / affinity vs actual node labels (`kubectl get nodes --show-labels`)"
-      - "The etcd snapshot restore path"
-      - "Whether `kube-proxy` uses iptables or ipvs"
       - "The Container runtime endpoint in containerd"
+      - "Whether `kube-proxy` uses iptables or ipvs"
       - "TLS secret keys `tls.crt` / `tls.key` naming"
-    answer: 0
+      - "The etcd snapshot restore path"
+      - "The Pod `nodeSelector` / affinity vs actual node labels (`kubectl get nodes --show-labels`)"
+    answer: 4
     explain: |
       Affinity/selector failures mean no node carries the required labels. Compare the Pod scheduling rules with node labels (or remove the bad selector).
 
@@ -116,12 +116,12 @@ questions:
 
       What do you check next?
     choices:
-      - "The container memory `limits` (and actual usage) on the Pod/Deployment"
-      - "The CNI conflist filename under `/etc/cni/net.d`"
-      - "The kubelet `--kubeconfig` path in the systemd drop-in"
-      - "NetworkPolicy egress to DNS"
       - "The Service `targetPort` name"
-    answer: 0
+      - "The container memory `limits` (and actual usage) on the Pod/Deployment"
+      - "NetworkPolicy egress to DNS"
+      - "The kubelet `--kubeconfig` path in the systemd drop-in"
+      - "The CNI conflist filename under `/etc/cni/net.d`"
+    answer: 1
     explain: |
       `OOMKilled` means the cgroup memory limit was hit. Raise or fix memory limits/requests; CNI and kubelet paths are the wrong layer.
 
@@ -131,12 +131,12 @@ questions:
 
       What is the fix direction?
     choices:
+      - "Enable `net.bridge.bridge-nf-call-iptables`"
       - "Change the command to `/bin/sh` (or an image that ships bash)"
       - "Reissue the apiserver serving certificate"
-      - "Enable `net.bridge.bridge-nf-call-iptables`"
       - "Delete the PodDisruptionBudget"
       - "Add a second replica to kube-scheduler"
-    answer: 0
+    answer: 1
     explain: |
       Alpine/busybox images typically have `/bin/sh`, not `/bin/bash`. Fix the container `command`/`args` (or the image), not certificates or CNI sysctls.
 
@@ -146,12 +146,12 @@ questions:
 
       What do you check next?
     choices:
-      - "The Service `selector` vs the Pod labels"
-      - "`/var/lib/etcd/member`"
-      - "The kubelet evictionHard thresholds"
       - "Whether the Ingress Class exists"
+      - "The Service `selector` vs the Pod labels"
       - "`crictl info` on the control plane"
-    answer: 0
+      - "The kubelet evictionHard thresholds"
+      - "`/var/lib/etcd/member`"
+    answer: 1
     explain: |
       Ready Pods with no Endpoints almost always means the Service selector does not match Pod labels (typo, wrong key, or labels drifted).
 
@@ -161,12 +161,12 @@ questions:
 
       What do you check next?
     choices:
+      - "PVC storage class name"
+      - "The pause image version on the workers"
+      - "HPA `minReplicas`"
       - "The cluster CA in your kubeconfig (`certificate-authority-data` / CA file) vs `/etc/kubernetes/pki/ca.crt`"
       - "The Calico IP pool CIDR"
-      - "PVC storage class name"
-      - "HPA `minReplicas`"
-      - "The pause image version on the workers"
-    answer: 0
+    answer: 3
     explain: |
       Unknown authority means your client does not trust the apiserver’s issuer. Align kubeconfig CA with the cluster CA under `/etc/kubernetes/pki/`.
 
@@ -176,12 +176,12 @@ questions:
 
       What do you check next?
     choices:
-      - "Validating/MutatingWebhookConfigurations whose Service/URL is missing, especially with `failurePolicy: Fail`"
       - "The hostPath of a Pending PVC"
-      - "`systemctl status containerd` only on worker-2"
-      - "The Helm release revision history"
+      - "Validating/MutatingWebhookConfigurations whose Service/URL is missing, especially with `failurePolicy: Fail`"
       - "Node taints named `disktype`"
-    answer: 0
+      - "The Helm release revision history"
+      - "`systemctl status containerd` only on worker-2"
+    answer: 1
     explain: |
       Admission webhooks with `failurePolicy: Fail` block creates when the webhook endpoint is down or missing. List webhook configs and fix or delete the orphan.
 
@@ -191,12 +191,12 @@ questions:
 
       What do you check next?
     choices:
-      - "CoreDNS Pods/logs/Corefile and the `kube-dns` Service endpoints"
+      - "The Deployment `strategy.rollingUpdate.maxSurge`"
       - "The apiserver `--advertise-address`"
       - "etcd `--listen-client-urls`"
-      - "The Deployment `strategy.rollingUpdate.maxSurge`"
+      - "CoreDNS Pods/logs/Corefile and the `kube-dns` Service endpoints"
       - "`/etc/kubernetes/manifests/kube-controller-manager.yaml` bind address"
-    answer: 0
+    answer: 3
     explain: |
       Name resolution failures with working Pod IPs point at cluster DNS: CoreDNS health, its Service/endpoints, and the Corefile — not etcd listen URLs.
 
@@ -206,11 +206,11 @@ questions:
 
       What do you check next on worker-1?
     choices:
-      - "`systemctl status kubelet` and `journalctl -u kubelet` (config / kubeconfig flags)"
-      - "The Ingress controller Deployment replicas"
       - "Whether the default StorageClass is set"
       - "`kubectl auth can-i` as system:anonymous"
       - "The metrics-server certificate"
-    answer: 0
+      - "`systemctl status kubelet` and `journalctl -u kubelet` (config / kubeconfig flags)"
+      - "The Ingress controller Deployment replicas"
+    answer: 3
     explain: |
       Nodes go NotReady when the kubelet stops heartbeating. On that worker: kubelet service, logs, and its config/kubeconfig — not Ingress or StorageClass.

@@ -1,0 +1,126 @@
+id: workloads-inspect
+title: Workloads — what to inspect next
+summary: Probes, rollouts, Jobs and scheduling. Match the symptom to the object or field you open first.
+track: cka
+topic: quiz-workloads
+estimatedMinutes: 12
+questions:
+  - id: liveness-restart
+    prompt: |
+      A Pod stays at `0/1` and `kubectl describe pod` shows the container was killed, then started again, with `Liveness probe failed` and a rising restart count.
+
+      What do you check next?
+    choices:
+      - "The PersistentVolume reclaim policy"
+      - "The liveness probe on the container: path, port and scheme versus what the process actually serves"
+      - "`/etc/cni/net.d/` on the node"
+      - "The ClusterRole bound to the default ServiceAccount"
+      - "The Service selector in front of the Deployment"
+    answer: 1
+    explain: |
+      The kubelet is killing a container that fails its liveness probe. Compare `livenessProbe` (httpGet path and port, tcpSocket, or exec) with the port the process listens on. A readiness probe only removes the Pod from Service endpoints; it does not restart the container.
+
+  - id: image-pull
+    prompt: |
+      A new Pod is `ImagePullBackOff`. Events say `Failed to pull image "nginx:1.27-alpin"` and `not found`.
+
+      What is the best next check?
+    choices:
+      - "The Ingress class on the app"
+      - "The image name and tag on the container spec, including the registry"
+      - "The liveness probe periodSeconds"
+      - "Whether the node is cordoned"
+      - "CoreDNS replicas in kube-system"
+    answer: 1
+    explain: |
+      `ImagePullBackOff` with `not found` is the image reference, not scheduling or probes. Open the Pod or Deployment template and fix the name, tag or registry. `ErrImagePull` is the same failure before the backoff.
+
+  - id: oom-killed
+    prompt: |
+      A container keeps restarting. `kubectl describe pod` shows `Last State: Terminated`, `Reason: OOMKilled`.
+
+      What do you change?
+    choices:
+      - "Cordon the node and drain it"
+      - "Add a readiness probe on port 80"
+      - "Raise the container memory limit, or lower what the process uses"
+      - "Set `restartPolicy: Never` on the Deployment"
+      - "Delete the Service and recreate it as NodePort"
+    answer: 2
+    explain: |
+      The kernel killed the process because it exceeded its memory limit. Look at `resources.limits.memory` on that container. Requests affect scheduling; the limit is what triggers OOMKilled.
+
+  - id: node-selector-pending
+    prompt: |
+      A Pod stays `Pending`. Events say `0/2 nodes are available: 2 node(s) didn't match Pod's node affinity/selector`.
+
+      What do you check next?
+    choices:
+      - "The container image tag"
+      - "The Ingress host rule"
+      - "The Pod `nodeSelector` or affinity, and the labels on the worker nodes"
+      - "Whether CoreDNS can resolve `kubernetes.default`"
+      - "The etcd data directory"
+    answer: 2
+    explain: |
+      Nothing is wrong with the image. The scheduler cannot place the Pod. Compare `nodeSelector` and `affinity` with `kubectl get nodes --show-labels`. A taint with no matching toleration shows a different event (`untolerated taint`).
+
+  - id: rollout-stuck
+    prompt: |
+      `kubectl rollout status deployment/web` never finishes. The new ReplicaSet has Pods in `CrashLoopBackOff` and the old ReplicaSet still has the ready replicas.
+
+      What do you do first?
+    choices:
+      - "Scale the Deployment to zero and leave it there"
+      - "Delete the Service so endpoints refresh"
+      - "Change the Deployment strategy to Recreate and wait"
+      - "Inspect the new Pods (`describe` and logs). Roll back only after you know the new revision is bad"
+      - "Restart etcd"
+    answer: 3
+    explain: |
+      A stuck rollout means the new revision is not becoming ready, so the old pods stay. `kubectl describe` the new pods and read their logs. `kubectl rollout undo deployment/web` returns to the previous revision once you have confirmed the new spec is the problem.
+
+  - id: job-backoff
+    prompt: |
+      A Job has no `Complete` Pod. `kubectl describe job` shows `BackoffLimitExceeded` and the Pods are `Error`.
+
+      What do you check next?
+    choices:
+      - "The CNI config on the control plane"
+      - "Whether the kube-scheduler static Pod is using hostNetwork"
+      - "The ClusterIP of a Service in another namespace"
+      - "The logs of a failed Pod and the container command in the Job template"
+      - "The StorageClass `reclaimPolicy`"
+    answer: 3
+    explain: |
+      The Job ran the Pod and the container exited non-zero until `backoffLimit` was hit. Logs show why the command failed. This is not a scheduling or networking symptom.
+
+  - id: init-container
+    prompt: |
+      A Pod is `Init:0/1` for several minutes. The app container has not started. `describe` says the init container is `CrashLoopBackOff`.
+
+      What do you inspect?
+    choices:
+      - "The HTTPRoute parentRef"
+      - "The Service `targetPort` of the app"
+      - "The default StorageClass"
+      - "The init container: its command, image and logs"
+      - "kube-proxy on every worker"
+    answer: 3
+    explain: |
+      App containers do not start until every init container exits 0. The failing init container is the one to debug. Readiness of the main container does not matter yet.
+
+  - id: requests-too-large
+    prompt: |
+      A Pod is `Pending`. Events say `0/2 nodes are available: 2 Insufficient cpu`. The nodes are Ready and have no taints.
+
+      What do you check?
+    choices:
+      - "A NetworkPolicy in the namespace"
+      - "The liveness probe path"
+      - "The image pull secret"
+      - "The Ingress class name"
+      - "The container CPU request compared with allocatable CPU on the nodes"
+    answer: 4
+    explain: |
+      `Insufficient cpu` means the scheduler cannot reserve the Pod's CPU request. Compare `resources.requests.cpu` with `kubectl describe node` allocatable. Limits are not what the scheduler uses for this event.

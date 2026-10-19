@@ -94,8 +94,8 @@ export const cronJobBuilder: Builder = {
   points: 3,
   tags: ['cronjob', 'job'],
   fields: [
-    nsField(['batch', 'reports', 'nightly']),
-    nameField('NAME', 'CronJob name', ['report', 'cleanup', 'backup']),
+    nsField(['batch', 'reports', 'nightly', 'jobs', 'cron', 'scheduled', 'etl', 'ops-jobs', 'maintenance', 'automation']),
+    nameField('NAME', 'CronJob name', ['report', 'cleanup', 'backup', 'export', 'rotate', 'sync', 'digest', 'purge', 'archive', 'reconcile']),
     selectField('SCHEDULE', 'Schedule', SCHEDULES, {
       randomizeByDefault: true,
     }),

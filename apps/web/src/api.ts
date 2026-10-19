@@ -23,6 +23,7 @@ import type {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
+    cache: 'no-store',
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -47,6 +48,7 @@ export interface ScenarioFilters {
   search?: string;
   status?: string;
   drafts?: string;
+  track?: string;
 }
 
 export const api = {
@@ -75,7 +77,7 @@ export const api = {
   skipStep: () => request<SessionView>('POST', '/sessions/current/learn/skip'),
   quizzes: (track?: LessonTrack) =>
     request<{ quizzes: QuizSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/quizzes${track ? `?track=${track}` : ''}`),
-  quiz: (id: string) => request<QuizView>('GET', `/quizzes/${encodeURIComponent(id)}`),
+  quiz: (id: string) => request<QuizView>('GET', `/quizzes/${encodeURIComponent(id)}?presented=1`),
   gradeQuiz: (id: string, answers: Record<string, number>) =>
     request<QuizGradeResult>('POST', `/quizzes/${encodeURIComponent(id)}/grade`, { answers }),
 };

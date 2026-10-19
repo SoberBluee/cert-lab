@@ -43,7 +43,7 @@ export const apiAccessCategory: FaultCategory = {
   disruptive: true,
   breaksApi: true,
   settleSeconds: 60,
-  fields: [nsField(['ops', 'core', 'mgmt'])],
+  fields: [nsField(['ops', 'core', 'mgmt', 'control', 'api-lab', 'admin', 'cluster-ops', 'kube-system-lab', 'access', 'platform'])],
   shell: ({ NS }) => ({
     title: 'kubectl stopped working',
     text: `After a certificate and configuration change on \`controlplane\`, \`kubectl\` there fails for both \`root\` and \`ubuntu\`. Deployment \`web\` in namespace \`${NS}\` should run \`2\` ready replicas.
@@ -210,6 +210,33 @@ ${edit(APISERVER, `s#^([[:space:]]*- --tls-cert-file=${PKI}/apiserver)\\.crt$#\\
       fix: edit(APISERVER, `s#^([[:space:]]*- --tls-cert-file=${PKI}/apiserver)\\.cert$#\\1.crt#`, `- --tls-cert-file=${PKI}/apiserver.crt$`),
       wait: waitHealthy(NS),
       explain: `\`--tls-cert-file\` in \`${APISERVER}\` points at \`${PKI}/apiserver.cert\`, which does not exist, so the API server cannot load its serving certificate and exits at startup; kubectl gets \`connection refused\`. \`crictl logs\` of the last kube-apiserver container names the file, and \`ls ${PKI}\` shows \`apiserver.crt\`.`,
+    },
+    {
+      id: 'kubeconfig-server-host',
+      label: 'User kubeconfigs point at a host that is not listening',
+      break: `${scaleUp(NS)}
+${saveUserKubeconfigs(state)}
+${USER_KUBECONFIGS.map((f) => edit(f, 's#^([[:space:]]*server: https://)[^[:space:]]+$#\\1127.0.0.1:1#', 'server: https://127.0.0.1:1$')).join('\n')}`,
+      settle: userKubectlDown,
+      fix: restoreUserKubeconfigs(state),
+      wait: waitHealthy(NS),
+      explain: `\`server:\` in both user kubeconfigs is \`https://127.0.0.1:1\`, where nothing listens, so kubectl gets \`connection refused\` while the API server is healthy on \`6443\` (\`curl -k https://127.0.0.1:6443/readyz\`). Restore the real \`server:\` from \`/etc/kubernetes/admin.conf\`, or copy that file over the kubeconfigs.`,
+    },
+    {
+      id: 'apiserver-bind-address',
+      label: 'API server binds only on a loopback alias',
+      break: `${scaleUp(NS)}
+if grep -qE -- '- --bind-address=' ${APISERVER}; then
+  ${edit(APISERVER, 's#^([[:space:]]*- --bind-address=).*$#\\1127.0.0.2#', '- --bind-address=127.0.0.2$')}
+else
+  sed -i -E '/^[[:space:]]*- --secure-port=6443$/a\\    - --bind-address=127.0.0.2' ${APISERVER}
+  grep -qE -- '- --bind-address=127.0.0.2$' ${APISERVER} || { echo "could not set bind-address" >&2; exit 1; }
+fi`,
+      settle: apiDown,
+      fix: `sed -i -E 's#^([[:space:]]*- --bind-address=)127\\.0\\.0\\.2$#\\10.0.0.0#' ${APISERVER}
+grep -qE -- '- --bind-address=0.0.0.0$' ${APISERVER} || { echo "could not restore bind-address" >&2; exit 1; }`,
+      wait: waitHealthy(NS),
+      explain: `\`--bind-address\` in \`${APISERVER}\` is \`127.0.0.2\`, so the API server does not accept connections on \`127.0.0.1:6443\` and kubectl gets \`connection refused\`. \`ss -ltnp\` shows it listening only on \`127.0.0.2\`. Set \`--bind-address\` back to \`0.0.0.0\`.`,
     },
   ],
 };

@@ -27,7 +27,10 @@ export const netpolCategory: FaultCategory = {
   points: 7,
   tags: ['troubleshooting', 'networkpolicy', 'dns'],
   settleSeconds: 30,
-  fields: [nsField(['secure', 'payments', 'vault']), nameField('APP', 'Deployment and Service name', ['api', 'ledger', 'billing'])],
+  fields: [
+    nsField(['secure', 'payments', 'vault', 'finance', 'pci', 'locked', 'private', 'restricted', 'zerotrust', 'segment']),
+    nameField('APP', 'Deployment and Service name', ['api', 'ledger', 'billing', 'auth', 'wallet', 'settle', 'clearing', 'risk', 'fraud', 'treasury']),
+  ],
   shell: ({ NS, APP }) => ({
     title: `Frontend cannot reach ${APP}`,
     text: `Namespace \`${NS}\` denies all traffic by default (NetworkPolicy \`default-deny\`), and a few NetworkPolicies open what is needed. Since the last change, Pod \`client\` cannot reach Service \`${APP}\`: \`kubectl -n ${NS} exec client -- wget -qO- -T 3 http://${APP}\` fails.

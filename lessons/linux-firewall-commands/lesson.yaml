@@ -1,0 +1,114 @@
+id: linux-firewall-commands
+title: ufw and iptables command drills
+summary: Memorise the everyday ufw commands — status, enable, disable, allow, deny, delete, reload — and take a read-only look at iptables on worker-1.
+track: linux
+topic: firewall
+estimatedMinutes: 10
+setup:
+  - node: worker-1
+    run: |
+      ufw --force reset >/dev/null
+      sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="ACCEPT"/' /etc/default/ufw
+      # SSH from the lab network stays open whatever the learner does, so the terminal and the step watcher keep working.
+      subnet="$(ip -4 route | awk '/proto kernel/ {print $1; exit}')"
+      ufw allow from "$subnet" to any port 22 proto tcp comment 'cka-lab ssh' >/dev/null
+      ufw --force disable >/dev/null
+steps:
+  - id: status
+    title: Check whether ufw is active
+    explain: |
+      Switch the terminal to **worker-1**. `ufw status` prints `Status: active` or `Status: inactive` and lists any rules. Start here before you change anything.
+    command: sudo ufw status
+    node: worker-1
+    match: '^ufw status\b'
+  - id: allow-ssh
+    title: Allow SSH before you enable the firewall
+    explain: |
+      Add rules **before** enabling. `ufw allow 22/tcp` (or `ufw allow ssh`) keeps remote logins working once filtering starts.
+    command: sudo ufw allow 22/tcp
+    node: worker-1
+    match: '^ufw allow\b.*\b(22|ssh|OpenSSH)\b'
+  - id: allow-http
+    title: Allow a service port
+    explain: |
+      `ufw allow 80/tcp` opens HTTP. You can also write `ufw allow http` for the same well-known service name.
+    command: sudo ufw allow 80/tcp
+    node: worker-1
+    match: '^ufw allow\b.*\b(80|http)\b'
+  - id: deny-port
+    title: Deny a port explicitly
+    explain: |
+      `ufw deny 23/tcp` rejects telnet. Deny rules are useful when the default policy is allow, or when you want a specific block that shows up in `ufw status`.
+    command: sudo ufw deny 23/tcp
+    node: worker-1
+    match: '^ufw deny\b.*\b23\b'
+  - id: enable
+    title: Enable the firewall
+    explain: |
+      `ufw enable` turns filtering on. `--force` skips the "may disrupt existing ssh connections" prompt — use it in scripts and labs.
+    command: sudo ufw --force enable
+    node: worker-1
+    match: '^ufw (--force )?enable\b'
+    check:
+      id: ufw-active
+      description: ufw is active on worker-1
+      type: ssh
+      node: worker-1
+      run: ufw status | head -1
+      expect: { equals: 'Status: active' }
+  - id: status-numbered
+    title: List rules with numbers
+    explain: |
+      `ufw status numbered` shows each rule with an index. You need those numbers for `ufw delete <n>`.
+    command: sudo ufw status numbered
+    node: worker-1
+    match: '^ufw status numbered\b'
+  - id: delete
+    title: Delete a rule
+    explain: |
+      Delete by repeating the rule (`ufw delete allow 80/tcp`) or by its number (`ufw delete 2`). Deleting by rule also removes the IPv6 copy when both exist.
+    command: sudo ufw delete allow 80/tcp
+    node: worker-1
+    match: '^ufw (--force )?delete\b'
+    check:
+      id: http-gone
+      description: no ufw rule mentions port 80
+      type: ssh
+      node: worker-1
+      run: ufw status | grep -cE '\b80(/tcp)?\b|HTTP' || true
+      expect: { equals: '0' }
+  - id: reload
+    title: Reload ufw
+    explain: |
+      `ufw reload` re-applies the rules without disabling the firewall. Handy after editing files under `/etc/ufw/` by hand.
+    command: sudo ufw reload
+    node: worker-1
+    match: '^ufw reload\b'
+  - id: iptables-list
+    title: List the INPUT chain with iptables
+    explain: |
+      ufw is a front end for iptables. `iptables -L INPUT -n` lists the INPUT chain with numeric addresses; look for the `ufw-*` chains that hold your rules.
+    command: sudo iptables -L INPUT -n
+    node: worker-1
+    match: '^iptables(-legacy|-nft)?\b.*\s-L\b'
+  - id: iptables-save
+    title: Show the raw rules with iptables -S
+    explain: |
+      `iptables -S` prints the rules in the same form as `iptables-save` (with `-A`/`-P` lines). Read-only: do not flush or rewrite chains on a Kubernetes node.
+    command: sudo iptables -S
+    node: worker-1
+    match: '^iptables(-legacy|-nft)?\b.*\s-S\b|^iptables-save\b'
+  - id: disable
+    title: Disable the firewall
+    explain: |
+      `ufw disable` stops filtering and keeps the rules for next time. Prefer this over `ufw reset` unless you intend to wipe the rule set.
+    command: sudo ufw disable
+    node: worker-1
+    match: '^ufw disable\b'
+    check:
+      id: ufw-inactive
+      description: ufw is inactive on worker-1
+      type: ssh
+      node: worker-1
+      run: ufw status | head -1
+      expect: { equals: 'Status: inactive' }

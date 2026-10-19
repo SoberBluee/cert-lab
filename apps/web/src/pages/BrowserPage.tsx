@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { LabTopic, ScenarioSummary } from '@cka/schema';
+import type { LabTopic, LessonTrack, ScenarioSummary } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
 import { isActive, sessionKey, useExamMode, useSession } from '../hooks';
 import { RANDOM_MAX, randomLab, toRequest, type LabKind } from '../quickRandom';
+import { SECTIONS } from '../section';
 
 const KIND_LABELS: Record<LabKind, string> = { create: 'Create', troubleshoot: 'Troubleshoot', random: 'Random' };
 
@@ -34,16 +35,21 @@ function StatsLine({ s }: { s: ScenarioSummary }) {
   );
 }
 
-export function BrowserPage() {
+export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
+  const base = SECTIONS[track].base;
+  const sessionPath = `${base}/session` || '/session';
   const [filters, setFilters] = useState<ScenarioFilters>({});
   const searchRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const qc = useQueryClient();
   const session = useSession().data;
   const active = isActive(session);
+  const recipesReady = track === 'cka';
 
-  const all = useQuery({ queryKey: ['scenarios', {}], queryFn: () => api.scenarios() });
-  const filtered = useQuery({ queryKey: ['scenarios', filters], queryFn: () => api.scenarios(filters) });
+  const baseFilter: ScenarioFilters = { track };
+  const queryFilters = { ...filters, ...baseFilter };
+  const all = useQuery({ queryKey: ['scenarios', baseFilter], queryFn: () => api.scenarios(baseFilter) });
+  const filtered = useQuery({ queryKey: ['scenarios', queryFilters], queryFn: () => api.scenarios(queryFilters) });
   const images = useQuery({ queryKey: ['images'], queryFn: api.images, retry: false });
 
   const tags = useMemo(
@@ -57,11 +63,16 @@ export function BrowserPage() {
     mutationFn: (id: string) => api.start(id, exam ? 'mock' : 'practice'),
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
-      navigate('/session');
+      navigate(sessionPath);
     },
   });
 
-  const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity });
+  const catalog = useQuery({
+    queryKey: ['recipes'],
+    queryFn: () => studioApi.recipes(),
+    staleTime: Infinity,
+    enabled: recipesReady,
+  });
   const [labKind, setLabKind] = useState<LabKind>('random');
   const [labTopic, setLabTopic] = useState('any');
   const [labCount, setLabCount] = useState('1');
@@ -86,7 +97,7 @@ export function BrowserPage() {
     },
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
-      navigate('/session');
+      navigate(sessionPath);
     },
   });
   const labN = Math.min(RANDOM_MAX, Math.max(1, Math.floor(Number(labCount)) || 1));
@@ -119,7 +130,7 @@ export function BrowserPage() {
               Session in progress: <span className="font-medium text-zinc-100">{session.scenarioTitle}</span>
             </span>
           </div>
-          <Link to="/session" className="text-sm font-medium text-sky-400 hover:text-sky-300">
+          <Link to={sessionPath} className="text-sm font-medium text-sky-400 hover:text-sky-300">
             Open session →
           </Link>
         </div>
@@ -185,14 +196,24 @@ export function BrowserPage() {
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-zinc-300">Quick lab</span>
-        <select className={select} value={labKind} onChange={(e) => setLabKind(e.target.value as LabKind)} disabled={quickStart.isPending}>
+        <select
+          className={select}
+          value={labKind}
+          onChange={(e) => setLabKind(e.target.value as LabKind)}
+          disabled={quickStart.isPending || !recipesReady}
+        >
           {(Object.keys(KIND_LABELS) as LabKind[]).map((k) => (
             <option key={k} value={k}>
               {KIND_LABELS[k]}
             </option>
           ))}
         </select>
-        <select className={select} value={chosenTopic?.id ?? 'any'} onChange={(e) => setLabTopic(e.target.value)} disabled={quickStart.isPending || !catalog.data}>
+        <select
+          className={select}
+          value={chosenTopic?.id ?? 'any'}
+          onChange={(e) => setLabTopic(e.target.value)}
+          disabled={quickStart.isPending || !catalog.data || !recipesReady}
+        >
           <option value="any">Any</option>
           {labKind === 'random' ? (
             <>
@@ -211,20 +232,32 @@ export function BrowserPage() {
             className={`${select} w-16`}
             value={labCount}
             onChange={(e) => setLabCount(e.target.value)}
-            disabled={quickStart.isPending}
+            disabled={quickStart.isPending || !recipesReady}
           />
           question{labN === 1 ? '' : 's'}
         </label>
         <Button
           variant="primary"
-          disabled={active || !catalog.data || quickStart.isPending || start.isPending}
-          title={active ? 'End the current session first' : catalog.error ? 'Could not load the recipe catalog' : undefined}
+          disabled={active || !recipesReady || !catalog.data || quickStart.isPending || start.isPending}
+          title={
+            !recipesReady
+              ? 'Linux Quick lab recipes are not available yet'
+              : active
+                ? 'End the current session first'
+                : catalog.error
+                  ? 'Could not load the recipe catalog'
+                  : undefined
+          }
           onClick={() => quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic })}
         >
           {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
         </Button>
         <span className="text-xs text-zinc-500">
-          {chosenTopic ? `Questions from ${chosenTopic.label}, saved as a hidden draft.` : 'A random lab from the recipe catalog, saved as a hidden draft.'}
+          {!recipesReady
+            ? 'Linux Quick lab recipes are not available yet.'
+            : chosenTopic
+              ? `Questions from ${chosenTopic.label}, saved as a hidden draft.`
+              : 'A random lab from the recipe catalog, saved as a hidden draft.'}
         </span>
       </div>
 

@@ -59,7 +59,7 @@ export const dnsCategory: FaultCategory = {
   tags: ['troubleshooting', 'dns', 'coredns', 'service'],
   disruptive: true,
   settleSeconds: 20,
-  fields: [nsField(['shop', 'intranet', 'search'])],
+  fields: [nsField(['shop', 'intranet', 'search', 'portal', 'corp', 'dns-lab', 'lookup', 'resolve', 'cache-ns', 'edge-dns'])],
   shell: ({ NS }) => ({
     title: 'Name resolution broken',
     text: `In namespace \`${NS}\`, Pod \`client\` can no longer reach Service \`web\` by name: \`kubectl -n ${NS} exec client -- wget -qO- -T 3 http://web\` fails with a "bad address" error, while the Service and its Pods are fine.

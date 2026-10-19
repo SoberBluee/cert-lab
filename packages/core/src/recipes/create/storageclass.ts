@@ -130,7 +130,7 @@ export const storageClassBuilder: Builder = {
   points: 3,
   tags: ['storageclass'],
   fields: [
-    nameField('NAME', 'StorageClass name', ['gold', 'silver', 'bronze']),
+    nameField('NAME', 'StorageClass name', ['gold', 'silver', 'bronze', 'fast-ssd', 'standard', 'retain-sc', 'local-path', 'premium', 'cold', 'archive']),
     selectField('RECLAIM', 'Reclaim policy', ['Retain', 'Delete']),
     selectField('BINDING', 'Volume binding mode', BINDINGS),
   ],

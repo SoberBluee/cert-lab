@@ -29,7 +29,10 @@ export const hpaCategory: FaultCategory = {
   points: 7,
   tags: ['troubleshooting', 'hpa', 'autoscaling', 'metrics-server'],
   settleSeconds: 20,
-  fields: [nsField(['shop', 'storefront', 'media']), nameField('APP', 'Deployment and autoscaler name', ['web', 'api', 'frontend'])],
+  fields: [
+    nsField(['shop', 'storefront', 'media', 'scale', 'traffic', 'web-tier', 'frontend', 'api-tier', 'loadtest', 'elastic']),
+    nameField('APP', 'Deployment and autoscaler name', ['web', 'api', 'frontend', 'gateway', 'catalog', 'search', 'checkout', 'cdn', 'proxy', 'edge']),
+  ],
   shell: ({ NS, APP }, state) => ({
     title: `Autoscaler ${APP} not working`,
     text: `HorizontalPodAutoscaler \`${APP}\` in namespace \`${NS}\` should scale Deployment \`${APP}\` on CPU, but \`kubectl -n ${NS} get hpa\` shows it is not working. Fix it so that it matches this spec and reads current CPU metrics:

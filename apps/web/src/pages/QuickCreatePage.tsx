@@ -479,7 +479,19 @@ function AddQuestion({
   );
 }
 
-function Created({ id, jobError, onAnother }: { id: string; jobError: string | null; onAnother: () => void }) {
+function Created({
+  id,
+  jobError,
+  onAnother,
+  studioBase,
+  allowAdvanced,
+}: {
+  id: string;
+  jobError: string | null;
+  onAnother: () => void;
+  studioBase: string;
+  allowAdvanced: boolean;
+}) {
   const qc = useQueryClient();
   const session = useSession().data;
   const job = useQuery({
@@ -528,9 +540,11 @@ function Created({ id, jobError, onAnother }: { id: string; jobError: string | n
           <Button variant="primary" disabled={publish.isPending || publish.isSuccess} onClick={() => publish.mutate()}>
             {publish.isSuccess ? 'Published' : publish.isPending ? 'Publishing…' : 'Publish'}
           </Button>
-          <Link to={`/studio/${id}`} className="ml-auto self-center text-sm text-sky-400 hover:text-sky-300">
-            Open in Advanced editor →
-          </Link>
+          {allowAdvanced && (
+            <Link to={`${studioBase}/studio/${id}`} className="ml-auto self-center text-sm text-sky-400 hover:text-sky-300">
+              Open in Advanced editor →
+            </Link>
+          )}
           <Button variant="ghost" onClick={onAnother}>
             Create another
           </Button>
@@ -540,13 +554,27 @@ function Created({ id, jobError, onAnother }: { id: string; jobError: string | n
   );
 }
 
-export function QuickCreatePage() {
+export function QuickCreatePage({
+  basePath = '',
+  emptyCatalog = false,
+}: {
+  /** Prefix for Studio links (`''` for CKA, `'/linux'` for Linux Labs). */
+  basePath?: string;
+  /** When true, skip the Kubernetes recipe catalog and show a coming-soon empty state. */
+  emptyCatalog?: boolean;
+} = {}) {
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const track: TrackId = TRACKS.find((t) => t.id === params.get('track') && !t.soon)?.id ?? 'create';
   const setTrack = (t: TrackId) => setParams({ track: t }, { replace: true });
-  const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity });
+  const catalog = useQuery({
+    queryKey: ['recipes'],
+    queryFn: () => studioApi.recipes(),
+    staleTime: Infinity,
+    enabled: !emptyCatalog,
+  });
   const scenarios = useQuery({ queryKey: ['scenarios', { drafts: '1' }], queryFn: () => api.scenarios({ drafts: '1' }) });
+  const studioHome = `${basePath}/studio` || '/studio';
   const [questions, setQuestions] = useState<Question[]>([]);
   const [title, setTitle] = useState('');
   const [id, setId] = useState('');
@@ -625,10 +653,33 @@ export function QuickCreatePage() {
 
   const ready = questions.length > 0 && title.trim() && /^[a-z0-9][a-z0-9-]*$/.test(effectiveId) && !taken && settled && errors.length === 0;
 
+  if (emptyCatalog) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <Link to={studioHome} className="text-sm text-zinc-400 hover:text-zinc-100">
+            ← Studio
+          </Link>
+          <h1 className="mt-2 text-xl font-semibold text-zinc-100">Quick Create</h1>
+          <p className="mt-1 text-sm text-zinc-400">Build a Linux lab question by question once the recipe catalog is ready.</p>
+        </div>
+        <div className="mx-auto max-w-md rounded-xl border border-zinc-800 bg-zinc-900/40 px-6 py-10 text-center">
+          <p className="text-sm font-medium text-zinc-200">Linux recipe catalog coming soon</p>
+          <p className="mt-2 text-sm text-zinc-500">
+            Create and troubleshoot builders for Linux Labs are not available yet. Kubernetes recipes stay under CKA Labs.
+          </p>
+          <Link to={studioHome} className="mt-5 inline-block text-sm text-sky-400 hover:text-sky-300">
+            ← Back to Studio
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
-        <Link to="/studio" className="text-sm text-zinc-400 hover:text-zinc-100">
+        <Link to={studioHome} className="text-sm text-zinc-400 hover:text-zinc-100">
           ← Studio
         </Link>
         <h1 className="mt-2 text-xl font-semibold text-zinc-100">Quick Create</h1>
@@ -649,6 +700,8 @@ export function QuickCreatePage() {
             setId('');
             create.reset();
           }}
+          studioBase={basePath}
+          allowAdvanced={!emptyCatalog && !basePath}
         />
       ) : (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">

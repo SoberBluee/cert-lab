@@ -1,0 +1,403 @@
+id: all-you-can-service
+title: All you can Service
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 72
+points: 54
+tags: [ troubleshooting, service, endpoints, networkpolicy ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+draft: true
+variables:
+  # Namespaces must stay unique across questions (parallel setup); rollVars enforces that.
+  Q1_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q1_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q1_FAULT: { oneOf: [ selector-mismatch ], hidden: true }
+  Q2_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q2_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q2_FAULT: { oneOf: [ target-port ], hidden: true }
+  Q3_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q3_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q3_FAULT: { oneOf: [ named-port ], hidden: true }
+  Q4_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q4_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q4_FAULT: { oneOf: [ service-externalname ], hidden: true }
+  Q5_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q5_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q5_FAULT: { oneOf: [ egress-network-policy ], hidden: true }
+  Q6_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q6_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q6_FAULT: { oneOf: [ readiness-port-number ], hidden: true }
+  Q7_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q7_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q7_FAULT: { oneOf: [ service-port ], hidden: true }
+  Q8_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q8_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q8_FAULT: { oneOf: [ readiness-https ], hidden: true }
+  Q9_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q9_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q9_FAULT: { oneOf: [ kube-proxy-down ], hidden: true }
+tasks:
+  - id: q1
+    title: Service ${Q1_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-reachable
+        description: client gets the nginx page from http://${Q1_APP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://${Q1_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-endpoints
+        description: Service ${Q1_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get endpointslices -l kubernetes.io/service-name=${Q1_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-spec-service
+        description: Service ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q1_APP} 80 http" }
+        weight: 1
+      - id: q1-spec-deployment
+        description: Deployment ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q1_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q1_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q1_NS} get networkpolicy: anything selecting the ${Q1_APP} Pods?"
+  - id: q2
+    title: Service ${Q2_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-reachable
+        description: client gets the nginx page from http://${Q2_APP}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec client -- wget -qO- -T 3 http://${Q2_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q2-endpoints
+        description: Service ${Q2_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get endpointslices -l kubernetes.io/service-name=${Q2_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-spec-service
+        description: Service ${Q2_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q2_APP} 80 http" }
+        weight: 1
+      - id: q2-spec-deployment
+        description: Deployment ${Q2_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q2_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q2_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q2_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q2_NS} get networkpolicy: anything selecting the ${Q2_APP} Pods?"
+  - id: q3
+    title: Service ${Q3_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+        lane: q3
+    checks:
+      - id: q3-reachable
+        description: client gets the nginx page from http://${Q3_APP}
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://${Q3_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q3-endpoints
+        description: Service ${Q3_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get endpointslices -l kubernetes.io/service-name=${Q3_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q3-spec-service
+        description: Service ${Q3_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get svc ${Q3_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q3_APP} 80 http" }
+        weight: 1
+      - id: q3-spec-deployment
+        description: Deployment ${Q3_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q3_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q3_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q3_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q3_NS} get networkpolicy: anything selecting the ${Q3_APP} Pods?"
+  - id: q4
+    title: Service ${Q4_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+        lane: q4
+    checks:
+      - id: q4-reachable
+        description: client gets the nginx page from http://${Q4_APP}
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec client -- wget -qO- -T 3 http://${Q4_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q4-endpoints
+        description: Service ${Q4_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get endpointslices -l kubernetes.io/service-name=${Q4_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q4-spec-service
+        description: Service ${Q4_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get svc ${Q4_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q4_APP} 80 http" }
+        weight: 1
+      - id: q4-spec-deployment
+        description: Deployment ${Q4_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q4_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q4_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q4_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q4_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q4_NS} get networkpolicy: anything selecting the ${Q4_APP} Pods?"
+  - id: q5
+    title: Service ${Q5_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        timeoutSeconds: 400
+        lane: q5
+    checks:
+      - id: q5-reachable
+        description: client gets the nginx page from http://${Q5_APP}
+        type: kubectl
+        run: kubectl -n ${Q5_NS} exec client -- wget -qO- -T 3 http://${Q5_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q5-endpoints
+        description: Service ${Q5_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get endpointslices -l kubernetes.io/service-name=${Q5_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q5-spec-service
+        description: Service ${Q5_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get svc ${Q5_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q5_APP} 80 http" }
+        weight: 1
+      - id: q5-spec-deployment
+        description: Deployment ${Q5_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q5_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q5_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q5_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q5_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q5_NS} get networkpolicy: anything selecting the ${Q5_APP} Pods?"
+  - id: q6
+    title: Service ${Q6_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q6.sh
+        timeoutSeconds: 400
+        lane: q6
+    checks:
+      - id: q6-reachable
+        description: client gets the nginx page from http://${Q6_APP}
+        type: kubectl
+        run: kubectl -n ${Q6_NS} exec client -- wget -qO- -T 3 http://${Q6_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q6-endpoints
+        description: Service ${Q6_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get endpointslices -l kubernetes.io/service-name=${Q6_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q6-spec-service
+        description: Service ${Q6_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get svc ${Q6_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q6_APP} 80 http" }
+        weight: 1
+      - id: q6-spec-deployment
+        description: Deployment ${Q6_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get deployment ${Q6_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q6_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q6_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q6_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q6_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q6_NS} get networkpolicy: anything selecting the ${Q6_APP} Pods?"
+  - id: q7
+    title: Service ${Q7_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q7.sh
+        timeoutSeconds: 400
+        lane: q7
+    checks:
+      - id: q7-reachable
+        description: client gets the nginx page from http://${Q7_APP}
+        type: kubectl
+        run: kubectl -n ${Q7_NS} exec client -- wget -qO- -T 3 http://${Q7_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q7-endpoints
+        description: Service ${Q7_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q7_NS} get endpointslices -l kubernetes.io/service-name=${Q7_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q7-spec-service
+        description: Service ${Q7_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q7_NS} get svc ${Q7_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q7_APP} 80 http" }
+        weight: 1
+      - id: q7-spec-deployment
+        description: Deployment ${Q7_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q7_NS} get deployment ${Q7_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q7_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q7_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q7_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q7_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q7_NS} get networkpolicy: anything selecting the ${Q7_APP} Pods?"
+  - id: q8
+    title: Service ${Q8_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q8.sh
+        timeoutSeconds: 400
+        lane: q8
+    checks:
+      - id: q8-reachable
+        description: client gets the nginx page from http://${Q8_APP}
+        type: kubectl
+        run: kubectl -n ${Q8_NS} exec client -- wget -qO- -T 3 http://${Q8_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q8-endpoints
+        description: Service ${Q8_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q8_NS} get endpointslices -l kubernetes.io/service-name=${Q8_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q8-spec-service
+        description: Service ${Q8_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q8_NS} get svc ${Q8_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q8_APP} 80 http" }
+        weight: 1
+      - id: q8-spec-deployment
+        description: Deployment ${Q8_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q8_NS} get deployment ${Q8_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q8_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q8_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q8_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q8_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q8_NS} get networkpolicy: anything selecting the ${Q8_APP} Pods?"
+  - id: q9
+    title: Service ${Q9_APP} unreachable
+    points: 6
+    # kube-proxy-down is cluster-wide: set up after other Service questions, fix before their waits.
+    setupStage: 1
+    setup:
+      - node: controlplane
+        script: setup/q9.sh
+        timeoutSeconds: 400
+    checks:
+      - id: q9-reachable
+        description: client gets the nginx page from http://${Q9_APP}
+        type: kubectl
+        run: kubectl -n ${Q9_NS} exec client -- wget -qO- -T 3 http://${Q9_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q9-endpoints
+        description: Service ${Q9_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q9_NS} get endpointslices -l kubernetes.io/service-name=${Q9_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q9-spec-service
+        description: Service ${Q9_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q9_NS} get svc ${Q9_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q9_APP} 80 http" }
+        weight: 1
+      - id: q9-spec-deployment
+        description: Deployment ${Q9_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q9_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q9_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q9_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q9_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q9_NS} get networkpolicy: anything selecting the ${Q9_APP} Pods?"

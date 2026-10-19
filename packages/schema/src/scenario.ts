@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BASES, DOMAINS } from './constants';
+import { BASES, DOMAINS, LESSON_TRACKS } from './constants';
 import { VAR_NAME } from './vars';
 
 export { BASES, DOMAINS };
@@ -176,6 +176,8 @@ export const ScenarioSchema = z
     id: SlugSchema,
     title: z.string().min(1),
     domain: DomainSchema,
+    /** Product section this lab belongs to; defaults to CKA so existing YAML needs no change. */
+    track: z.enum(LESSON_TRACKS).default('cka'),
     difficulty: z.number().int().min(1).max(3),
     estimatedMinutes: z.number().positive(),
     points: z.number().positive(),

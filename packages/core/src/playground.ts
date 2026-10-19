@@ -8,6 +8,7 @@ const def: Scenario = {
   id: PLAYGROUND_ID,
   title: 'Playground',
   domain: 'cluster-architecture',
+  track: 'cka',
   difficulty: 1,
   estimatedMinutes: 60,
   points: 1,

@@ -21,7 +21,10 @@ export const podConfigCategory: FaultCategory = {
   points: 6,
   tags: ['troubleshooting', 'configmap', 'secret', 'volumes', 'security-context'],
   settleSeconds: 30,
-  fields: [nsField(['brochure', 'docs', 'landing']), nameField('APP', 'Deployment name', ['site', 'welcome', 'promo'])],
+  fields: [
+    nsField(['brochure', 'docs', 'landing', 'marketing', 'cms', 'pages', 'publish', 'content', 'static', 'www']),
+    nameField('APP', 'Deployment name', ['site', 'welcome', 'promo', 'home', 'docs-web', 'landing-page', 'brochure-app', 'cms', 'blog', 'press']),
+  ],
   shell: ({ NS, APP }) => ({
     title: `Deployment ${APP} does not serve its page`,
     text: `Deployment \`${APP}\` in namespace \`${NS}\` was just reconfigured and is no longer healthy. Fix it so that it matches this spec and both Pods are ready:

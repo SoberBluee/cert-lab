@@ -148,7 +148,7 @@ The **Quick lab** bar sits under the filters on the Scenarios tab. It generates 
 1. Choose **Create**, **Troubleshoot** or **Random**, a category (or **Any**), and how many questions you want (1-20).
 2. Press **Start**. The lab is generated from the [recipe catalog](#recipe-catalog), the VMs are provisioned and you go straight to the session.
 
-A category limits every question to one topic, such as Service, Ingress, HTTPRoute / Gateway, Deployment, Nodes or Kubelet. Create topics appear for Create and Random; troubleshoot topics appear for Troubleshoot and Random. **Any** keeps the mix below. A create topic such as Ingress asks only for that add-on. A troubleshoot topic such as Kubelet rolls only the kubelet faults from the node pools.
+A category limits every question to one topic, such as Service, Ingress, HTTPRoute / Gateway, Deployment, Nodes, Kubelet, API server, etcd or Scheduler. Create topics appear for Create and Random; troubleshoot topics appear for Troubleshoot and Random. **Any** keeps the mix below. A create topic such as Ingress asks only for that add-on. A troubleshoot topic such as Kubelet or etcd rolls only the matching fault subset.
 
 How each kind is built:
 - **Create** labs pick random build tasks, each with a random set of add-ons and follow-up tasks that don't conflict.
@@ -278,11 +278,11 @@ Each category has a pool of faults, and one is injected at random on every start
 | **NetworkPolicy** (8) | DNS egress port, DNS namespace selector, ingress port, ingress label, egress label, egress port, namespace AND pod selector, ingress pod selector |
 | **DNS** (12) | Corefile typo, CoreDNS scaled to zero, cluster domain, kube-dns selector, client dnsPolicy, forwarding loop, CoreDNS RBAC, kube-dns targetPort, Corefile key, CoreDNS image, config volume, memory limit |
 | **Ingress and HTTPRoute** (10) | Backend Service name, backend port, IngressClass, path, parentRef, sectionName, backend port on route, host typo, hostname typo, parentRef namespace |
-| **Nodes** (11) | kubelet stopped, containerd stopped, kubelet binary path, cordoned, stray taint, invalid kubelet config, kubelet client CA, kubelet API port, kubelet extra args, CNI config removed, invalid containerd config |
+| **Nodes** (13) | kubelet stopped, containerd stopped, IP forwarding and containerd, kubelet binary path, cordoned, stray taint, invalid kubelet config, kubelet client CA, kubelet API port, kubelet extra args, CNI config removed, invalid containerd config, kubelet.conf missing |
 | **Storage** (3) | StorageClass mismatch, access mode mismatch, claim too large |
-| **Worker node configuration** (7) | kubelet kubeconfig server, client CA, runtime endpoint, `--config` flag, `--kubeconfig` flag, serving cert, maxPods |
-| **Control plane** (11) | apiserver to etcd port, etcd certfile, etcd cert path, scheduler command, controller-manager kubeconfig, kubelet client cert, staticPodPath, scheduler kubeconfig path, scheduler image tag, controller-manager SA key, invalid admission plugin |
-| **API access** (8) | kubeconfig server port, wrong CA, apiserver client CA, secure port, broken apiserver manifest, wrong current-context, wrong client key, apiserver TLS cert path |
+| **Worker node configuration** (9) | kubelet kubeconfig server, client CA, runtime endpoint, `--config` flag, `--kubeconfig` flag, serving cert, maxPods, evictionHard, invalid cgroupDriver |
+| **Control plane** (24) | apiserver→etcd port/certfile/keyfile/flags, apiserver TLS key, apiserver manifest removed, admission plugin; etcd cert/key/CA/client URLs/data-dir/image; scheduler command/kubeconfig/image/manifest removed/invalid YAML; controller-manager kubeconfig/SA key/command; controlplane kubelet client cert, staticPodPath, API port |
+| **API access** (10) | kubeconfig server port/host, wrong CA, current-context, client key; apiserver client CA, secure port, bind address, broken manifest, TLS cert path |
 
 ---
 

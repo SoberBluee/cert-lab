@@ -1,0 +1,123 @@
+id: quick-lab-8qlcow
+title: "Quick lab: Random"
+domain: storage
+difficulty: 3
+estimatedMinutes: 23
+points: 16
+tags: [ pvc, pv, selector, delete-keep-data, rbac, serviceaccount, role, auth-can-i, troubleshooting, networkpolicy, dns ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ billing, orders-app, photo-lib ] }
+  Q1_NAME: { oneOf: [ orders, invoices, photos ] }
+  Q1_SIZE: { oneOf: [ 100Mi, 500Mi, 1Gi ] }
+  Q1_ACCESS: { oneOf: [ ReadWriteOnce, ReadWriteMany ] }
+  Q1_SELECT_TIER: { oneOf: [ premium, standard, backup ] }
+  Q2_NS: { oneOf: [ monitoring, audit, support ] }
+  Q2_SA: { oneOf: [ viewer, auditor, observer ] }
+  Q2_RESOURCE: { oneOf: [ pods, configmaps, services ] }
+  Q3_NS: { oneOf: [ secure, payments, vault ] }
+  Q3_APP: { oneOf: [ api, ledger, billing ] }
+  Q3_FAULT: { oneOf: [ dns-egress-port, dns-namespace-selector, ingress-port, ingress-from-label, egress-to-label, egress-port, ingress-namespace-and, ingress-pod-selector, dns-policy-deleted, dns-udp-only, dns-pod-selector, frontend-egress-deleted, frontend-egress-selector, ingress-ports-cleared ], hidden: true }
+tasks:
+  - id: q1
+    title: PersistentVolumeClaim ${Q1_NAME}
+    points: 4
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-deleted
+        description: PVC ${Q1_NAME} is deleted
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pvc ${Q1_NAME} --ignore-not-found -o name
+        expect: { notEmpty: false }
+        weight: 2
+      - id: q1-released
+        description: ${Q1_NAME}-pv still exists and is Released
+        type: kubectl
+        run: kubectl get pv ${Q1_NAME}-pv -o jsonpath='{.status.phase}'
+        expect: { equals: Released }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl get pv ${Q1_NAME}-pv shows the class, access modes and capacity the claim must fit.
+      - kubectl get pv --show-labels; then spec.selector.matchLabels on the claim.
+      - A claim in use by a Pod stays Terminating until the Pod is gone. With reclaim policy Retain the PV becomes Released.
+  - id: q2
+    title: Access for ${Q2_SA}
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - id: q2-can-read
+        description: ${Q2_SA} can get, list and watch ${Q2_RESOURCE} in ${Q2_NS}
+        type: kubectl
+        run: for v in get list watch; do kubectl auth can-i $v ${Q2_RESOURCE} -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}; done | tr '\n' ' '
+        expect: { equals: yes yes yes }
+        weight: 2
+      - id: q2-cannot-write
+        description: ${Q2_SA} cannot create or delete ${Q2_RESOURCE}
+        type: kubectl
+        run: for v in create delete; do kubectl auth can-i $v ${Q2_RESOURCE} -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}; done | tr '\n' ' '
+        expect: { equals: no no }
+        weight: 1
+      - id: q2-namespaced
+        description: ${Q2_SA} cannot read ${Q2_RESOURCE} in other namespaces
+        type: kubectl
+        run: kubectl auth can-i list ${Q2_RESOURCE} -n default --as=system:serviceaccount:${Q2_NS}:${Q2_SA}
+        expect: { equals: no }
+        weight: 1
+      - id: q2-no-secrets
+        description: ${Q2_SA} cannot read secrets
+        type: kubectl
+        run: kubectl auth can-i get secrets -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}
+        expect: { equals: no }
+        weight: 1
+    hints:
+      - You need a ServiceAccount, a Role and a RoleBinding. kubectl create role --help and kubectl create rolebinding --help.
+  - id: q3
+    title: Frontend cannot reach ${Q3_APP}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+        lane: q3
+    checks:
+      - id: q3-reachable
+        description: client gets the nginx page from http://${Q3_APP}
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://${Q3_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q3-stranger-blocked
+        description: stranger still cannot reach ${Q3_APP}
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec stranger -- wget -qO- -T 3 http://${Q3_APP} >/dev/null 2>&1 && echo open || echo blocked
+        expect: { equals: blocked }
+        weight: 2
+      - id: q3-default-deny
+        description: default-deny still selects every Pod for ingress and egress
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get networkpolicy default-deny -o jsonpath='{.spec.podSelector.matchLabels}|{.spec.policyTypes[*]}|{.spec.ingress}{.spec.egress}'
+        expect: { equals: "|Ingress Egress|" }
+        weight: 1
+      - id: q3-ingress-rule
+        description: ${Q3_APP}-ingress allows role=frontend on port 80
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get networkpolicy ${Q3_APP}-ingress -o jsonpath='{.spec.ingress[0].from[0].podSelector.matchLabels.role} {.spec.ingress[0].ports[0].port}'
+        expect: { equals: frontend 80 }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q3_NS} get networkpolicy, then kubectl -n ${Q3_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?"
+      - "Separate DNS from the connection: kubectl -n ${Q3_NS} exec client -- nslookup ${Q3_APP}, then wget the Service IP or a Pod IP directly."
+      - "Compare every selector with the real labels: kubectl -n ${Q3_NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns."
+      - A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.

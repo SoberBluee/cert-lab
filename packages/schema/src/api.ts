@@ -17,6 +17,7 @@ export interface ScenarioSummary {
   id: string;
   title: string;
   domain: Domain;
+  track: LessonTrack;
   difficulty: number;
   estimatedMinutes: number;
   points: number;

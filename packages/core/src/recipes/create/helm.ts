@@ -233,7 +233,7 @@ const valuesFile: Addon = {
   name: 'Values file',
   description: 'Keep the release values in a file and install with -f.',
   points: 2,
-  fields: [nameField('OWNER', 'Owner annotation', ['team-a', 'team-b', 'platform'])],
+  fields: [nameField('OWNER', 'Owner annotation', ['team-a', 'team-b', 'platform', 'sre', 'devops', 'product', 'security', 'finance', 'infra', 'oncall'])],
   apply(ctx, { OWNER }) {
     const file = `/opt/course/helm/${ctx.v.REL}-values.yaml`;
     ctx.bullets.push(
@@ -348,8 +348,8 @@ export const helmBuilder: Builder = {
   points: 3,
   tags: ['helm'],
   fields: [
-    nsField(['apps', 'web', 'tools']),
-    nameField('REL', 'Release name', ['frontend', 'shop', 'portal']),
+    nsField(['apps', 'web', 'tools', 'charts', 'releases', 'helm-lab', 'deployments', 'services', 'platform', 'demo']),
+    nameField('REL', 'Release name', ['frontend', 'shop', 'portal', 'api', 'backend', 'gateway', 'dashboard', 'console', 'admin', 'store']),
     selectField('VERSION', 'Chart version', ['1.0.0', '1.1.0'], { randomizeByDefault: true }),
   ],
   addons: [replicas, nodePort, valuesFile, repoUrl],

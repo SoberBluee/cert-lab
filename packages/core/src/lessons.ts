@@ -68,6 +68,7 @@ export function lessonScenario(l: LoadedLesson): LoadedScenario {
       id: LEARN_PREFIX + l.def.id,
       title: l.def.title,
       domain: 'cluster-architecture',
+      track: l.def.track,
       difficulty: 1,
       estimatedMinutes: l.def.estimatedMinutes,
       points: 1,

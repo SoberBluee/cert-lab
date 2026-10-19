@@ -20,6 +20,11 @@ export interface Fault {
   nodeFix?: string;
   /** Controlplane, after the fix: waits for recovery so grading is fair. Left out of solution.md. */
   wait?: string;
+  /**
+   * Breaks something shared (e.g. kube-proxy). In a multi-question lab the question is staged and
+   * fixed like a disruptive category, so other questions are not verified while it is still broken.
+   */
+  disruptive?: boolean;
   /** Solution text: what was wrong and how to spot it. */
   explain: string;
 }

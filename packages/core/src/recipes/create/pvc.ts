@@ -41,7 +41,7 @@ const selector: Addon = {
   description: 'Two PVs fit; the claim must select the right one by label.',
   points: 1,
   conflicts: ['volume-name'],
-  fields: [nameField('TIER', 'Value of the tier label', ['premium', 'standard', 'backup'])],
+  fields: [nameField('TIER', 'Value of the tier label', ['premium', 'standard', 'backup', 'gold', 'silver', 'bronze', 'fast', 'cold', 'archive', 'hot'])],
   apply(ctx, { TIER }) {
     const { NAME } = ctx.v;
     decoy(ctx, true);
@@ -98,7 +98,7 @@ const consumerPod: Addon = {
       type: 'text',
       default: '/data',
       pattern: '^/[A-Za-z0-9._/-]+$',
-      pool: ['/data', '/srv/app', '/var/lib/app'],
+      pool: ['/data', '/srv/app', '/var/lib/app', '/mnt/data', '/opt/app/data', '/var/storage', '/home/app/data', '/storage', '/var/lib/data', '/mnt/vol'],
     },
     {
       key: 'MODE',
@@ -262,8 +262,8 @@ export const pvcBuilder: Builder = {
   points: 3,
   tags: ['pvc', 'pv'],
   fields: [
-    nsField(['billing', 'orders-app', 'photo-lib']),
-    nameField('NAME', 'Claim name', ['orders', 'invoices', 'photos'], 'The prepared PV is <claim>-pv.'),
+    nsField(['billing', 'orders-app', 'photo-lib', 'storage', 'data-lab', 'persist', 'media', 'files', 'volumes', 'claims']),
+    nameField('NAME', 'Claim name', ['orders', 'invoices', 'photos', 'uploads', 'archive', 'assets', 'db-data', 'cache', 'logs', 'scratch'], 'The prepared PV is <claim>-pv.'),
     selectField('SIZE', 'Requested size', ['100Mi', '500Mi', '1Gi']),
     selectField('ACCESS', 'Access mode', ['ReadWriteOnce', 'ReadWriteMany']),
   ],

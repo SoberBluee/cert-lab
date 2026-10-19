@@ -28,8 +28,8 @@ export const storageCategory: FaultCategory = {
   points: 5,
   tags: ['troubleshooting', 'pvc', 'pv', 'storageclass'],
   fields: [
-    nsField(['files', 'backups', 'media-store']),
-    nameField('CLAIM', 'Claim name', ['archive', 'assets', 'cache-data'], 'The PV is <claim>-pv and the Pod <claim>-app.'),
+    nsField(['files', 'backups', 'media-store', 'storage', 'volumes', 'data-lab', 'persist', 'blobs', 'objects', 'disk']),
+    nameField('CLAIM', 'Claim name', ['archive', 'assets', 'cache-data', 'uploads', 'snapshots', 'media', 'logs-vol', 'db-data', 'scratch', 'shared'], 'The PV is <claim>-pv and the Pod <claim>-app.'),
   ],
   shell: ({ NS, CLAIM }) => ({
     title: `Pod ${CLAIM}-app stuck`,

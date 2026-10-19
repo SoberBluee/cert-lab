@@ -32,7 +32,10 @@ export const rbacCategory: FaultCategory = {
   points: 6,
   tags: ['troubleshooting', 'rbac', 'serviceaccount', 'role', 'rolebinding'],
   settleSeconds: 30,
-  fields: [nsField(['monitoring', 'audit', 'reports']), nameField('APP', 'Deployment name', ['inventory', 'watcher', 'auditor'])],
+  fields: [
+    nsField(['monitoring', 'audit', 'reports', 'observe', 'security', 'compliance', 'metrics', 'logging', 'ops', 'sre']),
+    nameField('APP', 'Deployment name', ['inventory', 'watcher', 'auditor', 'scanner', 'collector', 'reporter', 'agent', 'probe', 'sentinel', 'inspector']),
+  ],
   shell: ({ NS, APP }) => ({
     title: `${APP} cannot list Pods`,
     text: `Deployment \`${APP}\` in namespace \`${NS}\` calls the Kubernetes API every few seconds to list the Pods of its namespace, and logs the HTTP status of each call. It used to log \`200\`; now it does not.

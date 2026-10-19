@@ -168,6 +168,7 @@ export function toSummary(s: LoadedScenario, stats?: ScenarioStats): ScenarioSum
     id: d.id,
     title: d.title,
     domain: d.domain,
+    track: d.track,
     difficulty: d.difficulty,
     estimatedMinutes: d.estimatedMinutes,
     points: d.points,

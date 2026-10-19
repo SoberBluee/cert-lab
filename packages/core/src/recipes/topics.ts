@@ -64,6 +64,12 @@ export const labTopics = (): LabTopic[] => {
     trouble('trouble-cronjobs', 'Jobs and CronJobs', [{ id: 'cronjobs' }]),
     trouble('trouble-storage', 'Storage', [{ id: 'storage' }]),
     trouble('trouble-nodeconfig', 'Worker node configuration', [{ id: 'nodeconfig' }]),
+    trouble('trouble-apiserver', 'API server', [
+      { id: 'controlplane', faults: faultsStarting('controlplane', 'apiserver-') },
+      { id: 'apiaccess', faults: faultsStarting('apiaccess', 'apiserver-') },
+    ]),
+    trouble('trouble-etcd', 'etcd', [{ id: 'controlplane', faults: faultsStarting('controlplane', 'etcd-') }]),
+    trouble('trouble-scheduler', 'Scheduler', [{ id: 'controlplane', faults: faultsStarting('controlplane', 'scheduler-') }]),
     trouble('trouble-controlplane', 'Control plane', [{ id: 'controlplane' }]),
     trouble('trouble-apiaccess', 'API access', [{ id: 'apiaccess' }]),
     trouble('trouble-webhooks', 'Admission webhooks', [{ id: 'webhooks' }]),

@@ -23,7 +23,10 @@ const expose: Addon = {
   name: 'Expose with a Service',
   description: 'A Service in front of the Deployment, ClusterIP or NodePort, on a chosen port.',
   points: 3,
-  fields: [numberField('PORT', 'Service port', ['80', '8080', '3000'], 1, 65535), selectField('TYPE', 'Service type', ['ClusterIP', 'NodePort'])],
+  fields: [
+    numberField('PORT', 'Service port', ['80', '8080', '3000', '8000', '8443', '9090', '5000', '4000'], 1, 65535),
+    selectField('TYPE', 'Service type', ['ClusterIP', 'NodePort']),
+  ],
   apply(ctx, { PORT, TYPE }) {
     const { NAME } = ctx.v;
     addPort(ctx);
@@ -86,7 +89,7 @@ const ingress: Addon = {
   description: 'An Ingress of class traefik that routes a host to the Service.',
   points: 3,
   requires: ['expose'],
-  fields: [subField(['www', 'shop', 'app'])],
+  fields: [subField(['www', 'shop', 'app', 'web', 'store', 'portal', 'site', 'home', 'public', 'ui'])],
   apply(ctx, { SUB }) {
     const { name, port } = ctx.service!;
     const host = `${SUB}.${ctx.ns}.lab`;
@@ -126,7 +129,7 @@ const httpRoute: Addon = {
   description: 'A Gateway API HTTPRoute on the shared traefik-gateway that routes a host to the Service.',
   points: 3,
   requires: ['expose'],
-  fields: [subField(['api', 'edge', 'gw'])],
+  fields: [subField(['api', 'edge', 'gw', 'svc', 'backend', 'gateway', 'proxy', 'ingress', 'route', 'mesh'])],
   apply(ctx, { SUB }) {
     const { name, port } = ctx.service!;
     const host = `${SUB}.${ctx.ns}.lab`;
@@ -216,7 +219,10 @@ const nodeSelector: Addon = {
   description: 'One worker gets a disk label and every Pod must select it.',
   points: 2,
   conflicts: ['toleration', 'spread'],
-  fields: [nameField('DISK', 'Value of the disk label', ['ssd', 'nvme', 'fast']), selectField('NODE', 'Labelled worker', NODES, { randomizeByDefault: true })],
+  fields: [
+    nameField('DISK', 'Value of the disk label', ['ssd', 'nvme', 'fast', 'hdd', 'raid', 'local', 'premium', 'standard']),
+    selectField('NODE', 'Labelled worker', NODES, { randomizeByDefault: true }),
+  ],
   apply(ctx, { DISK, NODE }) {
     ctx.setup.push(`kubectl label node "${NODE}" disk="${DISK}" --overwrite`);
     ctx.podSpec().nodeSelector = { disk: DISK };
@@ -251,7 +257,7 @@ const toleration: Addon = {
   points: 3,
   conflicts: ['node-selector', 'spread'],
   fields: [
-    nameField('TEAM', 'Value of the dedicated taint', ['web', 'payments', 'search']),
+    nameField('TEAM', 'Value of the dedicated taint', ['web', 'payments', 'search', 'batch', 'gpu', 'ml', 'database', 'frontend', 'backend', 'analytics']),
     selectField('NODE', 'Tainted worker', NODES, { randomizeByDefault: true }),
   ],
   apply(ctx, { TEAM, NODE }) {
@@ -410,7 +416,8 @@ const migrateToHttpRoute: FollowUp = {
   key: 'MIGRATE',
   name: 'Replace Ingress with HTTPRoute',
   description: 'After publishing with an Ingress, migrate the same host to an HTTPRoute and delete the Ingress.',
-  points: 3,
+  // Net check weight vs Ingress alone: drop ingress-spec+reachable (3), add gone+route+reachable (5) → +2.
+  points: 2,
   requires: ['ingress'],
   conflicts: ['httproute'],
   replacesChecks: ['ingress-spec', 'ingress-reachable'],
@@ -504,7 +511,8 @@ const rollback: FollowUp = {
 };
 
 const HTML_DIR = '/usr/share/nginx/html';
-const textField = () => nameField('TEXT', 'Page content (one word)', ['welcome-shop', 'hello-cka', 'v1-ready']);
+const textField = () =>
+  nameField('TEXT', 'Page content (one word)', ['welcome-shop', 'hello-cka', 'v1-ready', 'ok-live', 'health-ok', 'deployed', 'canary-pass', 'green', 'stable', 'shipped']);
 
 const contentCheck = (ctx: CreateCtx, text: string) => ({
   id: 'html-content',
@@ -641,7 +649,7 @@ const serviceAccount: Addon = {
   name: 'Own ServiceAccount, no token',
   description: 'The Pods run as a dedicated ServiceAccount without an API token mounted.',
   points: 2,
-  fields: [nameField('SA', 'ServiceAccount name', ['web-runner', 'app-identity', 'deploy-bot'])],
+  fields: [nameField('SA', 'ServiceAccount name', ['web-runner', 'app-identity', 'deploy-bot', 'workload-sa', 'pod-runner', 'ci-bot', 'runtime-sa', 'service-sa', 'app-sa', 'job-runner'])],
   apply(ctx, { SA }) {
     ctx.manifests.unshift({ apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: SA, namespace: ctx.ns } });
     const spec = ctx.podSpec();
@@ -678,7 +686,7 @@ const priorityClass: Addon = {
   description: 'A PriorityClass is created and the Pods use it.',
   points: 2,
   fields: [
-    nameField('CLASS', 'PriorityClass name', ['high-priority', 'critical-apps', 'batch-low']),
+    nameField('CLASS', 'PriorityClass name', ['high-priority', 'critical-apps', 'batch-low', 'system-critical', 'platform-high', 'user-medium', 'best-effort', 'guaranteed', 'latency-sensitive', 'background']),
     numberField('VALUE', 'Priority value', ['1000', '10000', '100000'], 1, 1000000000, { randomizeByDefault: true }),
   ],
   apply(ctx, { CLASS, VALUE }) {
@@ -790,8 +798,23 @@ const setEnv: FollowUp = {
   description: 'After creating it, add an environment variable, which rolls out new Pods.',
   points: 2,
   fields: [
-    { key: 'KEY', label: 'Variable name', type: 'text', default: 'APP_COLOR', pattern: '^[A-Z][A-Z0-9_]*$', pool: ['APP_COLOR', 'FEATURE_FLAG', 'TZ'] },
-    { key: 'VALUE', label: 'Value', type: 'text', default: 'blue', pattern: '^[A-Za-z0-9._-]+$', pool: ['blue', 'on', 'UTC'], randomizeByDefault: true },
+    {
+      key: 'KEY',
+      label: 'Variable name',
+      type: 'text',
+      default: 'APP_COLOR',
+      pattern: '^[A-Z][A-Z0-9_]*$',
+      pool: ['APP_COLOR', 'FEATURE_FLAG', 'TZ', 'LOG_LEVEL', 'REGION', 'MODE', 'ENV_NAME', 'CLUSTER', 'STAGE', 'ROLE'],
+    },
+    {
+      key: 'VALUE',
+      label: 'Value',
+      type: 'text',
+      default: 'blue',
+      pattern: '^[A-Za-z0-9._-]+$',
+      pool: ['blue', 'on', 'UTC', 'debug', 'eu-west', 'prod', 'staging', 'canary', 'primary', 'worker'],
+      randomizeByDefault: true,
+    },
   ],
   apply(ctx, { KEY, VALUE }) {
     const { NAME } = ctx.v;
@@ -853,7 +876,20 @@ const changeCause: FollowUp = {
   description: 'After the update, record why it happened in the rollout history.',
   points: 2,
   requires: ['update-image'],
-  fields: [nameField('CAUSE', 'Change cause (one word)', ['upgrade-nginx', 'security-patch', 'cve-fix'])],
+  fields: [
+    nameField('CAUSE', 'Change cause (one word)', [
+      'upgrade-nginx',
+      'security-patch',
+      'cve-fix',
+      'image-bump',
+      'config-reload',
+      'rollback-prep',
+      'scale-event',
+      'probe-tune',
+      'resource-bump',
+      'cert-rotate',
+    ]),
+  ],
   apply(ctx, { CAUSE }) {
     const { NAME } = ctx.v;
     ctx.steps.push(`Then record \`${CAUSE}\` as the change cause of the current revision of \`${NAME}\`, so it shows in \`kubectl rollout history\`.`);
@@ -920,8 +956,8 @@ export const deploymentBuilder: Builder = {
   points: 3,
   tags: ['deployment'],
   fields: [
-    nsField(['web', 'shop', 'team-a']),
-    nameField('NAME', 'Deployment name', ['frontend', 'api', 'catalog']),
+    nsField(['web', 'shop', 'team-a', 'frontend', 'store', 'apps', 'services', 'prod-web', 'edge', 'portal']),
+    nameField('NAME', 'Deployment name', ['frontend', 'api', 'catalog', 'backend', 'gateway', 'cart', 'search', 'auth', 'payments', 'inventory']),
     selectField('IMAGE', 'Image', BASE_IMAGES),
     replicasField('Replicas', ['2', '3', '4'], '3'),
   ],

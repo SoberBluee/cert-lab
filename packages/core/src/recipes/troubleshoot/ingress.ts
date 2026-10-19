@@ -33,7 +33,10 @@ export const ingressCategory: FaultCategory = {
   points: 7,
   tags: ['troubleshooting', 'ingress', 'gateway-api', 'httproute'],
   settleSeconds: 20,
-  fields: [nsField(['shop', 'media', 'portal']), nameField('APP', 'Deployment, Service, Ingress and HTTPRoute name', ['web', 'store', 'blog'])],
+  fields: [
+    nsField(['shop', 'media', 'portal', 'storefront', 'edge', 'cdn', 'public', 'www', 'gateway', 'ingress-lab']),
+    nameField('APP', 'Deployment, Service, Ingress and HTTPRoute name', ['web', 'store', 'blog', 'shop', 'api', 'assets', 'docs', 'portal', 'landing', 'media']),
+  ],
   shell: ({ NS, APP }) => {
     const www = `www.${NS}.lab`;
     const api = `api.${NS}.lab`;

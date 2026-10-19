@@ -105,8 +105,8 @@ export const rbacBuilder: Builder = {
   points: 5,
   tags: ['rbac', 'serviceaccount', 'role', 'auth-can-i'],
   fields: [
-    nsField(['monitoring', 'audit', 'support']),
-    nameField('SA', 'ServiceAccount', ['viewer', 'auditor', 'observer']),
+    nsField(['monitoring', 'audit', 'support', 'security', 'observe', 'compliance', 'ops', 'sre', 'readonly', 'access']),
+    nameField('SA', 'ServiceAccount', ['viewer', 'auditor', 'observer', 'reader', 'inspector', 'reporter', 'scanner', 'agent', 'probe', 'watcher']),
     selectField('RESOURCE', 'Resource it may read', RESOURCES, {
       randomizeByDefault: true,
     }),
