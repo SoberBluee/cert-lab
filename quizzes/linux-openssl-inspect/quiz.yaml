@@ -1,0 +1,110 @@
+id: linux-openssl-inspect
+title: openssl Q&A — spot the right command
+summary: Eight near-miss command sets on certificates in ~/pki-lab2. Every option looks almost right; only one flag, subcommand or file makes it correct. The correct option is shuffled into a random position on every quiz.
+track: linux
+topic: quiz-linux-openssl
+estimatedMinutes: 8
+questions:
+  - id: subject-issuer
+    prompt: |
+      You want **only** the subject and issuer of `~/pki-lab2/server.crt`, nothing else. Which command?
+    choices:
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -subject -issuer`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -subject -issuer`"
+      - "`openssl req -in ~/pki-lab2/server.crt -noout -subject -issuer`"
+      - "`openssl verify -CAfile ~/pki-lab2/ca.crt ~/pki-lab2/server.crt -subject -issuer`"
+      - "`openssl x509 -in ~/pki-lab2/ca.crt -noout -subject -issuer`"
+    answer: 0
+    explain: |
+      `openssl x509` reads certificates; `-noout` suppresses the encoded certificate so only the requested fields print. `openssl req` reads CSRs, not certificates, and the last option reads the CA's certificate, not the server's.
+
+  - id: checkend
+    prompt: |
+      A script must fail (non-zero exit) if `server.crt` expires within the next 24 hours. Which command?
+    choices:
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -enddate`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -dates`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -checkend 24`"
+      - "`openssl verify -CAfile ~/pki-lab2/ca.crt -checkend 86400 ~/pki-lab2/server.crt`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -checkend 86400`"
+    answer: 4
+    explain: |
+      `-checkend` takes **seconds**: 24 hours is 86400, and it exits non-zero when the certificate expires inside that window. `-enddate`/`-dates` only print dates, `-checkend 24` tests the next 24 seconds, and `verify` has no `-checkend` flag.
+
+  - id: san
+    prompt: |
+      A client rejects `server.crt` as "not valid for api.lab". Which command shows the names the certificate is actually valid for?
+    choices:
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -subject`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -ext basicConstraints`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -ext subjectAltName`"
+      - "`openssl req -in ~/pki-lab2/server.crt -noout -ext subjectAltName`"
+      - "`openssl x509 -in ~/pki-lab2/ca.crt -noout -ext subjectAltName`"
+    answer: 2
+    explain: |
+      The `subjectAltName` extension of the **certificate** lists the valid DNS names and IPs. The subject's CN alone no longer counts, `basicConstraints` says whether it is a CA, and the CSR (`req`) only shows what was *asked* for — the CA may not have copied it into the certificate.
+
+  - id: ec-key-match
+    prompt: |
+      `server.key` is an EC key. Which pair of commands proves it belongs to `server.crt`?
+    choices:
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -fingerprint | md5sum` and `openssl pkey -in ~/pki-lab2/server.key -pubout | md5sum`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -modulus | md5sum` and `openssl rsa -in ~/pki-lab2/server.key -noout -modulus | md5sum`"
+      - "`openssl verify -CAfile ~/pki-lab2/server.crt ~/pki-lab2/server.key`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -noout -pubkey | md5sum` and `openssl pkey -in ~/pki-lab2/server.key -pubout | md5sum`"
+      - "`openssl pkey -in ~/pki-lab2/server.crt -pubout | md5sum` and `openssl x509 -in ~/pki-lab2/server.key -noout -pubkey | md5sum`"
+    answer: 3
+    explain: |
+      EC keys have no RSA modulus, so compare public keys: the certificate's `-pubkey` against the key's `-pubout`. Equal hashes mean a pair. `verify` checks a CA signature chain, and a certificate fingerprint hashes the whole certificate, not just its key.
+
+  - id: der-convert
+    prompt: |
+      Another tool needs `server.crt` in binary DER form as `server.der`. Which command?
+    choices:
+      - "`openssl x509 -in ~/pki-lab2/server.crt -outform DER -out ~/pki-lab2/server.der`"
+      - "`openssl x509 -inform DER -in ~/pki-lab2/server.crt -out ~/pki-lab2/server.der`"
+      - "`openssl pkcs12 -export -in ~/pki-lab2/server.crt -out ~/pki-lab2/server.der`"
+      - "`openssl x509 -in ~/pki-lab2/server.crt -outform PEM -out ~/pki-lab2/server.der`"
+      - "`base64 -d ~/pki-lab2/server.crt > ~/pki-lab2/server.der`"
+    answer: 0
+    explain: |
+      `-outform DER` controls the output encoding. `-inform DER` would claim the *input* is already DER, `-outform PEM` just rewrites the same text, and hand-running `base64 -d` over a PEM file trips over its header and footer lines.
+
+  - id: verify-chain
+    prompt: |
+      Which command checks that `server.crt` was really signed by the CA in `~/pki-lab2/ca.crt`?
+    choices:
+      - "`openssl x509 -in ~/pki-lab2/server.crt -CA ~/pki-lab2/ca.crt -noout -verify`"
+      - "`openssl verify ~/pki-lab2/server.crt`"
+      - "`openssl verify -CAfile ~/pki-lab2/server.crt ~/pki-lab2/ca.crt`"
+      - "`openssl verify -CAfile ~/pki-lab2/ca.crt ~/pki-lab2/server.crt`"
+      - "`openssl s_client -connect ~/pki-lab2/ca.crt ~/pki-lab2/server.crt`"
+    answer: 3
+    explain: |
+      `openssl verify -CAfile <trust anchor> <certificate>`: the CA file is the anchor, the server certificate is what gets checked, and the answer is `server.crt: OK`. Swapping the two files verifies the self-signed CA against the server certificate instead and fails.
+
+  - id: csr-subject
+    prompt: |
+      Before signing `server.csr`, you want to see who it asks to be. Which command?
+    choices:
+      - "`openssl x509 -in ~/pki-lab2/server.csr -noout -subject`"
+      - "`openssl req -in ~/pki-lab2/server.crt -noout -subject`"
+      - "`openssl req -in ~/pki-lab2/server.csr -noout -subject`"
+      - "`openssl req -in ~/pki-lab2/server.key -noout -subject`"
+      - "`openssl x509 -req -in ~/pki-lab2/server.csr -noout -subject`"
+    answer: 2
+    explain: |
+      CSRs are read with `openssl req`, certificates with `openssl x509`. Point either at the wrong file type — or at the private key — and it fails to parse. Always read the CSR's subject (and SANs) before signing it.
+
+  - id: p12-extract
+    prompt: |
+      You have `server.p12` (password `lab123`) and need just the client certificate back out as PEM. Which command?
+    choices:
+      - "`openssl pkcs12 -export -in ~/pki-lab2/server.p12 -passin pass:lab123 -nokeys -out ~/pki-lab2/from-p12.crt`"
+      - "`openssl pkcs12 -in ~/pki-lab2/server.p12 -passin pass:lab123 -nocerts -out ~/pki-lab2/from-p12.crt`"
+      - "`openssl pkcs12 -in ~/pki-lab2/server.p12 -passin pass:wrong -nokeys -clcerts -out ~/pki-lab2/from-p12.crt`"
+      - "`openssl x509 -in ~/pki-lab2/server.p12 -passin pass:lab123 -nokeys -out ~/pki-lab2/from-p12.crt`"
+      - "`openssl pkcs12 -in ~/pki-lab2/server.p12 -passin pass:lab123 -nokeys -clcerts -out ~/pki-lab2/from-p12.crt`"
+    answer: 4
+    explain: |
+      Reading a bundle takes `openssl pkcs12` **without** `-export` (that creates one); `-nokeys` keeps the private key out, `-clcerts` keeps only the client certificate. `-nocerts` does the opposite, and the wrong password fails before anything is written.

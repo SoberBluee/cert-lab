@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import type { QuizGradeItem, QuizGradeResult } from '@cka/schema';
 import { api } from '../api';
 import { Button, ErrorBanner, Markdown } from '../components/ui';
+import { SECTIONS } from '../section';
 
 type Progress = {
   index: number;
@@ -115,6 +116,8 @@ export function QuizPage() {
     return { correct: items.filter((i) => i.correct).length, total: questions.length };
   }, [progress.graded, questions.length]);
 
+  const learnPath = `${SECTIONS[quiz.data?.track ?? 'cka'].base}/learn` || '/learn';
+
   const retry = () => {
     setProgress({
       index: 0,
@@ -130,7 +133,7 @@ export function QuizPage() {
     return (
       <div className="mx-auto max-w-2xl space-y-4 p-6">
         <ErrorBanner error={quiz.error ?? new Error('Quiz not found')} />
-        <Link to="/learn" className="text-sm text-sky-400 hover:text-sky-300">
+        <Link to={learnPath} className="text-sm text-sky-400 hover:text-sky-300">
           ← Back to Learn
         </Link>
       </div>
@@ -140,7 +143,7 @@ export function QuizPage() {
   if (progress.finished || (questions.length > 0 && Object.keys(progress.graded).length >= questions.length && progress.index >= questions.length)) {
     return (
       <div className="mx-auto max-w-2xl space-y-6 p-6">
-        <Link to="/learn" className="text-sm text-sky-400 hover:text-sky-300">
+        <Link to={learnPath} className="text-sm text-sky-400 hover:text-sky-300">
           ← Back to Learn
         </Link>
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-6">
@@ -154,7 +157,7 @@ export function QuizPage() {
             <Button variant="primary" onClick={retry}>
               Retry
             </Button>
-            <Link to="/learn">
+            <Link to={learnPath}>
               <Button>Back to Learn</Button>
             </Link>
           </div>
@@ -192,7 +195,7 @@ export function QuizPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6">
       <div className="flex flex-wrap items-center gap-3">
-        <Link to="/learn" className="text-sm text-sky-400 hover:text-sky-300">
+        <Link to={learnPath} className="text-sm text-sky-400 hover:text-sky-300">
           ← Back to Learn
         </Link>
         <span className="text-xs text-zinc-500">

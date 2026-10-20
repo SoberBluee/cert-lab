@@ -9,6 +9,7 @@ import { SessionPage } from '../pages/SessionPage';
 import { LinuxStudioPage } from './LinuxStudioPage';
 
 const QuickCreatePage = lazy(() => import('../pages/QuickCreatePage').then((m) => ({ default: m.QuickCreatePage })));
+const QuizPage = lazy(() => import('../pages/QuizPage').then((m) => ({ default: m.QuizPage })));
 
 const NAV: NavItem[] = [
   { to: '/linux/scenarios', label: 'Scenarios' },
@@ -38,6 +39,14 @@ export function LinuxApp() {
       <Routes>
         <Route index element={<Navigate to="learn" replace />} />
         <Route path="learn" element={<LearnPage track="linux" />} />
+        <Route
+          path="learn/quiz/:id"
+          element={
+            <Suspense fallback={<div className="p-5 text-sm text-zinc-500">Loading…</div>}>
+              <QuizPage />
+            </Suspense>
+          }
+        />
         <Route path="session" element={<SessionPage />} />
         <Route path="scenarios" element={<BrowserPage track="linux" />} />
         <Route path="playground" element={<ComingSoon title="Playground" />} />

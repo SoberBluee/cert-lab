@@ -14,6 +14,7 @@ const QUIZ_TOPIC_META: Record<QuizTopic, { name: string; blurb: string }> = {
   'quiz-workloads': { name: 'Workloads', blurb: 'probes, rollouts, Jobs and scheduling' },
   'quiz-networking': { name: 'Services and networking', blurb: 'Service, DNS, NetworkPolicy, Ingress and HTTPRoute' },
   'quiz-storage-rbac': { name: 'Storage and RBAC', blurb: 'PVC binding, access modes, reclaim, Role versus ClusterRole' },
+  'quiz-linux-openssl': { name: 'openssl Q&A', blurb: 'Near-identical commands: pick the one flag or subcommand that makes it right' },
 };
 
 const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
@@ -128,7 +129,9 @@ export function LearnPage({ track }: { track: LessonTrack }) {
           <div>
             <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">Quick drills</h2>
             <p className="mt-1 text-xs text-zinc-500">
-              Offline multiple choice: error messages, cluster paths, workloads, services and networking, storage and RBAC. No VMs — pick an answer and learn where to look next.
+              {track === 'linux'
+                ? 'Offline multiple choice — no VMs. Near-identical options: pick the command that is exactly right, then read why the others miss.'
+                : 'Offline multiple choice: error messages, cluster paths, workloads, services and networking, storage and RBAC. No VMs — pick an answer and learn where to look next.'}
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">

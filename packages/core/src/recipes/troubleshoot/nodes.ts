@@ -127,6 +127,7 @@ kubectl -n "${NS}" rollout status daemonset/node-probe --timeout=240s`,
       'On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50.',
       'systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.',
       `journalctl -u kubelet shows why it exits or cannot register. Its config is ${KUBELET_CONFIG}, its kubeconfig ${KUBELET_CONF}, and extra flags come from /etc/default/kubelet.`,
+      'If a node file turns out to be missing or corrupt, you rarely have to write it from scratch: every worker is built the same, so compare with the healthy worker (ls /etc/cni/net.d, diff the kubelet and containerd configs) and copy the good version across. Also look around the broken node (ls /root, and the directory the file lives in) for a backup copy.',
     ],
   }),
   faults: ({ NS, NODE }, state) => [
@@ -253,7 +254,7 @@ systemctl restart containerd
 systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain:
-        'The Calico network config (`10-calico.conflist`) is gone from `/etc/cni/net.d`. containerd reports the network as not ready, so the node turns `NotReady` with "container runtime network not ready ... cni plugin not initialized" (`kubectl describe node`, `journalctl -u kubelet`). `ls /etc/cni/net.d` is empty; a copy of the file sits in `/root/cni-backup` (or copy it from a healthy worker). Put it back, then restart containerd and the kubelet.',
+        'The Calico network config (`10-calico.conflist`) is gone from `/etc/cni/net.d`. containerd reports the network as not ready, so the node turns `NotReady` with "container runtime network not ready ... cni plugin not initialized" (`kubectl describe node`, `journalctl -u kubelet`). `ls /etc/cni/net.d` is empty. You do not have to recreate the file: every worker carries the same conflist, so copy it from the healthy worker — and looking around the broken node (`ls /root`) turns up a copy in `/root/cni-backup`. Put it back, then restart containerd and the kubelet.',
     },
     {
       id: 'containerd-config-invalid',
@@ -321,7 +322,7 @@ systemctl restart containerd
 systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain:
-        'A file still sits in `/etc/cni/net.d`, but it is truncated / invalid JSON (and names a bogus plugin). The runtime network never becomes ready and the node turns `NotReady`. A good copy is at `/root/cni-conflist.cka-bak` (or on a healthy worker). Restore the conflist, then restart containerd and the kubelet.',
+        'A file still sits in `/etc/cni/net.d`, but it is truncated / invalid JSON (and names a bogus plugin): `python3 -m json.tool <file>` fails to parse it, and the runtime network never becomes ready, so the node turns `NotReady`. You do not have to write a conflist from scratch: every worker carries the same one, so copy it from the healthy worker — and looking around the broken node (`ls /root`) turns up a backup at `/root/cni-conflist.cka-bak`. Restore the conflist, then restart containerd and the kubelet.',
     },
   ],
 };

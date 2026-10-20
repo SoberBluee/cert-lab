@@ -14,6 +14,7 @@ const QuizPage = lazy(() => import('./pages/QuizPage').then((m) => ({ default: m
 const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage').then((m) => ({ default: m.PlaygroundPage })));
 const StudioEditorPage = lazy(() => import('./pages/StudioEditorPage').then((m) => ({ default: m.StudioEditorPage })));
 const LinuxApp = lazy(() => import('./linux/LinuxApp').then((m) => ({ default: m.LinuxApp })));
+const SystemApp = lazy(() => import('./system/SystemApp').then((m) => ({ default: m.SystemApp })));
 const ComingSoonApp = lazy(() => import('./components/ComingSoonApp').then((m) => ({ default: m.ComingSoonApp })));
 
 /** Exam mode hides hints, docs, solutions and grading until a single submit at the end. */
@@ -116,6 +117,14 @@ export function App() {
         element={
           <Suspense fallback={shellFallback}>
             <ComingSoonApp section="docker" />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/system/*"
+        element={
+          <Suspense fallback={shellFallback}>
+            <SystemApp />
           </Suspense>
         }
       />

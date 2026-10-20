@@ -626,7 +626,7 @@ systemctl restart kubelet
 <!-- fault Q6_FAULT=cni-config-removed -->
 #### CNI configuration removed from the node (`cni-config-removed`)
 
-The Calico network config (`10-calico.conflist`) is gone from `/etc/cni/net.d`. containerd reports the network as not ready, so the node turns `NotReady` with "container runtime network not ready ... cni plugin not initialized" (`kubectl describe node`, `journalctl -u kubelet`). `ls /etc/cni/net.d` is empty; a copy of the file sits in `/root/cni-backup` (or copy it from a healthy worker). Put it back, then restart containerd and the kubelet.
+The Calico network config (`10-calico.conflist`) is gone from `/etc/cni/net.d`. containerd reports the network as not ready, so the node turns `NotReady` with "container runtime network not ready ... cni plugin not initialized" (`kubectl describe node`, `journalctl -u kubelet`). `ls /etc/cni/net.d` is empty. You do not have to recreate the file: every worker carries the same conflist, so copy it from the healthy worker — and looking around the broken node (`ls /root`) turns up a copy in `/root/cni-backup`. Put it back, then restart containerd and the kubelet.
 
 On the broken worker:
 

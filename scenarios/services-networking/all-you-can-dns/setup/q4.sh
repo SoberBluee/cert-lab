@@ -43,8 +43,8 @@ kubectl -n "${Q4_NS}" rollout status deployment/web --timeout=180s
 case "${Q4_FAULT}" in
   coredns-hosts-plugin)
     kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' > /tmp/cka-Corefile
-    python3 -c 'from pathlib import Path; t=Path("/tmp/cka-Corefile").read_text(); n="kubernetes cluster.local"; i="hosts {\n        127.0.0.1 web\n        fallthrough\n    }\n    "; Path("/tmp/cka-Corefile").write_text(t.replace(n, i+n, 1) if "hosts {" not in t else t)'
-    grep -q '127.0.0.1 web' /tmp/cka-Corefile || { echo "could not inject hosts plugin" >&2; exit 1; }
+    python3 -c 'import sys; from pathlib import Path; t=Path("/tmp/cka-Corefile").read_text(); n="kubernetes cluster.local"; i="hosts {\n        127.0.0.1 web." + sys.argv[1] + ".svc.cluster.local web.svc.cluster.local web.cluster.local web\n        fallthrough\n    }\n    "; Path("/tmp/cka-Corefile").write_text(t.replace(n, i+n, 1) if "hosts {" not in t else t)' "${Q4_NS}"
+    grep -q "127.0.0.1 web.${Q4_NS}.svc.cluster.local" /tmp/cka-Corefile || { echo "could not inject hosts plugin" >&2; exit 1; }
     kubectl -n kube-system create configmap coredns --from-file=Corefile=/tmp/cka-Corefile -o yaml --dry-run=client | kubectl -n kube-system apply -f - >/dev/null
     kubectl -n kube-system delete pod -l k8s-app=kube-dns --wait=false >/dev/null
     ;;

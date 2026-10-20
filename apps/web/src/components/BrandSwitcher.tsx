@@ -8,6 +8,7 @@ const BADGE: Record<Section, { className: string; label: string }> = {
   terraform: { className: 'bg-violet-700 text-white', label: 'tf' },
   aws: { className: 'bg-orange-600 text-white', label: 'aws' },
   docker: { className: 'bg-sky-700 text-white', label: 'dk' },
+  system: { className: 'bg-indigo-600 text-white', label: 'sys' },
 };
 
 function Badge({ section }: { section: Section }) {

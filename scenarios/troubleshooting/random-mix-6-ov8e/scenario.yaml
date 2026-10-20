@@ -343,3 +343,4 @@ tasks:
       - "On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50."
       - systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.
       - journalctl -u kubelet shows why it exits or cannot register. Its config is /var/lib/kubelet/config.yaml, its kubeconfig /etc/kubernetes/kubelet.conf, and extra flags come from /etc/default/kubelet.
+      - "If a node file turns out to be missing or corrupt, you rarely have to write it from scratch: every worker is built the same, so compare with the healthy worker (ls /etc/cni/net.d, diff the kubelet and containerd configs) and copy the good version across. Also look around the broken node (ls /root, and the directory the file lives in) for a backup copy."
