@@ -1,0 +1,79 @@
+id: node-swap-enabled
+title: Node (Swap Enabled)
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 10
+points: 6
+tags: [ troubleshooting, node, kubelet, containerd ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q1_NS: { oneOf: [ ops, infra, platform, cluster, nodes, kubelet-lab, workers, system, sre, fleet ] }
+  Q1_FAULT: { oneOf: [ kubelet-swap-on ], hidden: true }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+solution:
+  - node: worker-1
+    script: setup/q1-solution.sh
+  - node: worker-2
+    script: setup/q1-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: Unhealthy worker
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+      - node: worker-1
+        script: setup/q1-2.sh
+      - node: worker-2
+        script: setup/q1-3.sh
+      - node: controlplane
+        script: setup/q1-4.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-all-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | tr '\n' ' '
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 90
+      - id: q1-schedulable
+        description: no worker is cordoned or carries a NoSchedule taint
+        type: kubectl
+        run: kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.spec.unschedulable} {range .spec.taints[*]}{.key}={.effect} {end}{"\n"}{end}' | tr ' ' '\n' | grep -vE '^$|^dedicated=' | grep -cE 'true|NoSchedule|NoExecute' || true
+        expect: { equals: "0" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-services-worker-1
+        description: kubelet and containerd are running and enabled on worker-1
+        type: ssh
+        node: worker-1
+        run: echo $(systemctl is-active kubelet containerd) $(systemctl is-enabled kubelet containerd) | tr ' ' '\n' | sort -u | tr '\n' ' '
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q1-services-worker-2
+        description: kubelet and containerd are running and enabled on worker-2
+        type: ssh
+        node: worker-2
+        run: echo $(systemctl is-active kubelet containerd) $(systemctl is-enabled kubelet containerd) | tr ' ' '\n' | sort -u | tr '\n' ' '
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q1-probe
+        description: node-probe has a ready Pod on every worker
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get daemonset node-probe -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}/{.status.updatedNumberScheduled}'
+        expect: { equals: 2/2/2 }
+        weight: 1
+        retrySeconds: 90
+    hints:
+      - "kubectl get nodes, then kubectl describe node <node>: look at Conditions, Taints and Unschedulable."
+      - kubectl -n ${Q1_NS} get pods -o wide shows which worker is missing its probe Pod.
+      - "On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50."
+      - systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.
+      - journalctl -u kubelet shows why it exits or cannot register. Its config is /var/lib/kubelet/config.yaml, its kubeconfig /etc/kubernetes/kubelet.conf, and extra flags come from /etc/default/kubelet.
+      - "If a node file turns out to be missing or corrupt, you rarely have to write it from scratch: every worker is built the same, so compare with the healthy worker (ls /etc/cni/net.d, diff the kubelet and containerd configs) and copy the good version across. Also look around the broken node (ls /root, and the directory the file lives in) for a backup copy."

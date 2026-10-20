@@ -1,0 +1,121 @@
+id: linux-openssl-certs
+title: openssl certificates in depth
+summary: Issue an EC server certificate with SANs, inspect its extensions, fingerprints and expiry, prove the key matches, convert PEM to DER, bundle it as PKCS#12, and read the API server's serving certificate.
+track: linux
+topic: openssl
+estimatedMinutes: 14
+setup:
+  - node: controlplane
+    run: |
+      rm -rf /home/ubuntu/pki-lab2
+      install -d -o ubuntu -g ubuntu /home/ubuntu/pki-lab2
+steps:
+  - id: ec-key
+    title: Generate an EC private key
+    explain: |
+      Modern certificates often use elliptic-curve keys instead of RSA. `openssl genpkey -algorithm EC` with curve `P-256` writes a small, fast key. Work in `~/pki-lab2`.
+    command: openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ~/pki-lab2/server.key
+    match: '^openssl genpkey\b.*server\.key'
+    check:
+      id: ec-key-valid
+      description: ~/pki-lab2/server.key is an EC private key
+      type: ssh
+      node: controlplane
+      run: "openssl pkey -in /home/ubuntu/pki-lab2/server.key -noout -text 2>/dev/null | grep -q 'NIST CURVE: P-256' && echo ok || echo missing"
+      expect: { equals: ok }
+  - id: csr-san
+    title: Ask for a certificate with SANs
+    explain: |
+      Browsers and Kubernetes clients do not trust the CN alone: the names must be in the **subjectAltName** extension. `-addext` adds it to the CSR for DNS names `api.lab` and `localhost`, plus IP `127.0.0.1`.
+    command: openssl req -new -key ~/pki-lab2/server.key -subj "/CN=api.lab" -addext "subjectAltName=DNS:api.lab,DNS:localhost,IP:127.0.0.1" -out ~/pki-lab2/server.csr
+    match: '^openssl req\b(?=.*-new)(?=.*server\.csr)'
+    check:
+      id: csr-san-present
+      description: the CSR requests DNS api.lab as a SAN
+      type: ssh
+      node: controlplane
+      run: openssl req -in /home/ubuntu/pki-lab2/server.csr -noout -text 2>/dev/null | grep -o 'DNS:api.lab' | head -1
+      expect: { equals: 'DNS:api.lab' }
+  - id: ca
+    title: Create a CA in one command
+    explain: |
+      `openssl req -x509 -newkey rsa:2048` generates the CA key and its self-signed certificate together. `-nodes` leaves the CA key unencrypted (fine for a lab, not for production).
+    command: openssl req -x509 -newkey rsa:2048 -keyout ~/pki-lab2/ca.key -out ~/pki-lab2/ca.crt -days 365 -nodes -subj "/CN=lab-ca-2"
+    match: '^openssl req\b(?=.*-x509)(?=.*ca\.crt)'
+    check:
+      id: ca-subject
+      description: ~/pki-lab2/ca.crt is a certificate for CN lab-ca-2
+      type: ssh
+      node: controlplane
+      run: openssl x509 -in /home/ubuntu/pki-lab2/ca.crt -noout -subject 2>/dev/null
+      expect: { matches: 'CN ?= ?lab-ca-2' }
+  - id: sign
+    title: Sign the CSR and keep the SANs
+    explain: |
+      `-copy_extensions copy` carries the SANs from the CSR into the certificate. Leave it out and the signed certificate silently loses them — a classic "certificate is not valid for this name" bug.
+    command: openssl x509 -req -in ~/pki-lab2/server.csr -CA ~/pki-lab2/ca.crt -CAkey ~/pki-lab2/ca.key -CAcreateserial -days 90 -copy_extensions copy -out ~/pki-lab2/server.crt
+    match: '^openssl x509\b(?=.*-req)(?=.*server\.crt)'
+    check:
+      id: cert-san-present
+      description: the signed certificate carries DNS api.lab
+      type: ssh
+      node: controlplane
+      run: openssl x509 -in /home/ubuntu/pki-lab2/server.crt -noout -ext subjectAltName 2>/dev/null | grep -o 'DNS:api.lab' | head -1
+      expect: { equals: 'DNS:api.lab' }
+  - id: inspect
+    title: Read SANs, dates and the fingerprint
+    explain: |
+      `-ext subjectAltName` prints just that extension, `-dates` the validity window, and `-fingerprint -sha256` the hash people compare out-of-band to confirm they are looking at the same certificate.
+    command: openssl x509 -in ~/pki-lab2/server.crt -noout -ext subjectAltName -dates -fingerprint -sha256
+    match: '^openssl x509\b(?=.*server\.crt)(?=.*-(ext|dates|fingerprint)\b)'
+  - id: verify-expiry
+    title: Verify the chain and test the expiry
+    explain: |
+      `openssl verify -CAfile <ca> <cert>` checks the signature chain. `openssl x509 -checkend <seconds>` exits non-zero if the certificate expires within that window — scripts use it to alarm before a certificate dies.
+    command: openssl x509 -in ~/pki-lab2/server.crt -noout -checkend 86400 && openssl verify -CAfile ~/pki-lab2/ca.crt ~/pki-lab2/server.crt
+    match: '^(openssl verify\b|openssl x509\b.*-checkend\b)'
+    check:
+      id: cert-verifies
+      description: the lab CA verifies server.crt
+      type: ssh
+      node: controlplane
+      run: openssl verify -CAfile /home/ubuntu/pki-lab2/ca.crt /home/ubuntu/pki-lab2/server.crt 2>&1
+      expect: { contains: 'server.crt: OK' }
+  - id: key-match
+    title: Prove the key belongs to the certificate
+    explain: |
+      EC keys have no RSA modulus to compare. Compare the **public key** instead: hash the certificate's public key and the key file's public half; identical hashes mean they are a pair.
+    command: openssl x509 -in ~/pki-lab2/server.crt -noout -pubkey | md5sum; openssl pkey -in ~/pki-lab2/server.key -pubout 2>/dev/null | md5sum
+    match: '^openssl (x509|pkey)\b.*-(pubkey|pubout)\b'
+  - id: der
+    title: Convert PEM to DER and read it back
+    explain: |
+      PEM is base64 text; DER is the binary form some tools want. `-outform DER` converts, and reading back needs `-inform DER` — forget it and openssl complains it cannot parse the file.
+    command: openssl x509 -in ~/pki-lab2/server.crt -outform DER -out ~/pki-lab2/server.der && openssl x509 -inform DER -in ~/pki-lab2/server.der -noout -subject
+    match: '^openssl x509\b.*(-outform DER|-inform DER)'
+    check:
+      id: der-subject
+      description: the DER copy still decodes to CN api.lab
+      type: ssh
+      node: controlplane
+      run: openssl x509 -inform DER -in /home/ubuntu/pki-lab2/server.der -noout -subject 2>/dev/null
+      expect: { matches: 'CN ?= ?api\.lab' }
+  - id: pkcs12
+    title: Bundle key, certificate and CA into PKCS#12
+    explain: |
+      A `.p12` file packages key + certificate + chain in one password-protected bundle — how many non-Kubernetes tools import identities. Export it, extract the certificate back out, and read it.
+    command: openssl pkcs12 -export -inkey ~/pki-lab2/server.key -in ~/pki-lab2/server.crt -certfile ~/pki-lab2/ca.crt -passout pass:lab123 -out ~/pki-lab2/server.p12 && openssl pkcs12 -in ~/pki-lab2/server.p12 -passin pass:lab123 -nokeys -clcerts -out ~/pki-lab2/from-p12.crt && openssl x509 -in ~/pki-lab2/from-p12.crt -noout -subject
+    match: '^openssl pkcs12\b'
+    check:
+      id: p12-roundtrip
+      description: the certificate extracted from the bundle is CN api.lab
+      type: ssh
+      node: controlplane
+      run: openssl x509 -in /home/ubuntu/pki-lab2/from-p12.crt -noout -subject 2>/dev/null
+      expect: { matches: 'CN ?= ?api\.lab' }
+  - id: apiserver-cert
+    title: Read the API server's serving certificate
+    explain: |
+      Finish on the real cluster: `s_client` fetches the certificate on port 6443. Compare its SANs and `notAfter` with your lab certificate — kubeadm put the API server's DNS names and IPs in the SANs exactly like step 2.
+    command: echo | openssl s_client -connect localhost:6443 2>/dev/null | openssl x509 -noout -subject -issuer -enddate -ext subjectAltName
+    match: 'openssl s_client\b.*-connect\s+\S+:6443'

@@ -13,7 +13,7 @@ function ComingSoon({ title }: { title: string }) {
 }
 
 /** Empty product shell: same tab names as CKA/Linux, every route is Coming soon. */
-export function ComingSoonApp({ section }: { section: Exclude<Section, 'cka' | 'linux'> }) {
+export function ComingSoonApp({ section }: { section: Exclude<Section, 'cka' | 'linux' | 'system'> }) {
   const base = SECTIONS[section].base;
   const nav: NavItem[] = [
     { to: `${base}/scenarios`, label: 'Scenarios' },

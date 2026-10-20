@@ -300,9 +300,12 @@ kubectl -n kube-system set image deployment/coredns coredns="$(sed -E 's/:[^:/]+
     {
       id: 'coredns-hosts-plugin',
       label: 'Corefile hosts plugin maps web to loopback',
+      // The client's resolver searches <ns>.svc.cluster.local first, so mapping only the bare
+      // name "web" never matches: the expanded name still resolves to the real Service.
+      // Map every name the resolver will try.
       break: `kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' > /tmp/cka-Corefile
-python3 -c 'from pathlib import Path; t=Path("/tmp/cka-Corefile").read_text(); n="kubernetes cluster.local"; i="hosts {\\n        127.0.0.1 web\\n        fallthrough\\n    }\\n    "; Path("/tmp/cka-Corefile").write_text(t.replace(n, i+n, 1) if "hosts {" not in t else t)'
-grep -q '127.0.0.1 web' /tmp/cka-Corefile || { echo "could not inject hosts plugin" >&2; exit 1; }
+python3 -c 'import sys; from pathlib import Path; t=Path("/tmp/cka-Corefile").read_text(); n="kubernetes cluster.local"; i="hosts {\\n        127.0.0.1 web." + sys.argv[1] + ".svc.cluster.local web.svc.cluster.local web.cluster.local web\\n        fallthrough\\n    }\\n    "; Path("/tmp/cka-Corefile").write_text(t.replace(n, i+n, 1) if "hosts {" not in t else t)' "${NS}"
+grep -q "127.0.0.1 web.${NS}.svc.cluster.local" /tmp/cka-Corefile || { echo "could not inject hosts plugin" >&2; exit 1; }
 kubectl -n kube-system create configmap coredns --from-file=Corefile=/tmp/cka-Corefile -o yaml --dry-run=client | kubectl -n kube-system apply -f - >/dev/null
 ${bounceCoreDns}`,
       fix: `kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' > /tmp/cka-Corefile
@@ -311,7 +314,7 @@ kubectl -n kube-system create configmap coredns --from-file=Corefile=/tmp/cka-Co
 ${restartCoreDns}`,
       wait: waitResolving(NS),
       explain:
-        'The Corefile injects a `hosts` block that maps `web` to `127.0.0.1`, so the short name resolves to the wrong address while CoreDNS stays Ready. Remove that `hosts` block from ConfigMap `coredns` and restart the Deployment.',
+        'The Corefile injects a `hosts` block that maps `web` — and the search-expanded names the resolver actually asks for first, such as `web.<namespace>.svc.cluster.local` — to `127.0.0.1`, so name resolution returns loopback instead of the Service IP while CoreDNS stays Ready. Remove that `hosts` block from ConfigMap `coredns` and restart the Deployment.',
     },
     {
       id: 'coredns-ready-port',

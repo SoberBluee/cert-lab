@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom';
  * Top-level product areas in the UI. Lesson tracks (`cka` | `linux`) stay a subset;
  * terraform / aws / docker are shells until they have content.
  */
-export type Section = 'cka' | 'linux' | 'terraform' | 'aws' | 'docker';
+export type Section = 'cka' | 'linux' | 'terraform' | 'aws' | 'docker' | 'system';
 
 export const SECTIONS: Record<Section, { name: string; base: string; home: string; blurb: string }> = {
   cka: { name: 'CKA Labs', base: '', home: '/', blurb: 'Kubernetes scenarios and drills' },
@@ -12,6 +12,7 @@ export const SECTIONS: Record<Section, { name: string; base: string; home: strin
   terraform: { name: 'Terraform Labs', base: '/terraform', home: '/terraform', blurb: 'Coming soon' },
   aws: { name: 'AWS Labs', base: '/aws', home: '/aws', blurb: 'Coming soon' },
   docker: { name: 'Docker Labs', base: '/docker', home: '/docker', blurb: 'Coming soon' },
+  system: { name: 'System Labs', base: '/system', home: '/system/learn', blurb: 'Networking and system design, interactively' },
 };
 
 const PREFIXES: { section: Section; prefix: string }[] = [
@@ -19,6 +20,7 @@ const PREFIXES: { section: Section; prefix: string }[] = [
   { section: 'terraform', prefix: '/terraform' },
   { section: 'aws', prefix: '/aws' },
   { section: 'docker', prefix: '/docker' },
+  { section: 'system', prefix: '/system' },
 ];
 
 export const sectionOf = (pathname: string): Section => {
