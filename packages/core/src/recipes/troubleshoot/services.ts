@@ -127,6 +127,8 @@ exit 1`,
       `Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${NS} get pods --show-labels).`,
       `Can the client reach a Pod IP directly? kubectl -n ${NS} exec client -- wget -qO- -T 3 http://<pod-ip>`,
       `kubectl -n ${NS} get networkpolicy: anything selecting the ${APP} Pods?`,
+      `Pods Running but 0/1 Ready with RESTARTS stuck at 0? That is a failing readiness probe, not a crash — readiness failures never restart the container (only liveness does). Check kubectl -n ${NS} describe pod -l app=${APP} for Unhealthy events, then compare the Deployment's readinessProbe (scheme/port/path) with what nginx actually serves.`,
+      `Everything in the namespace looks right, endpoints are ready, and a Pod IP answers but the Service IP does not? Look outside the namespace: kubectl -n kube-system get ds,pods -l k8s-app=kube-proxy. If kube-proxy is Desired/Ready 0 everywhere with no Pods and no events, inspect the DaemonSet template (nodeSelector/tolerations) — an unmatched nodeSelector silently schedules nothing.`,
     ],
   }),
   faults: ({ NS, APP }) => [
@@ -209,7 +211,7 @@ kubectl -n kube-system wait --for=delete pod -l k8s-app=kube-proxy --timeout=180
       fix: `kubectl -n kube-system patch daemonset kube-proxy --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector/kube-proxy"}]'
 kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
       wait: waitServing(NS, APP),
-      explain: `Service, endpoints and Pods all look right, and the client can reach a Pod IP directly, but not the Service IP. The \`kube-system/kube-proxy\` DaemonSet has a nodeSelector \`kube-proxy=disabled\` that no node matches, so no kube-proxy runs and the Service's new endpoints are never programmed into iptables (\`kubectl -n kube-system get ds kube-proxy\` shows 0 desired). Remove that nodeSelector entry.`,
+      explain: `Service, endpoints and Pods all look right, and the client can reach a Pod IP directly, but not the Service IP. The \`kube-system/kube-proxy\` DaemonSet has a nodeSelector \`kube-proxy=disabled\` that no node matches, so no kube-proxy runs and the Service's new endpoints are never programmed into iptables (\`kubectl -n kube-system get ds kube-proxy\` shows 0 desired). An unmatched nodeSelector is not an error, so there are no Pods, events or logs to find — \`DESIRED 0\` on the DaemonSet plus a clean namespace is the whole signal. Remove that nodeSelector entry.`,
     },
     {
       id: 'selector-cleared',
@@ -245,7 +247,7 @@ kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"paused":false}}'`,
 kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
       wait: waitServing(NS, APP),
       explain:
-        'The readiness probe uses `scheme: HTTPS`, but nginx serves plain HTTP on port 80, so every probe fails and the Service has only not-ready endpoints. Remove the scheme (or set it to `HTTP`) so the probe succeeds.',
+        'The readiness probe uses `scheme: HTTPS`, but nginx serves plain HTTP on port 80, so every probe fails and the Service has only not-ready endpoints. The Pods stay `Running` with `RESTARTS 0` and no crash logs — readiness failures only withdraw endpoints, they never restart the container (that is liveness). `kubectl describe pod` shows the `Unhealthy` readiness events. Remove the scheme (or set it to `HTTP`) so the probe succeeds.',
     },
     {
       id: 'readiness-port-number',
@@ -274,6 +276,37 @@ kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata
 kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata":{"name":"'"${APP}"'","namespace":"'"${NS}"'"},"spec":{"selector":{"app":"'"${APP}"'"},"ports":[{"port":80,"targetPort":"http"}]}}'`,
       wait: waitServing(NS, APP),
       explain: `Service \`${APP}\` was changed to \`type: ExternalName\` pointing at \`nowhere.invalid\`, so it no longer has a ClusterIP or selectors even though the Deployment looks fine. Recreate (or patch) it as a ClusterIP Service selecting \`app=${APP}\` with port \`80\` → named target port \`http\`.`,
+    },
+    {
+      id: 'kube-proxy-config-mode',
+      label: 'kube-proxy mode is invalid',
+      disruptive: true,
+      break: `kubectl -n kube-system get configmap kube-proxy -o jsonpath='{.data.config\\.conf}' > /tmp/cka-kube-proxy.conf
+cp -a /tmp/cka-kube-proxy.conf /tmp/cka-kube-proxy.conf.bak
+sed -i -E 's/^mode: .*/mode: not-a-mode/' /tmp/cka-kube-proxy.conf
+grep -qE '^mode: not-a-mode$' /tmp/cka-kube-proxy.conf || { echo "could not set kube-proxy mode" >&2; exit 1; }
+kubectl -n kube-system patch configmap kube-proxy --type merge -p "$(python3 -c 'import json,pathlib; print(json.dumps({"data":{"config.conf": pathlib.Path("/tmp/cka-kube-proxy.conf").read_text()}}))')"
+kubectl -n kube-system rollout restart daemonset/kube-proxy
+for _ in $(seq 1 60); do
+  ready=$(kubectl -n kube-system get pods -l k8s-app=kube-proxy -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{"\\n"}{end}' | grep -c true || true)
+  [[ "$ready" == 0 ]] && break
+  sleep 2
+done`,
+      fix: `kubectl -n kube-system patch configmap kube-proxy --type merge -p "$(python3 -c 'import json,pathlib; print(json.dumps({"data":{"config.conf": pathlib.Path("/tmp/cka-kube-proxy.conf.bak").read_text()}}))')"
+kubectl -n kube-system rollout restart daemonset/kube-proxy
+kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
+      wait: waitServing(NS, APP),
+      explain: `ConfigMap \`kube-system/kube-proxy\` sets \`mode: not-a-mode\`, so kube-proxy Pods crash-loop and Service ClusterIPs stop working. Set \`mode\` back to \`iptables\` (or empty) in the ConfigMap and restart the \`kube-proxy\` DaemonSet.`,
+    },
+    {
+      id: 'service-clusterip-none',
+      label: 'Service was made headless (clusterIP: None)',
+      break: `kubectl -n "${NS}" delete service "${APP}" --wait=true
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata":{"name":"'"${APP}"'","namespace":"'"${NS}"'"},"spec":{"clusterIP":"None","selector":{"app":"'"${APP}"'"},"ports":[{"port":80,"targetPort":"http"}]}}'`,
+      fix: `kubectl -n "${NS}" delete service "${APP}" --wait=true
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata":{"name":"'"${APP}"'","namespace":"'"${NS}"'"},"spec":{"selector":{"app":"'"${APP}"'"},"ports":[{"port":80,"targetPort":"http"}]}}'`,
+      wait: waitServing(NS, APP),
+      explain: `Service \`${APP}\` is headless (\`clusterIP: None\`), so clients that expect a virtual IP no longer get a stable ClusterIP even though endpoints exist. Recreate it as a normal ClusterIP Service selecting \`app=${APP}\` with port \`80\` → \`http\`.`,
     },
   ],
 };

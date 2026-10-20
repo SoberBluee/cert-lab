@@ -334,5 +334,15 @@ exit 1`,
       wait: waitServing(NS, APP),
       explain: `\`${APP}-ingress\` lets frontends in on port 443 only, but nginx listens on 80. Names resolve and the client's egress is allowed, yet the connection times out at the server. Set the ingress port back to 80.`,
     },
+    {
+      id: 'netpol-egress-ipblock-except',
+      label: 'Egress NetworkPolicy excepts the backend CIDR',
+      break: `kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"frontend-egress-ipblock"},"spec":{"podSelector":{"matchLabels":{"role":"frontend"}},"policyTypes":["Egress"],"egress":[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0","except":["10.0.0.0/8","192.168.0.0/16"]}}],"ports":[{"protocol":"TCP","port":80}]},{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}},"podSelector":{"matchLabels":{"k8s-app":"kube-dns"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}]}}'
+kubectl -n "${NS}" delete networkpolicy frontend-egress --ignore-not-found >/dev/null`,
+      fix: `kubectl -n "${NS}" delete networkpolicy frontend-egress-ipblock --ignore-not-found >/dev/null
+${applyFrontendEgress(NS, APP)}`,
+      wait: waitServing(NS, APP),
+      explain: `NetworkPolicy \`frontend-egress-ipblock\` allows egress to \`0.0.0.0/0\` on port 80 but \`except\`s \`10.0.0.0/8\` and \`192.168.0.0/16\`, which covers Pod and Service IPs, so the client still cannot reach \`${APP}\`. Delete that policy and restore \`frontend-egress\` (podSelector to \`app=${APP}\` on TCP/80).`,
+    },
   ],
 };

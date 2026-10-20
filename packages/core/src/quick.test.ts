@@ -449,6 +449,16 @@ describe('Troubleshoot track', () => {
     assert.equal(res, undefined);
     assert.match(errors.join('\n'), /Only one control plane question/);
   });
+
+  it('allows one question per disruptive category per lab', () => {
+    const { build: res, errors } = buildQuickBundle({
+      id: 'bad',
+      title: 'Bad',
+      questions: [troubleQ('dns', ['corefile-typo']), troubleQ('dns', ['corefile-loop'])],
+    });
+    assert.equal(res, undefined);
+    assert.match(errors.join('\n'), /Only one DNS question per lab/);
+  });
 });
 
 describe('Hidden variables', () => {

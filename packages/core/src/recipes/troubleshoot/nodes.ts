@@ -282,5 +282,46 @@ systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain: `\`${KUBELET_CONF}\` was renamed, so the kubelet cannot authenticate to the API server and the node turns \`NotReady\`. \`journalctl -u kubelet\` mentions the missing kubeconfig; a backup sits at \`${KUBELET_CONF}.cka-bak\`. Move it back and restart the kubelet.`,
     },
+    {
+      id: 'kubelet-swap-on',
+      label: 'Swap is enabled so the kubelet refuses to start',
+      nodeBreak: `SWAP=/root/cka-swap
+dd if=/dev/zero of="$SWAP" bs=1M count=64 status=none
+chmod 600 "$SWAP"
+mkswap "$SWAP" >/dev/null
+swapon "$SWAP"
+swapon --show | grep -q cka-swap
+sed -i '/^failSwapOn:/d' ${KUBELET_CONFIG}
+echo 'failSwapOn: true' >> ${KUBELET_CONFIG}
+systemctl restart kubelet || true`,
+      settle: waitNotReady(NODE),
+      nodeFix: `swapoff /root/cka-swap 2>/dev/null || true
+rm -f /root/cka-swap
+sed -i '/^failSwapOn:/d' ${KUBELET_CONFIG} || true
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain:
+        'A swap file (`/root/cka-swap`) is active and the kubelet runs with `failSwapOn: true`, so it exits rather than start with swap enabled. `swapon --show` lists the file; `journalctl -u kubelet` mentions swap. `swapoff` the file, remove it, and restart the kubelet.',
+    },
+    {
+      id: 'cni-conflist-typo',
+      label: 'CNI conflist is present but invalid JSON',
+      nodeBreak: `f=$(ls /etc/cni/net.d/*.conflist 2>/dev/null | head -1)
+[[ -n "$f" ]] || { echo "no CNI conflist" >&2; exit 1; }
+cp -a "$f" /root/cni-conflist.cka-bak
+printf '{ "cniVersion": "0.3.1", "name": "broken", "plugins": [ { "type": "not-a-real-cni-plugin" } ]\\n' > "$f"
+! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" 2>/dev/null
+systemctl restart containerd || true
+systemctl restart kubelet || true`,
+      settle: waitNotReady(NODE),
+      nodeFix: `f=$(ls /etc/cni/net.d/*.conflist 2>/dev/null | head -1)
+[[ -f /root/cni-conflist.cka-bak ]] || { echo "missing CNI backup" >&2; exit 1; }
+if [[ -n "$f" ]]; then cp -a /root/cni-conflist.cka-bak "$f"; else cp -a /root/cni-conflist.cka-bak /etc/cni/net.d/10-calico.conflist; fi
+systemctl restart containerd
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain:
+        'A file still sits in `/etc/cni/net.d`, but it is truncated / invalid JSON (and names a bogus plugin). The runtime network never becomes ready and the node turns `NotReady`. A good copy is at `/root/cni-conflist.cka-bak` (or on a healthy worker). Restore the conflist, then restart containerd and the kubelet.',
+    },
   ],
 };

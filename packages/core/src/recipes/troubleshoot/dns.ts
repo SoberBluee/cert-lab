@@ -297,5 +297,36 @@ kubectl -n kube-system set image deployment/coredns coredns="$(sed -E 's/:[^:/]+
       explain:
         'Deployment `coredns` limits the container to `8Mi` of memory, so CoreDNS is OOMKilled as it starts and its Pods crash-loop (`kubectl -n kube-system describe pod -l k8s-app=kube-dns` shows `OOMKilled`). Restore the kubeadm defaults: memory limit `170Mi`, request `70Mi`.',
     },
+    {
+      id: 'coredns-hosts-plugin',
+      label: 'Corefile hosts plugin maps web to loopback',
+      break: `kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' > /tmp/cka-Corefile
+python3 -c 'from pathlib import Path; t=Path("/tmp/cka-Corefile").read_text(); n="kubernetes cluster.local"; i="hosts {\\n        127.0.0.1 web\\n        fallthrough\\n    }\\n    "; Path("/tmp/cka-Corefile").write_text(t.replace(n, i+n, 1) if "hosts {" not in t else t)'
+grep -q '127.0.0.1 web' /tmp/cka-Corefile || { echo "could not inject hosts plugin" >&2; exit 1; }
+kubectl -n kube-system create configmap coredns --from-file=Corefile=/tmp/cka-Corefile -o yaml --dry-run=client | kubectl -n kube-system apply -f - >/dev/null
+${bounceCoreDns}`,
+      fix: `kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' > /tmp/cka-Corefile
+python3 -c 'import re; from pathlib import Path; t=Path("/tmp/cka-Corefile").read_text(); t=re.sub(r"hosts \\{[^}]*\\}\\s*", "", t, count=1); Path("/tmp/cka-Corefile").write_text(t)'
+kubectl -n kube-system create configmap coredns --from-file=Corefile=/tmp/cka-Corefile -o yaml --dry-run=client | kubectl -n kube-system apply -f - >/dev/null
+${restartCoreDns}`,
+      wait: waitResolving(NS),
+      explain:
+        'The Corefile injects a `hosts` block that maps `web` to `127.0.0.1`, so the short name resolves to the wrong address while CoreDNS stays Ready. Remove that `hosts` block from ConfigMap `coredns` and restart the Deployment.',
+    },
+    {
+      id: 'coredns-ready-port',
+      label: 'CoreDNS readiness probe hits the wrong port',
+      break: breakCoreDns(
+        state,
+        `kubectl -n kube-system patch deployment coredns --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":8182}]' >/dev/null`,
+      ),
+      fix: restoreCoreDns(
+        state,
+        `kubectl -n kube-system patch deployment coredns --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":8181}]'`,
+      ),
+      wait: waitResolving(NS),
+      explain:
+        'The CoreDNS readiness probe targets port `8182`, but the `ready` plugin listens on `8181`, so Pods never become Ready and Service `kube-dns` has no endpoints. Point the probe back at `8181`.',
+    },
   ],
 };

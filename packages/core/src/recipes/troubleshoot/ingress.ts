@@ -346,6 +346,17 @@ ${waitServing(api)}`,
         wait: waitServing(api),
         explain: `The HTTPRoute has a \`RequestRedirect\` filter, so requests for \`${api}\` get a 302 to \`elsewhere.example\` instead of the nginx welcome page. Remove the \`filters\` block so the route proxies to Service \`${APP}\`.`,
       },
+      {
+        id: 'ingress-tls-secret-missing',
+        label: 'Ingress TLS references a Secret that does not exist',
+        break: `kubectl -n "${NS}" annotate ingress "${APP}" traefik.ingress.kubernetes.io/router.entrypoints=websecure --overwrite
+kubectl -n "${NS}" patch ingress "${APP}" --type=json -p '[{"op":"add","path":"/spec/tls","value":[{"hosts":["'"${www}"'"],"secretName":"missing-tls"}]}]'`,
+        settle: waitBroken(www),
+        fix: `kubectl -n "${NS}" annotate ingress "${APP}" traefik.ingress.kubernetes.io/router.entrypoints-
+kubectl -n "${NS}" patch ingress "${APP}" --type=json -p '[{"op":"remove","path":"/spec/tls"}]'`,
+        wait: waitServing(www),
+        explain: `Ingress \`${APP}\` references TLS Secret \`missing-tls\` (which does not exist) and is pinned to the \`websecure\` entrypoint, so HTTP on \`${www}\` fails. Remove the \`spec.tls\` stanza (or create a valid TLS Secret) and clear the entrypoints annotation so Traefik serves the host on \`web\` again.`,
+      },
     ];
   },
 };

@@ -231,5 +231,33 @@ done`,
       wait: waitReady(NODE),
       explain: `\`cgroupDriver\` in \`${CONFIG}\` is \`invalid\`, so the kubelet exits at startup. \`journalctl -u kubelet\` names the bad value; containerd and a healthy worker use \`systemd\`. Set \`cgroupDriver: systemd\` and restart the kubelet.`,
     },
+    {
+      id: 'kubelet-resolv-empty',
+      label: 'kubelet resolvConf points at a missing file',
+      nodeBreak: `sed -i '/^resolvConf:/d' ${CONFIG}
+sed -i '/^[[:space:]]*- \\/etc\\/resolv\\.conf\\.missing$/d' ${CONFIG} || true
+printf '%s\\n' 'resolvConf:' '  - /etc/resolv.conf.missing' >> ${CONFIG}
+grep -q '/etc/resolv.conf.missing' ${CONFIG}
+${restart}`,
+      settle: waitNotReady(NODE),
+      nodeFix: `sed -i '/^resolvConf:/d' ${CONFIG}
+sed -i '/^[[:space:]]*- \\/etc\\/resolv\\.conf\\.missing$/d' ${CONFIG} || true
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain: `\`${CONFIG}\` sets \`resolvConf\` to a YAML list whose only entry is \`/etc/resolv.conf.missing\` (that path does not exist, and \`resolvConf\` must be a string). The kubelet cannot decode its config and exits. Remove those lines (the default \`/etc/resolv.conf\` is fine) and restart the kubelet.`,
+    },
+    {
+      id: 'kubelet-hairpin-mode',
+      label: 'kubelet hairpinMode is invalid',
+      nodeBreak: `sed -i '/^hairpinMode:/d' ${CONFIG}
+echo 'hairpinMode: bogus' >> ${CONFIG}
+grep -q '^hairpinMode: bogus$' ${CONFIG}
+${restart}`,
+      settle: waitNotReady(NODE),
+      nodeFix: `sed -i '/^hairpinMode:/d' ${CONFIG}
+systemctl restart kubelet`,
+      wait: waitReady(NODE),
+      explain: `\`${CONFIG}\` sets \`hairpinMode: bogus\`, which is not a valid enum value, so the kubelet exits at startup. \`journalctl -u kubelet\` names the bad field. Remove the line (or set a valid value such as \`promiscuous-bridge\`) and restart the kubelet.`,
+    },
   ],
 };

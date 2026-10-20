@@ -214,6 +214,17 @@ export function buildQuickBundle(req: QuickCreateRequest): {
     if (out) built.push({ n, out });
   });
   if (built.filter((b) => b.out.breaksApi).length > 1) ctx.errors.push('Only one control plane question per lab.');
+  // A disruptive category breaks shared cluster state (e.g. DNS edits the single CoreDNS
+  // ConfigMap/Deployment), so two questions in it can overwrite each other's fault: a second
+  // Corefile edit may find the line the first one renamed already gone, and fail setup.
+  const disruptiveSeen = new Map<string, string>();
+  for (const q of req.questions) {
+    if (q?.type !== 'troubleshoot') continue;
+    const cat = getCategory(q.category);
+    if (!cat?.disruptive) continue;
+    if (disruptiveSeen.has(cat.id)) ctx.errors.push(`Only one ${cat.name} question per lab: it breaks shared cluster state, so its questions would overwrite each other.`);
+    else disruptiveSeen.set(cat.id, cat.name);
+  }
   const solo = built.find((b) => b.out.solo);
   if (solo && req.questions.length > 1) ctx.errors.push(`${solo.out.title} must be the only question in its lab.`);
   if (ctx.errors.length) return { errors: ctx.errors };

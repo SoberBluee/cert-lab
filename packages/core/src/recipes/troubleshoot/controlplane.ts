@@ -478,5 +478,67 @@ systemctl restart kubelet`,
 ${waitHealthy(NS)}`,
       explain: `\`${KUBELET_CONF}\` on controlplane points the kubelet at port \`6444\`, so heartbeats fail with \`connection refused\` and the node turns \`NotReady\` (static pods may still look Ready). Set \`server:\` back to port \`6443\` and restart the kubelet.`,
     },
+    {
+      id: 'apiserver-advertise-address',
+      label: 'API server advertise-address is a non-routable IP',
+      break: `${scaleUp(NS)}
+grep -oE -- '--advertise-address=[^[:space:]]+' ${M}/kube-apiserver.yaml | head -1 | sed 's/^--advertise-address=//' > "${state}.advertise"
+${edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --advertise-address=).*$#\\1not-a-valid-ip#', '- --advertise-address=not-a-valid-ip$')}`,
+      settle: apiDown,
+      fix: `addr=$(cat "${state}.advertise")
+sed -i -E "s#^([[:space:]]*- --advertise-address=).*\$#\\1\${addr}#" ${M}/kube-apiserver.yaml
+grep -qE -- "- --advertise-address=\${addr}\$" ${M}/kube-apiserver.yaml || { echo "could not restore advertise-address" >&2; exit 1; }`,
+      wait: waitHealthy(NS),
+      explain: `\`--advertise-address\` in \`${M}/kube-apiserver.yaml\` is \`not-a-valid-ip\`, so the API server exits at startup. Set it back to the control plane node's IPv4 address (\`ip -4 addr\` or the value that was in the manifest before).`,
+    },
+    {
+      id: 'apiserver-service-account-key',
+      label: 'API server service-account-key-file path is wrong',
+      break: `${scaleUp(NS)}
+${edit(
+  `${M}/kube-apiserver.yaml`,
+  's#^([[:space:]]*- --service-account-key-file=/etc/kubernetes/pki/sa)\\.pub$#\\1.pem#',
+  '- --service-account-key-file=/etc/kubernetes/pki/sa.pem$',
+)}`,
+      settle: apiDown,
+      fix: edit(
+        `${M}/kube-apiserver.yaml`,
+        's#^([[:space:]]*- --service-account-key-file=/etc/kubernetes/pki/sa)\\.pem$#\\1.pub#',
+        '- --service-account-key-file=/etc/kubernetes/pki/sa.pub$',
+      ),
+      wait: waitHealthy(NS),
+      explain: `\`--service-account-key-file\` in \`${M}/kube-apiserver.yaml\` points at \`sa.pem\`, which does not exist. The API server exits at startup; \`ls /etc/kubernetes/pki\` shows \`sa.pub\`. Set the path back to \`/etc/kubernetes/pki/sa.pub\`.`,
+    },
+    {
+      id: 'scheduler-leader-elect',
+      label: 'Scheduler --config points at a missing file',
+      break: `if grep -qE -- '- --config=' ${M}/kube-scheduler.yaml; then
+  ${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --config=).*$#\\1/etc/kubernetes/sched-config.yaml#', '- --config=/etc/kubernetes/sched-config\\.yaml$')}
+else
+  sed -i -E '/^[[:space:]]*- kube-scheduler$/a\\    - --config=/etc/kubernetes/sched-config.yaml' ${M}/kube-scheduler.yaml
+  grep -qE -- '- --config=/etc/kubernetes/sched-config\\.yaml$' ${M}/kube-scheduler.yaml || { echo "could not set scheduler --config" >&2; exit 1; }
+fi
+${componentDown('kube-scheduler')}
+kubectl -n "${NS}" scale deployment/web --replicas=2`,
+      settle: waitPending(NS),
+      fix: `sed -i -E '/^[[:space:]]*- --config=\\/etc\\/kubernetes\\/sched-config\\.yaml$/d' ${M}/kube-scheduler.yaml
+! grep -qE -- '- --config=/etc/kubernetes/sched-config\\.yaml$' ${M}/kube-scheduler.yaml || { echo "could not remove scheduler --config" >&2; exit 1; }`,
+      wait: waitHealthy(NS),
+      explain: `\`${M}/kube-scheduler.yaml\` passes \`--config=/etc/kubernetes/sched-config.yaml\`, which does not exist, so the scheduler exits and new Pods stay \`Pending\`. Remove that flag (kubeadm schedulers use \`--kubeconfig\` / \`--authentication-kubeconfig\` instead) so the scheduler starts again.`,
+    },
+    {
+      id: 'etcd-peer-urls',
+      label: 'etcd peer URLs use the wrong port',
+      break: `${scaleUp(NS)}
+sed -i -E '/--listen-peer-urls=/s/:2380/:2381/g' ${M}/etcd.yaml
+sed -i -E '/--initial-advertise-peer-urls=/s/:2380/:2381/g' ${M}/etcd.yaml
+grep -qE -- '--listen-peer-urls=.*:2381' ${M}/etcd.yaml || { echo "could not break listen-peer-urls" >&2; exit 1; }
+grep -qE -- '--initial-advertise-peer-urls=.*:2381' ${M}/etcd.yaml || { echo "could not break initial-advertise-peer-urls" >&2; exit 1; }`,
+      settle: apiDown,
+      fix: `sed -i -E '/--listen-peer-urls=/s/:2381/:2380/g' ${M}/etcd.yaml
+sed -i -E '/--initial-advertise-peer-urls=/s/:2381/:2380/g' ${M}/etcd.yaml`,
+      wait: waitHealthy(NS),
+      explain: `\`--listen-peer-urls\` and \`--initial-advertise-peer-urls\` in \`${M}/etcd.yaml\` use port \`2381\` instead of \`2380\`. etcd becomes unhealthy and the API server loses storage. Put both peer URLs back on \`2380\`.`,
+    },
   ],
 };

@@ -238,5 +238,23 @@ grep -qE -- '- --bind-address=0.0.0.0$' ${APISERVER} || { echo "could not restor
       wait: waitHealthy(NS),
       explain: `\`--bind-address\` in \`${APISERVER}\` is \`127.0.0.2\`, so the API server does not accept connections on \`127.0.0.1:6443\` and kubectl gets \`connection refused\`. \`ss -ltnp\` shows it listening only on \`127.0.0.2\`. Set \`--bind-address\` back to \`0.0.0.0\`.`,
     },
+    {
+      id: 'kubeconfig-permissions',
+      label: 'User kubeconfig files are mode 000',
+      break: `${scaleUp(NS)}
+for f in ${USER_KUBECONFIGS.join(' ')}; do
+  cp -a "$f" "$f.cka-mode"
+  chmod 000 "$f"
+  [[ "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%OLp' "$f")" == "0" ]] || [[ "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%OLp' "$f")" == "000" ]] || { echo "could not chmod $f" >&2; exit 1; }
+done`,
+      settle: userKubectlDown,
+      fix: `for f in ${USER_KUBECONFIGS.join(' ')}; do
+  chmod 600 "$f"
+  [[ -f "$f.cka-mode" ]] && chown --reference="$f.cka-mode" "$f" 2>/dev/null || true
+done
+chown ubuntu:ubuntu /home/ubuntu/.kube/config 2>/dev/null || true`,
+      wait: waitHealthy(NS),
+      explain: `\`/root/.kube/config\` and \`/home/ubuntu/.kube/config\` are mode \`000\`, so kubectl fails with "permission denied" even though the API server is healthy. \`chmod 600\` both files (and ensure ubuntu owns its copy).`,
+    },
   ],
 };
