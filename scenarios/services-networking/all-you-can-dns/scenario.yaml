@@ -1,0 +1,513 @@
+id: all-you-can-dns
+title: All you can DNS
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 100
+points: 70
+tags: [ troubleshooting, dns, coredns, service ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  Q1_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q1_FAULT: { oneOf: [ corefile-typo ], hidden: true }
+  Q2_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q2_FAULT: { oneOf: [ coredns-ready-port ], hidden: true }
+  Q3_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q3_FAULT: { oneOf: [ coredns-ready-port ], hidden: true }
+  Q4_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q4_FAULT: { oneOf: [ coredns-hosts-plugin ], hidden: true }
+  Q5_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q5_FAULT: { oneOf: [ kube-dns-target-port ], hidden: true }
+  Q6_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q6_FAULT: { oneOf: [ coredns-config-volume, coredns-hosts-plugin ], hidden: true }
+  Q7_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q7_FAULT: { oneOf: [ coredns-memory-limit ], hidden: true }
+  Q8_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q8_FAULT: { oneOf: [ coredns-rbac ], hidden: true }
+  Q9_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q9_FAULT: { oneOf: [ kube-dns-selector ], hidden: true }
+  Q10_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q10_FAULT: { oneOf: [ client-dns-policy ], hidden: true }
+tasks:
+  - id: q1
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q1-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-fqdn
+        description: client resolves web.${Q1_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q1_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q1_NS} exec client -- nslookup -type=a web.${Q1_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q1-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q1_NS} exec client -- nslookup web.${Q1_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q1_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q2
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q2-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q2-fqdn
+        description: client resolves web.${Q2_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q2_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q2_NS} exec client -- nslookup -type=a web.${Q2_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q2-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q2-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q2-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q2_NS} exec client -- nslookup web.${Q2_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q2_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q3
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q3-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q3-fqdn
+        description: client resolves web.${Q3_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q3_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q3_NS} exec client -- nslookup -type=a web.${Q3_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q3-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q3-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q3-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q3_NS} exec client -- nslookup web.${Q3_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q3_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q4
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q4-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q4-fqdn
+        description: client resolves web.${Q4_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q4_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q4_NS} exec client -- nslookup -type=a web.${Q4_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q4-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q4-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q4-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q4_NS} exec client -- nslookup web.${Q4_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q4_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q5
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q5-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q5_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q5-fqdn
+        description: client resolves web.${Q5_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q5_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q5_NS} exec client -- nslookup -type=a web.${Q5_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q5-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q5-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q5-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q5_NS} exec client -- nslookup web.${Q5_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q5_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q6
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q6.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q6-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q6_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q6-fqdn
+        description: client resolves web.${Q6_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q6_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q6_NS} exec client -- nslookup -type=a web.${Q6_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q6-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q6-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q6-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q6_NS} exec client -- nslookup web.${Q6_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q6_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q7
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q7.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q7-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q7_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q7-fqdn
+        description: client resolves web.${Q7_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q7_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q7_NS} exec client -- nslookup -type=a web.${Q7_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q7-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q7-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q7-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q7_NS} exec client -- nslookup web.${Q7_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q7_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q8
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q8.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q8-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q8_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q8-fqdn
+        description: client resolves web.${Q8_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q8_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q8_NS} exec client -- nslookup -type=a web.${Q8_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q8-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q8-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q8-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q8_NS} exec client -- nslookup web.${Q8_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q8_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q9
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q9.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q9-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q9_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q9-fqdn
+        description: client resolves web.${Q9_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q9_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q9_NS} exec client -- nslookup -type=a web.${Q9_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q9-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q9-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q9-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q9_NS} exec client -- nslookup web.${Q9_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q9_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+  - id: q10
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q10.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q10-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q10_NS} exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q10-fqdn
+        description: client resolves web.${Q10_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q10_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q10_NS} exec client -- nslookup -type=a web.${Q10_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q10-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q10-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q10-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - Is it DNS? kubectl -n ${Q10_NS} exec client -- nslookup web.${Q10_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
+      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
+      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
+      - "kubectl -n ${Q10_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
+      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.

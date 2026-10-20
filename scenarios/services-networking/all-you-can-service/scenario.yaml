@@ -9,7 +9,6 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 20
-draft: true
 variables:
   # Namespaces must stay unique across questions (parallel setup); rollVars enforces that.
   Q1_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
@@ -280,6 +279,7 @@ tasks:
       - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q6_NS} get pods --show-labels).
       - Can the client reach a Pod IP directly? kubectl -n ${Q6_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
       - "kubectl -n ${Q6_NS} get networkpolicy: anything selecting the ${Q6_APP} Pods?"
+      - "Pods Running but 0/1 Ready with RESTARTS stuck at 0? That is a failing readiness probe, not a crash — readiness failures never restart the container (only liveness does). Check kubectl -n ${Q6_NS} describe pod -l app=${Q6_APP} for Unhealthy events, then compare the Deployment's readinessProbe (scheme/port/path) with what nginx actually serves."
   - id: q7
     title: Service ${Q7_APP} unreachable
     points: 6
@@ -360,6 +360,7 @@ tasks:
       - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q8_NS} get pods --show-labels).
       - Can the client reach a Pod IP directly? kubectl -n ${Q8_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
       - "kubectl -n ${Q8_NS} get networkpolicy: anything selecting the ${Q8_APP} Pods?"
+      - "Pods Running but 0/1 Ready with RESTARTS stuck at 0? That is a failing readiness probe, not a crash — readiness failures never restart the container (only liveness does). Check kubectl -n ${Q8_NS} describe pod -l app=${Q8_APP} for Unhealthy events, then compare the Deployment's readinessProbe (scheme/port/path) with what nginx actually serves."
   - id: q9
     title: Service ${Q9_APP} unreachable
     points: 6
@@ -401,3 +402,4 @@ tasks:
       - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q9_NS} get pods --show-labels).
       - Can the client reach a Pod IP directly? kubectl -n ${Q9_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
       - "kubectl -n ${Q9_NS} get networkpolicy: anything selecting the ${Q9_APP} Pods?"
+      - "Everything in the namespace looks right, endpoints are ready, and a Pod IP answers but the Service IP does not? Look outside the namespace: kubectl -n kube-system get ds,pods -l k8s-app=kube-proxy. If kube-proxy is Desired/Ready 0 everywhere with no Pods and no events, inspect the DaemonSet template (nodeSelector/tolerations) — an unmatched nodeSelector silently schedules nothing."
