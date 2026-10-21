@@ -31,6 +31,7 @@ variables:
 tasks:
   - id: q1
     title: Shared emptyDir Pod ${Q1_POD}
+    tags: [ pod, sidecar, emptyDir ]
     points: 6
     checks:
       - id: q1-running
@@ -64,6 +65,7 @@ tasks:
 
   - id: q2
     title: Record worker-1 capacity
+    tags: [ node, capacity ]
     points: 3
     checks:
       - id: q2-cpu
@@ -86,6 +88,7 @@ tasks:
 
   - id: q3
     title: HPA for ${Q3_APP}
+    tags: [ hpa, autoscaling ]
     points: 7
     setup:
       - node: controlplane
@@ -122,6 +125,7 @@ tasks:
 
   - id: q4
     title: Fix ${Q4_POD} resources
+    tags: [ resources, memory ]
     points: 5
     setup:
       - node: controlplane
@@ -154,6 +158,7 @@ tasks:
 
   - id: q5
     title: Logging sidecar for ${Q5_POD}
+    tags: [ sidecar, logging ]
     points: 7
     setup:
       - node: controlplane

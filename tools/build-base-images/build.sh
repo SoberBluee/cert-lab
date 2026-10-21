@@ -23,6 +23,8 @@ cfg() {
 }
 
 K8S_VERSION="$(cfg kubernetesVersion)"
+K8S_PREVIOUS="$(cfg kubernetesPreviousVersion)"
+LOCAL_PATH_VERSION="$(cfg localPathProvisionerVersion)"
 CALICO_VERSION="$(cfg calicoVersion)"
 GATEWAY_API_VERSION="$(cfg gatewayApiVersion)"
 TRAEFIK_CHART_VERSION="$(cfg traefikChartVersion)"
@@ -134,6 +136,18 @@ pull_calico() {
 }
 log "Pre-pulling Calico images"
 parallel pull_calico
+
+# Upgrade and dynamic provisioning questions: packages, images and manifests, staged in both snapshots.
+extras() {
+  local node="$1" role=worker
+  [[ "$node" == controlplane ]] && role=controlplane
+  transfer "$node" /tmp/ "$HERE/node-extras.sh"
+  on "$node" "bash /tmp/node-extras.sh '$K8S_VERSION' '$K8S_PREVIOUS' '$LOCAL_PATH_VERSION' '$role'" \
+    > "$BUILD_LOG-extras-$node.log" 2>&1 || { echo "  extras failed on $node, see $BUILD_LOG-extras-$node.log" >&2; return 1; }
+  echo "  staged extras on $node"
+}
+log "Staging upgrade packages and the local-path provisioner"
+parallel extras
 
 log "Snapshotting 'bare'"
 stop_all
@@ -288,7 +302,9 @@ cat > "$DATA_DIR/images-$DRIVER.json" <<EOF
   "driver": "$DRIVER",
   "kubernetesVersion": "$K8S_VERSION",
   "calicoVersion": "$CALICO_VERSION",
-  "addons": ["gateway-api", "traefik", "metrics-server", "vpa"],
+  "addons": ["gateway-api", "traefik", "metrics-server", "vpa", "upgrade-packages", "local-path"],
+  "previousKubernetesVersion": "$K8S_PREVIOUS",
+  "localPathProvisionerVersion": "$LOCAL_PATH_VERSION",
   "gatewayApiVersion": "$GATEWAY_API_VERSION",
   "traefikChartVersion": "$TRAEFIK_CHART_VERSION",
   "metricsServerChartVersion": "$METRICS_SERVER_CHART_VERSION",

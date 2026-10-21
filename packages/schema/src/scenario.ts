@@ -142,6 +142,16 @@ export const TaskVariantSchema = z.strictObject({
 });
 export type TaskVariant = z.infer<typeof TaskVariantSchema>;
 
+/**
+ * A create builder with the add-ons and follow-ups it got, or a troubleshooting category. The faults of
+ * a category question are the hidden variables Q<n>_FAULT, Q<n>_FAULT_2 and Q<n>_FAULT_3 of task q<n>.
+ */
+export const RecipeRefSchema = z.union([
+  z.strictObject({ builder: z.string().min(1), parts: z.array(z.string()).default([]) }),
+  z.strictObject({ category: z.string().min(1) }),
+]);
+export type RecipeRef = z.infer<typeof RecipeRefSchema>;
+
 export const TaskSchema = z
   .strictObject({
     id: SlugSchema,
@@ -153,6 +163,10 @@ export const TaskSchema = z
     setupStage: z.number().int().min(0).max(9).default(0),
     checks: z.array(CheckSchema).default([]),
     hints: z.array(z.string()).default([]),
+    /** Tags of this question alone, for Focus; the scenario's tags cover every question. */
+    tags: z.array(z.string()).optional(),
+    /** The Quick Create recipe that generated the question, so Focus counts it toward exactly its topics. */
+    recipe: RecipeRefSchema.optional(),
     /** A oneOf variable whose rolled value picks the entry of `variants`; its markdown is tasks/<id>.<value>.md. */
     variant: z.string().regex(VAR_NAME, { message: 'variant names an UPPER_SNAKE_CASE variable' }).optional(),
     variants: z.record(z.string().regex(/^[\w.-]+$/), TaskVariantSchema).optional(),

@@ -17,6 +17,7 @@ variables:
 tasks:
   - id: q1
     title: inventory cannot list Pods
+    recipe: { category: rbac }
     points: 6
     setup:
       - node: controlplane

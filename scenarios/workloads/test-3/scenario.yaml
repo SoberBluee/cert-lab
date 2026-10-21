@@ -34,6 +34,7 @@ solution:
 tasks:
   - id: q1
     title: Deployment ${Q1_APP} not running
+    recipe: { category: scheduling }
     points: 5
     setup:
       - node: controlplane
@@ -67,6 +68,7 @@ tasks:
       - What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${Q1_NS} get all,resourcequota,limitrange and kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml.
   - id: q2
     title: Deployment ${Q2_NAME}
+    recipe: { builder: deployment, parts: [ expose, autoscale ] }
     points: 8
     setup:
       - node: controlplane
@@ -111,6 +113,7 @@ tasks:
       - kubectl -n ${Q2_NS} autoscale deployment ${Q2_NAME} --min=1 --max=8 with a CPU target (see kubectl autoscale --help).
   - id: q3
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -158,6 +161,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q4
     title: Control plane after maintenance
+    recipe: { category: controlplane }
     points: 8
     setup:
       - node: controlplane
@@ -207,6 +211,7 @@ tasks:
       - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
   - id: q5
     title: StorageClass ${Q5_NAME}
+    recipe: { builder: storageclass, parts: [ allow-expansion, make-default ] }
     points: 5
     checks:
       - id: q5-provisioner

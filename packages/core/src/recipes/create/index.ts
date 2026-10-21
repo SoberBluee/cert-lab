@@ -2,14 +2,23 @@ import type { BuilderSummary, PartSummary } from '@cka/schema';
 import { hpaBuilder, vpaBuilder } from './autoscaling';
 import { certificatesBuilder, etcdBackupBuilder, etcdRestoreBuilder, installClusterBuilder } from './cluster';
 import { cronJobBuilder } from './cronjob';
+import { crdsBuilder } from './crds';
+import { dynamicStorageBuilder } from './dynamicstorage';
+import { gatewayBuilder } from './gateway';
 import { deploymentBuilder } from './deployment';
 import { helmBuilder } from './helm';
+import { infraBuilder } from './infra';
+import { kustomizeBuilder } from './kustomize';
+import { netopsBuilder } from './netops';
+import { observeBuilder } from './observe';
 import { podBuilder } from './pod';
 import { pvBuilder } from './pv';
 import { pvcBuilder } from './pvc';
 import { rbacBuilder } from './rbac';
 import { storageClassBuilder } from './storageclass';
 import type { Builder, PartBase } from './types';
+import { upgradeBuilder } from './upgrade';
+import { workloadOpsBuilder } from './workloadops';
 
 export { composeCreate, type ChosenPart } from './compose';
 export type { Addon, Builder, Choices, CreateCtx, FollowUp, PartBase } from './types';
@@ -29,6 +38,15 @@ export const BUILDERS: Builder[] = [
   etcdRestoreBuilder,
   certificatesBuilder,
   installClusterBuilder,
+  kustomizeBuilder,
+  crdsBuilder,
+  observeBuilder,
+  dynamicStorageBuilder,
+  upgradeBuilder,
+  infraBuilder,
+  netopsBuilder,
+  workloadOpsBuilder,
+  gatewayBuilder,
 ];
 
 export const getBuilder = (id: string): Builder | undefined => BUILDERS.find((b) => b.id === id);

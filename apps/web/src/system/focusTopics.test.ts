@@ -1,64 +1,57 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { RecipeCatalog, ScenarioSummary } from '@cka/schema';
-import { recommendations, scenarioTopics, topicStat } from '../focusTopics';
+import type { FocusReport, LabTopic, ScenarioSummary } from '@cka/schema';
+import { recommendations, topicRows } from '../focusTopics';
 
-const catalog = {
-  builders: [{ id: 'vpa', tags: ['vpa', 'autoscaling'] }],
-  categories: [
-    { id: 'dns', tags: ['troubleshooting', 'dns', 'coredns', 'service'] },
-    { id: 'scheduling', tags: ['troubleshooting', 'scheduling', 'resourcequota'] },
-  ],
+const topics: LabTopic[] = [
+  { id: 'trouble-dns', label: 'DNS', group: 'troubleshoot', categories: [{ id: 'dns' }], tags: ['dns'] },
+  { id: 'trouble-scheduling', label: 'Scheduling', group: 'troubleshoot', categories: [{ id: 'scheduling' }], tags: ['scheduling'] },
+  { id: 'create-vpa', label: 'VerticalPodAutoscaler', group: 'create', builderId: 'vpa', tags: ['vpa'] },
+  { id: 'create-helm', label: 'Helm', group: 'create', builderId: 'helm', tags: ['helm'] },
+  { id: 'create-crds', label: 'CRDs and operators', group: 'create', builderId: 'crds', tags: ['crd'] },
+];
+
+const summary = (id: string, topicIds: string[]): ScenarioSummary => ({ id, topics: topicIds }) as ScenarioSummary;
+
+const question = (title: string, percent: number, at: string) => ({ attemptId: 1, scenarioId: 's', scenarioTitle: 'Lab', title, percent, at });
+
+const report: FocusReport = {
+  recent: 5,
   topics: [
-    { id: 'trouble-dns', label: 'DNS', group: 'troubleshoot', categories: [{ id: 'dns' }] },
-    { id: 'trouble-scheduling', label: 'Scheduling', group: 'troubleshoot', categories: [{ id: 'scheduling' }] },
-    { id: 'create-vpa', label: 'VerticalPodAutoscaler', group: 'create', builderId: 'vpa' },
+    { topicId: 'trouble-dns', questions: 3, recentPercent: 40, weakest: question('Name resolution broken', 0, '2026-10-01'), lastAt: '2026-10-02' },
+    { topicId: 'create-vpa', questions: 1, recentPercent: 100, weakest: question('VPA', 100, '2026-10-03'), lastAt: '2026-10-03' },
+    { topicId: 'create-helm', questions: 1, recentPercent: 40, weakest: question('Helm release', 40, '2026-10-04'), lastAt: '2026-10-04' },
+    { topicId: 'trouble-scheduling', questions: 0 },
+    { topicId: 'create-crds', questions: 0 },
   ],
-} as unknown as RecipeCatalog;
-
-const summary = (id: string, tags: string[], stats: ScenarioSummary['stats'] = { attempts: 0 }): ScenarioSummary =>
-  ({
-    id,
-    title: `Title ${id}`,
-    domain: 'services-networking',
-    track: 'cka',
-    difficulty: 2,
-    estimatedMinutes: 10,
-    points: 7,
-    tags,
-    base: 'cluster',
-    hintCount: 0,
-    hasSolution: true,
-    taskCount: 1,
-    variableNames: [],
-    draft: false,
-    stats,
-  }) as ScenarioSummary;
-
-const dnsWeak = summary('dns-corefile-typo', ['dns', 'coredns'], { attempts: 2, lastScore: 1, lastMaxScore: 5, lastAt: '2026-01-01' });
-const dnsBetter = summary('web-dns', ['dns'], { attempts: 1, lastScore: 4, lastMaxScore: 5, lastAt: '2026-02-01' });
-const schedNever = summary('scheduling-quota-pods', ['scheduling'], { attempts: 0 });
-const untrelated = summary('other', ['helm'], { attempts: 3, lastScore: 5, lastMaxScore: 5 });
+};
 
 describe('focusTopics', () => {
-  it('matches scenarios to topics by tags and id prefix', () => {
-    assert.deepEqual(scenarioTopics(dnsWeak, catalog), ['trouble-dns']);
-    assert.ok(scenarioTopics(summary('dns-anything', []), catalog).includes('trouble-dns'));
-    assert.deepEqual(scenarioTopics(untrelated, catalog), []);
+  it('joins scores and scenario counts to the catalog topics', () => {
+    const rows = topicRows(topics, report, [summary('a', ['trouble-dns']), summary('b', ['trouble-dns', 'create-helm'])]);
+    assert.deepEqual(
+      rows.map((r) => [r.topic.id, r.stat.questions, r.scenarioCount]),
+      [
+        ['trouble-dns', 3, 2],
+        ['trouble-scheduling', 0, 0],
+        ['create-vpa', 1, 0],
+        ['create-helm', 1, 1],
+        ['create-crds', 0, 0],
+      ],
+    );
   });
 
-  it('aggregates per-topic scores', () => {
-    const stat = topicStat(catalog.topics[0], [dnsWeak, dnsBetter, schedNever], catalog);
-    assert.equal(stat.scenarioCount, 2);
-    assert.equal(stat.attemptedCount, 2);
-    assert.equal(stat.attempts, 3);
-    assert.equal(stat.avgLastPercent, 50);
-    assert.equal(stat.worst?.id, 'dns-corefile-typo');
+  it('treats topics as unpractised until the report arrives', () => {
+    assert.ok(topicRows(topics, undefined, []).every((r) => r.stat.questions === 0));
   });
 
-  it('ranks weakest first and flags blind spots', () => {
-    const recs = recommendations([dnsWeak, dnsBetter, schedNever], catalog);
-    assert.deepEqual(recs.workOn.map((s) => s.topic.id), ['trouble-dns']);
-    assert.deepEqual(recs.blindSpots.map((s) => s.topic.id), ['trouble-scheduling']);
+  it('ranks practised topics below 100% weakest first, less evidence first on a tie', () => {
+    const { workOn } = recommendations(topicRows(topics, report, []));
+    assert.deepEqual(workOn.map((r) => r.topic.id), ['create-helm', 'trouble-dns']);
+  });
+
+  it('lists every topic without a graded question as a blind spot, with or without scenarios', () => {
+    const { blindSpots } = recommendations(topicRows(topics, report, []));
+    assert.deepEqual(blindSpots.map((r) => r.topic.id), ['trouble-scheduling', 'create-crds']);
   });
 });

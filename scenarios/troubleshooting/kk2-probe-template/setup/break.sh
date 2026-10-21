@@ -19,7 +19,7 @@ spec:
         httpGet:
           command: ["cat", "/healthcheck"]
         initialDelaySeconds: 1
-        periodSeconds: 5
+        periodSeconds: 1
         failureThreshold: 1
 EOF
 chown -R ubuntu:ubuntu /opt/course

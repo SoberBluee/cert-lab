@@ -16,6 +16,7 @@ variables:
 tasks:
   - id: q1
     title: Deployment ${Q1_APP} not running
+    recipe: { category: scheduling }
     points: 5
     setup:
       - node: controlplane

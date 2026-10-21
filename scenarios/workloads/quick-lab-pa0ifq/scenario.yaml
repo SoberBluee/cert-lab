@@ -56,6 +56,7 @@ solution:
 tasks:
   - id: q1
     title: Autoscaler ${Q1_APP} not working
+    recipe: { category: hpa }
     points: 7
     setup:
       - node: controlplane
@@ -108,6 +109,7 @@ tasks:
       - "kubectl top pods -n ${Q1_NS}: when this fails, the problem is the metrics pipeline (kubectl get apiservice, then the Deployment and Service behind it), not the autoscaler."
   - id: q2
     title: Deployment ${Q2_NAME}
+    recipe: { builder: deployment, parts: [ expose, ingress, httproute, resources, probes, env, html-configmap, init-content, spread, service-account, priority-class, revision-settings, update-image, scale, strategy, set-env, restart ] }
     points: 39
     setup:
       - node: controlplane
@@ -324,6 +326,7 @@ tasks:
       - kubectl -n ${Q2_NS} set image deployment/${Q2_NAME} <container>=${Q2_UPDATE_IMAGE}, then kubectl rollout status.
   - id: q3
     title: PersistentVolumeClaim ${Q3_NAME}
+    recipe: { builder: pvc, parts: [ selector, delete-keep-data ] }
     points: 4
     setup:
       - node: controlplane
@@ -349,6 +352,7 @@ tasks:
       - A claim in use by a Pod stays Terminating until the Pod is gone. With reclaim policy Retain the PV becomes Released.
   - id: q4
     title: Restore etcd
+    recipe: { builder: etcd-restore, parts: [] }
     points: 7
     setup:
       - node: controlplane

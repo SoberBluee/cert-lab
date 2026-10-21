@@ -21,6 +21,7 @@ See [docs/setup.md](docs/setup.md) for installation and [docs/authoring.md](docs
 - [Learn: guided lessons](#learn-guided-lessons)
 - [Playground](#playground)
 - [History](#history)
+- [Focus](#focus)
 - [Scenario Studio](#scenario-studio)
 - [Recipe catalog](#recipe-catalog)
 - [Command line](#command-line)
@@ -55,12 +56,15 @@ Requirements: macOS (Apple Silicon recommended), Node.js 22.13+, and either Mult
 | Tooling | Helm, etcdctl/etcdutl, kubectl completion, vim with 2-space tabs |
 | Shell | Exam-style: `alias k=kubectl`, `$do` (`--dry-run=client -o yaml`), `$now` (`--force --grace-period 0`), passwordless `ssh worker-1` |
 | Images | Every container image the scenarios use is pre-pulled, so labs don't depend on Docker Hub |
+| Extras | A local apt repository with kubeadm, kubelet and kubectl at 1.37.1 and at the newest 1.36 patch, the 1.36 control plane images, and the local-path provisioner (images and manifest) for the upgrade and dynamic provisioning questions |
 | Node health | `--node-monitor-grace-period=20s`, so a broken worker turns `NotReady` in about 20 seconds |
 
 **Snapshots.** The image build produces two base images:
 
-- **`bare`:** the packages are installed, but there is no cluster. It is used for "install a cluster" tasks.
+- **`bare`:** the packages are installed, but there is no cluster. It is used for "install a cluster" and upgrade tasks.
 - **`cluster`:** a healthy, ready cluster.
+
+Both carry the extras above. Images built before the extras existed can get them without a rebuild: `./cka images extras` (5-10 minutes). Until then, upgrade and dynamic provisioning questions stop at setup with that hint.
 
 **VM backends.**
 
@@ -124,6 +128,10 @@ The **Exam mode** toggle in the header decides how a session runs.
 | New variant | Re-rolls every variable and starts a fresh attempt | Refused |
 | After the session | Results with per-check feedback | Final score, then the VMs stop |
 
+The **Blind grading** toggle, next to Exam mode, applies to practice: a grade shows the score of each question but not the checks, whose descriptions name what is still wrong. The checks appear once you view the solution or end the session. `cka grade --blind` does the same in the terminal.
+
+Task texts are written the way the exam writes them: the symptom, the end state and the constraints, never the cause or a field-by-field spec. The full healthy setup appears in the solution, under "The healthy setup". Hints teach a method (where to look, in what order) rather than listing the faults a question can roll.
+
 **The session page provides:**
 - question tabs;
 - the task text, rendered from markdown;
@@ -146,14 +154,21 @@ Viewing the solution marks the attempt as assisted.
 The **Quick lab** bar sits under the filters on the Scenarios tab. It generates a random lab and starts it with one click.
 
 1. Choose **Create**, **Troubleshoot** or **Random**, a category (or **Any**), and how many questions you want (1-20).
-2. Press **Start**. The lab is generated from the [recipe catalog](#recipe-catalog), the VMs are provisioned and you go straight to the session.
+2. Optionally choose **2 faults stacked** or **3 faults stacked**, and tick **Per-question contexts**.
+3. Press **Start**. The lab is generated from the [recipe catalog](#recipe-catalog), the VMs are provisioned and you go straight to the session.
 
-A category limits every question to one topic, such as Service, Ingress, HTTPRoute / Gateway, Deployment, Nodes, Kubelet, API server, etcd or Scheduler. Create topics appear for Create and Random; troubleshoot topics appear for Troubleshoot and Random. **Any** keeps the mix below. A create topic such as Ingress asks only for that add-on. A troubleshoot topic such as Kubelet or etcd rolls only the matching fault subset.
+A category limits every question to one topic, such as Service, Ingress, HTTPRoute / Gateway, Deployment, Nodes, Kubelet, API server, etcd, Scheduler, Kustomize or Cluster upgrade. Create topics appear for Create and Random; troubleshoot topics appear for Troubleshoot and Random. **Any** keeps the mix below. A create topic such as Ingress asks only for that add-on. A troubleshoot topic such as Kubelet or etcd rolls only the matching fault subset.
 
 How each kind is built:
-- **Create** labs pick random build tasks, each with a random set of add-ons and follow-up tasks that don't conflict.
+- **Create** labs pick random build tasks, each with a random set of add-ons and follow-up tasks that don't conflict. Task builders (Kustomize, CRDs, upgrade, ...) pick one of their tasks at random.
 - **Troubleshoot** labs pick random fault categories with every fault in the category's pool, so the injected fault is a surprise on every start.
 - **Random** labs mix both kinds. Each lab has at most one question that can take down the API server.
+
+**Stacked faults.** Categories with layers (Services, DNS, NetworkPolicy, Nodes, Control plane, RBAC, Storage and others; see the [table](#troubleshooting-categories)) can break two or three separate things in one question, one from each layer, for example the Service, the backend Pods and a NetworkPolicy. The faults are injected and fixed in dependency order, the task says there may be more than one problem, and the solution walks through each. Categories without layers stay single.
+
+**Per-question contexts.** Every question names its own kubeconfig context to switch to, as the exam names a host per task. All of them reach the same lab cluster; the point is the habit of switching before every question.
+
+**Full mock.** The **Full mock** button builds an exam sitting: 17 questions weighted like the CKA curriculum (5 troubleshooting, 4 cluster architecture, 3 services and networking, 3 workloads, 2 storage), a fixed 120-minute timer, a context per question, and always exam mode: no hints, no grading until you submit.
 
 Generated labs are saved as hidden drafts (`quick-lab-xxxxxx`). You can find them again with "Show drafts".
 
@@ -170,6 +185,8 @@ The Learn section has step-by-step command drills, split into **CKA Labs** and *
 
 To check that a lesson can be completed, run `./cka learn verify <id>`. It plays each reference command as the learner would.
 
+Quizzes cover what a lab cannot: error messages, paths, workloads, networking, storage and RBAC, openssl, and cluster architecture (highly available control planes, etcd quorum, the upgrade order and version skew).
+
 ---
 
 ## Playground
@@ -181,6 +198,21 @@ A healthy 3-node cluster with nothing to solve and nothing graded. Break it, fix
 ## History
 
 Every attempt is recorded in a local SQLite database: scenario, mode, score, time and per-check results. The Scenarios cards show your best and last score from it. Attempts from dry-runs, verifies and the fake driver are kept out.
+
+The session page reports which question is on screen, so every attempt also records the minutes spent on each question, next to its score. History lists them per attempt, and its **Slowest questions** card shows where your time goes: the exam allows about 7 minutes per question.
+
+---
+
+## Focus
+
+The Focus tab scores every [Quick lab topic](#quick-lab) from your history and recommends what to practise next.
+
+- **Per question.** Each graded question counts toward its own topics with its own score, so a mixed lab does not lend its total to every topic it touches. A question you never opened does not count, and neither do dry-runs or verifies.
+- **Which topics.** A question Quick lab generated records its recipe (`recipe:` on the task), so it counts toward exactly the topics of its builder and add-ons, or of its category and the fault it rolled. A handwritten question counts toward the topics that share one of its tags (the task's `tags:`, else the scenario's), troubleshooting topics for troubleshooting labs, create topics otherwise.
+- **Score.** A topic's score is the mean of its 5 most recent questions, so it follows your progress.
+- **Work on next** lists the practised topics below 100%, weakest first. **Blind spots** lists every topic without a graded question, including those only Quick lab can generate. "Practice →" filters the Scenarios tab to the topic and points the Quick lab at it.
+
+Ticking a topic hides its scenarios from the Scenarios tab.
 
 ---
 
@@ -261,28 +293,52 @@ The recipe catalog powers both Quick Create and Quick lab. Each recipe produces:
 | **Certificates** | Inspect and renew certificates; add-on: create a user via CSR |
 | **Install a cluster** | kubeadm init and join from the `bare` image, plus a CNI |
 
+### Task builders
+
+These builders hold several single-purpose tasks on one topic. Each start of a Quick lab picks one task at random; Quick Create lets you choose. Every task of a builder scores the same.
+
+| Builder | Tasks |
+| --- | --- |
+| **Cluster upgrade** | Upgrade the control plane from 1.36 to 1.37.1; upgrade a worker (drain, `kubeadm upgrade node`, kubelet); prepare an upgrade and read `kubeadm upgrade plan`. Built from the `bare` image at setup, offline; the only question of its lab |
+| **Kustomize** | Write a production overlay; repair a kustomization that no longer builds; install a component with a patch so it runs on the control plane |
+| **CRDs and operators** | Inspect the CRDs of an API group (scope, storage version); read a field with `kubectl explain` and create a custom object; install an operator chart without its CRDs |
+| **Resource usage and logs** | Busiest Pods by memory and CPU (`kubectl top`); busiest node and a script for it; the ERROR lines and exit code of a crashed container (`logs --previous`); Pods by creation time and phase |
+| **Dynamic provisioning** | A StorageClass for the local-path provisioner, made the only default, and a claim provisioned on the Pod's node |
+| **Node infrastructure** | Persist kernel settings and `br_netfilter`; install a `.deb` and enable its service; join a node that was `kubeadm reset` |
+| **Service types and policies** | A LoadBalancer Service with a fixed node port and `externalTrafficPolicy: Local`; a selector-less Service with an EndpointSlice to a host outside the cluster; the least permissive of three NetworkPolicy files |
+| **Workload operations** | Split a node's allocatable capacity across replicas; a Job with completions, parallelism, backoffLimit and TTL; a PriorityClass one below the highest; a 1-hour ServiceAccount token |
+| **Gateway API with TLS** | Your own Gateway with an HTTPS listener and a TLS Secret; migrate a TLS Ingress with two paths to Gateway API |
+
 ### Troubleshooting categories
 
-Each category has a pool of faults, and one is injected at random on every start.
+Each category has a pool of faults, and one is injected at random on every start. Categories with layers can stack one fault per layer in a single question (see [Quick lab](#quick-lab)).
 
-| Category | Faults |
-| --- | --- |
-| **Pods** (8) | OOMKilled, image pull, bad command, missing ConfigMap key, wrong liveness port, wrong readiness path, requests too large, unsatisfiable nodeSelector |
-| **Pod configuration** (5) | Missing ConfigMap volume, wrong Secret item key, wrong mount path, runAsNonRoot conflict, read-only root filesystem |
-| **Scheduling** (5) | Pod quota, limits quota, LimitRange max, node affinity, missing PriorityClass |
-| **Horizontal Pod Autoscaling** (6) | No CPU request, wrong target name, wrong target kind, max of one, metrics-server down, metrics APIService broken |
-| **Vertical Pod Autoscaling** (6) | Recommender down, admission controller down, wrong target, mode Off, container Off, recommender RBAC |
-| **Jobs and CronJobs** (5) | Suspended, schedule never fires, deadline exceeded, backoff zero with failing command, bad image registry |
-| **RBAC and ServiceAccounts** (6) | Missing verb, wrong resource, binding subject in wrong namespace, wrong roleRef, wrong ServiceAccount, token automount off |
-| **Services** (9) | Selector mismatch, targetPort, named port, blocking NetworkPolicy, Pod not ready, extra selector label, wrong Service port, wrong protocol, kube-proxy down |
-| **NetworkPolicy** (8) | DNS egress port, DNS namespace selector, ingress port, ingress label, egress label, egress port, namespace AND pod selector, ingress pod selector |
-| **DNS** (12) | Corefile typo, CoreDNS scaled to zero, cluster domain, kube-dns selector, client dnsPolicy, forwarding loop, CoreDNS RBAC, kube-dns targetPort, Corefile key, CoreDNS image, config volume, memory limit |
-| **Ingress and HTTPRoute** (10) | Backend Service name, backend port, IngressClass, path, parentRef, sectionName, backend port on route, host typo, hostname typo, parentRef namespace |
-| **Nodes** (13) | kubelet stopped, containerd stopped, IP forwarding and containerd, kubelet binary path, cordoned, stray taint, invalid kubelet config, kubelet client CA, kubelet API port, kubelet extra args, CNI config removed, invalid containerd config, kubelet.conf missing |
-| **Storage** (3) | StorageClass mismatch, access mode mismatch, claim too large |
-| **Worker node configuration** (9) | kubelet kubeconfig server, client CA, runtime endpoint, `--config` flag, `--kubeconfig` flag, serving cert, maxPods, evictionHard, invalid cgroupDriver |
-| **Control plane** (24) | apiserver→etcd port/certfile/keyfile/flags, apiserver TLS key, apiserver manifest removed, admission plugin; etcd cert/key/CA/client URLs/data-dir/image; scheduler command/kubeconfig/image/manifest removed/invalid YAML; controller-manager kubeconfig/SA key/command; controlplane kubelet client cert, staticPodPath, API port |
-| **API access** (10) | kubeconfig server port/host, wrong CA, current-context, client key; apiserver client CA, secure port, bind address, broken manifest, TLS cert path |
+| Category | Layers | Faults |
+| --- | --- | --- |
+| **Pods** (11) | container, probes, scheduling | OOMKilled, image pull, bad command, `/bin/bash` on busybox, liveness before start, missing ConfigMap key, wrong liveness port, wrong readiness path, requests too large, unsatisfiable nodeSelector, paused rollout with maxSurge 0 |
+| **Pod configuration** (6) | volumes, security context | Missing ConfigMap volume, wrong Secret item key, wrong mount path, runAsNonRoot conflict, read-only root filesystem, immutable ConfigMap |
+| **Scheduling** (6) | namespace policy, Pod template | Pod quota, limits quota, LimitRange max, node affinity, missing PriorityClass, zone topology spread |
+| **Horizontal Pod Autoscaling** (6) | - | No CPU request, wrong target name, wrong target kind, max of one, metrics-server down, metrics APIService broken |
+| **Vertical Pod Autoscaling** (6) | - | Recommender down, admission controller down, wrong target, mode Off, container Off, recommender RBAC |
+| **Jobs and CronJobs** (5) | - | Suspended, schedule never fires, deadline exceeded, backoff zero with failing command, bad image registry |
+| **RBAC and ServiceAccounts** (6) | Role, RoleBinding, workload | Missing verb, wrong resource, binding subject in wrong namespace, wrong roleRef, wrong ServiceAccount, token automount off |
+| **Services** (18) | Service, backend Pods, network path | Selector mismatch, targetPort, named port, blocking NetworkPolicy, Pod not ready, extra selector label, wrong Service port, wrong protocol, kube-proxy down, no selector, targetPort typo, Pod label drift, HTTPS readiness probe, readiness port, egress deny, ExternalName, kube-proxy mode, headless |
+| **NetworkPolicy** (15) | DNS egress, frontend egress, API ingress | DNS egress port, namespace selector, Pod selector, UDP only, policy deleted; frontend egress label, port, selector, policy deleted, ipBlock except; ingress port, label, namespace AND Pod selector, Pod selector, ports cleared |
+| **DNS** (14) | Corefile, CoreDNS Deployment, kube-dns Service or client | Corefile typo, forwarding loop, cluster domain, hosts plugin, Corefile key; scaled to zero, image, config volume, memory limit, readiness port, RBAC; kube-dns selector and targetPort, client dnsPolicy |
+| **Ingress and HTTPRoute** (17) | Ingress, HTTPRoute | Backend name and port, IngressClass, path, path prefix, host typo, TLS Secret; parentRef, parent namespace, parent group, sectionName, backend name and port, hostname typo, path prefix, weight zero, redirect filter |
+| **Nodes** (15) | runtime or network, kubelet, scheduling | containerd stopped, invalid containerd config, CNI config removed, invalid conflist, IP forwarding; kubelet stopped, binary path, invalid config, client CA, API port, extra args, kubelet.conf missing, swap; cordoned, stray taint |
+| **Storage** (5) | claim, volume, Pod | StorageClass mismatch, access mode mismatch, claim too large, Released PV with a stale claimRef, Pod pinned away from the node that holds the volume |
+| **Worker node configuration** (11) | - | kubelet kubeconfig server, client CA, runtime endpoint, `--config` flag, `--kubeconfig` flag, serving cert, maxPods, evictionHard, cgroupDriver, resolvConf, hairpinMode |
+| **Control plane** (28) | scheduler or controller manager, API server or etcd | apiserver→etcd port/certfile/keyfile/flags, apiserver TLS key, manifest removed, admission plugin, advertise address, SA key; etcd cert/key/CA/client and peer URLs/data-dir/image; scheduler command/kubeconfig/image/manifest/YAML/config; controller-manager kubeconfig/SA key/command; controlplane kubelet client cert, staticPodPath, API port |
+| **API access** (11) | user kubeconfigs, API server | kubeconfig server port/host, wrong CA, current-context, client key, permissions; apiserver client CA, secure port, bind address, broken manifest, TLS cert path |
+| **Admission webhooks** (1) | - | Orphan validating webhook that fails closed |
+| **Node drain** (1) | - | PDB blocks the drain while Pods are pinned |
+| **Restarting Pods** (5) | - | Symptom only: liveness port, liveness path, exec probe, liveness before a slow start, OOMKilled |
+| **Rejected Pods** (6) | - | Symptom only: Pod quota, limits quota, LimitRange max, LimitRange min, Pod Security `restricted`, webhook with a missing Service |
+| **Unschedulable node** (5) | - | Symptom only: cordon, NoSchedule taint, NoExecute taint, lost node label, maxPods 2 |
+| **Controllers and scheduler** (9) | - | Symptom only: the scheduler and controller manager faults of Control plane, with the API server up |
+| **Dynamic provisioning** (5) | - | Provisioner typo, claim without a class and no default, ReadWriteOncePod claim taken, hostPath type Directory missing, claim only in another namespace |
+| **Gateway across namespaces** (3) | - | Listener `allowedRoutes: Same`, missing ReferenceGrant, listener hostname mismatch |
 
 ---
 
@@ -296,7 +352,7 @@ Everything in the UI can also be done from the terminal with `./cka`:
 | `cka start <id>` | Restore the snapshot, run setup and print the task |
 | `cka playground` | Start a 3-node cluster with no tasks |
 | `cka status` / `cka task [n]` | Show the session; print the task, or set up and print question *n* |
-| `cka grade` | Run the checks |
+| `cka grade [--blind]` | Run the checks; `--blind` prints the score without the checks |
 | `cka submit` | Exam mode: grade once, end the session and stop the VMs |
 | `cka hint [task]` / `cka solution` | Reveal the next hint or the solution |
 | `cka reset` / `cka end` | Restore and re-run setup / end the session and stop the VMs |
@@ -308,6 +364,7 @@ Everything in the UI can also be done from the terminal with `./cka`:
 | `cka verify <id>` | Set up, apply the solution and grade: every check must pass |
 | `cka learn list / start / verify` | Guided lessons |
 | `cka images build / list` | Build or inspect the base images (`--driver tart`, `--force`) |
+| `cka images extras` | Add the upgrade packages and the local-path provisioner to existing images, without a rebuild |
 
 `dry-run` and `verify` also take these options:
 - `--all` runs every scenario.

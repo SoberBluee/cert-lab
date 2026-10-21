@@ -169,3 +169,16 @@ export const heredocSafe = (text: string) =>
     .replace(/\$(?!\{Q\d+_)/g, '\\$');
 
 export const applyScript = (manifests: object[]) => `kubectl apply -f - <<EOF\n${heredocSafe(manifestsYaml(manifests))}EOF`;
+
+/** Where the image extras stage the local-path provisioner (tools/build-base-images/extras.sh). */
+export const LOCAL_PATH_MANIFEST = '/opt/cka/addons/local-path-storage.yaml';
+
+/**
+ * Installs the local-path provisioner from the staged manifest (its images are pre-pulled), unless it
+ * already runs. Dynamic provisioning questions start with this.
+ */
+export const requireLocalPath = `if ! kubectl -n local-path-storage get deployment local-path-provisioner >/dev/null 2>&1; then
+  [[ -f ${LOCAL_PATH_MANIFEST} ]] || { echo "these lab images have no local-path provisioner: run ./cka images extras (or rebuild the images)" >&2; exit 1; }
+  kubectl apply -f ${LOCAL_PATH_MANIFEST} >/dev/null
+fi
+kubectl -n local-path-storage rollout status deployment/local-path-provisioner --timeout=180s >/dev/null`;

@@ -23,6 +23,7 @@ variables:
 tasks:
   - id: q1
     title: Back up etcd
+    recipe: { builder: etcd-backup, parts: [] }
     points: 5
     setup:
       - node: controlplane
@@ -55,6 +56,7 @@ tasks:
       - ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save <file>
   - id: q2
     title: ${Q2_APP} unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     setup:
       - node: controlplane
@@ -100,6 +102,7 @@ tasks:
       - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
   - id: q3
     title: Helm release ${Q3_REL}
+    recipe: { builder: helm, parts: [ replicas, nodeport, values-file ] }
     points: 7
     setup:
       - node: controlplane

@@ -18,6 +18,7 @@ variables:
 tasks:
   - id: q1
     title: Cluster certificates
+    recipe: { builder: certificates, parts: [ user-csr ] }
     points: 7
     setup:
       - node: controlplane
@@ -65,6 +66,7 @@ tasks:
       - kubectl certificate approve <name>, then read .status.certificate and base64 -d it; kubectl config --kubeconfig <file> set-cluster, set-credentials --embed-certs and set-context build the kubeconfig.
   - id: q2
     title: Cluster certificates
+    recipe: { builder: certificates, parts: [ renew ] }
     points: 4
     setup:
       - node: controlplane

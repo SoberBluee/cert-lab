@@ -27,6 +27,7 @@ variables:
 tasks:
   - id: q1
     title: Deployment ${Q1_NAME}
+    recipe: { builder: deployment, parts: [ expose, httproute ] }
     points: 9
     setup:
       - node: controlplane
@@ -78,6 +79,7 @@ tasks:
       - kubectl explain httproute.spec shows the fields; the Gateway API docs have an HTTPRoute example with parentRefs, hostnames and backendRefs to start from.
   - id: q2
     title: Deployment ${Q2_NAME}
+    recipe: { builder: deployment, parts: [ expose, httproute ] }
     points: 9
     setup:
       - node: controlplane

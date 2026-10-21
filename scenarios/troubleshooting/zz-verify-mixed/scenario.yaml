@@ -51,6 +51,7 @@ solution:
 tasks:
   - id: q1
     title: Control plane after maintenance
+    recipe: { category: controlplane }
     points: 8
     checks:
       - id: q1-api-ready
@@ -95,6 +96,7 @@ tasks:
       - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
   - id: q2
     title: Unhealthy worker
+    recipe: { category: nodes }
     points: 6
     checks:
       - id: q2-all-ready
@@ -140,6 +142,7 @@ tasks:
       - systemctl is-enabled tells you whether a service comes back after a reboot.
   - id: q3
     title: Deployment ${Q3_NAME}
+    recipe: { builder: deployment, parts: [ expose, ingress ] }
     points: 9
     checks:
       - id: q3-ready

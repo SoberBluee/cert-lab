@@ -30,6 +30,7 @@ setup:
 tasks:
   - id: q1
     title: Kubeconfig forensics
+    tags: [ kubeconfig, certificates, context-switch ]
     points: 5
     setup:
       - node: controlplane
@@ -150,6 +151,7 @@ tasks:
 
   - id: q2
     title: Least-privilege ServiceAccount
+    tags: [ rbac, serviceaccount, clusterrole ]
     points: 7
     setup:
       - node: controlplane
@@ -286,6 +288,7 @@ tasks:
 
   - id: q3
     title: etcd operations
+    tags: [ etcd, backup, snapshot, restore ]
     points: 4
     setup:
       - node: controlplane
@@ -396,6 +399,7 @@ tasks:
 
   - id: q4
     title: Certificate investigation
+    tags: [ certificates, openssl ]
     points: 4
     variant: Q4_KIND
     variants:
@@ -503,6 +507,7 @@ tasks:
 
   - id: q5
     title: Node maintenance
+    tags: [ drain, taints, pdb ]
     points: 8
     setup:
       - node: controlplane

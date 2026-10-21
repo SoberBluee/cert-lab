@@ -54,6 +54,7 @@ solution:
 tasks:
   - id: q1
     title: StorageClass ${Q1_NAME}
+    recipe: { builder: storageclass, parts: [ allow-expansion, change-binding ] }
     points: 5
     checks:
       - id: q1-provisioner
@@ -86,6 +87,7 @@ tasks:
       - "The field cannot be edited: kubectl get storageclass ${Q1_NAME} -o yaml > sc.yaml, change it, then kubectl replace --force -f sc.yaml."
   - id: q2
     title: Pod ${Q2_NAME}
+    recipe: { builder: pod, parts: [ security, capabilities ] }
     points: 7
     checks:
       - id: q2-running
@@ -126,6 +128,7 @@ tasks:
       - "securityContext.capabilities: {drop: [ALL], add: [...]} on the container (names without the CAP_ prefix)."
   - id: q3
     title: Service ${Q3_APP} unreachable
+    recipe: { category: services }
     points: 6
     checks:
       - id: q3-reachable
@@ -161,6 +164,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q4
     title: Unhealthy worker
+    recipe: { category: nodes }
     points: 6
     checks:
       - id: q4-all-ready
@@ -206,6 +210,7 @@ tasks:
       - systemctl is-enabled tells you whether a service comes back after a reboot.
   - id: q5
     title: Unhealthy Deployment ${Q5_APP}
+    recipe: { category: pods }
     points: 8
     checks:
       - id: q5-ready

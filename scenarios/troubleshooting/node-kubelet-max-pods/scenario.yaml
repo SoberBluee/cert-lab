@@ -23,6 +23,7 @@ solution:
 tasks:
   - id: q1
     title: Worker after a configuration change
+    recipe: { category: nodeconfig }
     points: 7
     setup:
       - node: controlplane

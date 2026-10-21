@@ -25,6 +25,7 @@ variables:
 tasks:
   - id: q1
     title: PersistentVolumeClaim ${Q1_NAME}
+    recipe: { builder: pvc, parts: [ selector, delete-keep-data ] }
     points: 4
     setup:
       - node: controlplane
@@ -50,6 +51,7 @@ tasks:
       - A claim in use by a Pod stays Terminating until the Pod is gone. With reclaim policy Retain the PV becomes Released.
   - id: q2
     title: Access for ${Q2_SA}
+    recipe: { builder: rbac, parts: [] }
     points: 5
     setup:
       - node: controlplane
@@ -84,6 +86,7 @@ tasks:
       - You need a ServiceAccount, a Role and a RoleBinding. kubectl create role --help and kubectl create rolebinding --help.
   - id: q3
     title: Frontend cannot reach ${Q3_APP}
+    recipe: { category: netpol }
     points: 7
     setup:
       - node: controlplane

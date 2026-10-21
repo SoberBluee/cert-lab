@@ -15,6 +15,7 @@ variables:
 tasks:
   - id: q1
     title: New workloads never start
+    recipe: { category: controllers }
     points: 8
     setup:
       - node: controlplane

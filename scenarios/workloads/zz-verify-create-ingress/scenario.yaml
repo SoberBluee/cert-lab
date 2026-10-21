@@ -25,6 +25,7 @@ setup:
 tasks:
   - id: q1
     title: Deployment ${Q1_NAME}
+    recipe: { builder: deployment, parts: [ expose, ingress, httproute ] }
     points: 12
     checks:
       - id: q1-ready

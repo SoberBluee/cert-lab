@@ -33,6 +33,7 @@ variables:
 tasks:
   - id: q1
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -80,6 +81,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q2
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -127,6 +129,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q3
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -174,6 +177,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q4
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -221,6 +225,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q5
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -268,6 +273,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q6
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -315,6 +321,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q7
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -362,6 +369,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q8
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -409,6 +417,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q9
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -456,6 +465,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q10
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane

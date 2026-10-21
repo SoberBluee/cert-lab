@@ -21,6 +21,7 @@ setup:
 tasks:
   - id: q1
     title: ${Q1_APP} unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     checks:
       - id: q1-ingress-serves

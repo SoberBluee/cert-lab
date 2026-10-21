@@ -482,6 +482,21 @@ images
     }),
   );
 images
+  .command('extras')
+  .description('add the upgrade packages and the local-path provisioner to existing images, without a rebuild (5-10 minutes)')
+  .option('--driver <name>', 'VM backend: multipass or tart (default: CKA_DRIVER, then the existing images, then multipass)')
+  .action(
+    action((opts: { driver?: string }) => {
+      const driver = opts.driver ?? selectDriverName();
+      if (driver !== 'multipass' && driver !== 'tart') fail(`images can only be extended for the multipass or tart driver, not "${driver}"`);
+      return new Promise<number>((resolve) => {
+        const script = join(repoRoot, 'tools', 'build-base-images', 'extras.sh');
+        const p = spawn('bash', [script], { stdio: 'inherit', env: { ...process.env, CKA_DRIVER: driver } });
+        p.on('close', (code) => resolve(code ?? 1));
+      });
+    }),
+  );
+images
   .command('list')
   .description('show which base images exist')
   .action(

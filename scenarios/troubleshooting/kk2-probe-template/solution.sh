@@ -18,7 +18,7 @@ spec:
         exec:
           command: ["cat", "/healthcheck"]
         initialDelaySeconds: 5
-        periodSeconds: 5
+        periodSeconds: 1
         failureThreshold: 1
 EOF
 kubectl delete pod "${POD}" --ignore-not-found >/dev/null 2>&1 || true

@@ -23,6 +23,7 @@ solution:
 tasks:
   - id: q1
     title: One worker takes no Pods
+    recipe: { category: unschedulable }
     points: 6
     setup:
       - node: controlplane

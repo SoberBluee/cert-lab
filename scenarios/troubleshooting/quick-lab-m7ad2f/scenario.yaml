@@ -26,6 +26,7 @@ solution:
 tasks:
   - id: q1
     title: Worker after a configuration change
+    recipe: { category: nodeconfig }
     points: 7
     setup:
       - node: controlplane
@@ -74,6 +75,7 @@ tasks:
       - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
   - id: q2
     title: Pod ${Q2_CLAIM}-app stuck
+    recipe: { category: storage }
     points: 5
     setup:
       - node: controlplane

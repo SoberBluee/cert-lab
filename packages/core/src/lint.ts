@@ -6,6 +6,7 @@ import { hiddenVarNames, varRefs, type Step } from '@cka/schema';
 import { LessonLibrary } from './lessons';
 import { blueprintsDir, dataDir, lessonsDir, quizzesDir, scenariosDir } from './paths';
 import { QuizLibrary } from './quizzes';
+import { BUILDERS, CATEGORIES } from './recipes';
 import { ScenarioLibrary, taskFile, type LoadedScenario } from './scenarios';
 
 export interface LintIssue {
@@ -134,6 +135,18 @@ export function lintScenario(s: LoadedScenario, read: FileReader, where: string,
   if (d.tasks) {
     const total = s.tasks.reduce((sum, t) => sum + t.points, 0);
     if (total !== d.points) warn(`task points add up to ${total} but scenario points is ${d.points}`);
+  }
+  // Focus counts a generated question toward its recipe's topics; an unknown one counts toward none.
+  for (const t of s.tasks) {
+    const r = t.recipe;
+    if (!r) continue;
+    if ('builder' in r) {
+      const b = BUILDERS.find((x) => x.id === r.builder);
+      if (!b) warn(`task ${t.id}: recipe names unknown builder "${r.builder}"`);
+      for (const id of b ? r.parts : []) if (![...b!.addons, ...b!.followUps].some((x) => x.id === id)) warn(`task ${t.id}: recipe names unknown ${b!.name} part "${id}"`);
+    } else if (!CATEGORIES.some((c) => c.id === r.category)) {
+      warn(`task ${t.id}: recipe names unknown category "${r.category}"`);
+    }
   }
   if (d.k8sVersion && meta && !meta.kubernetesVersion.startsWith(d.k8sVersion)) {
     warn(`pinned to Kubernetes ${d.k8sVersion} but the base images run ${meta.kubernetesVersion}`);

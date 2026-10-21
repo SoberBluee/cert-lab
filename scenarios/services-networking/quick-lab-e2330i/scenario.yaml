@@ -19,6 +19,7 @@ variables:
 tasks:
   - id: q1
     title: Service ${Q1_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -59,6 +60,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q2
     title: Frontend cannot reach ${Q2_APP}
+    recipe: { category: netpol }
     points: 7
     setup:
       - node: controlplane

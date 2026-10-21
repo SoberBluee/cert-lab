@@ -24,6 +24,7 @@ solution:
 tasks:
   - id: q1
     title: kubectl stopped working
+    recipe: { category: apiaccess }
     points: 8
     setup:
       - node: controlplane
@@ -73,6 +74,7 @@ tasks:
       - "If the API server is healthy, the kubeconfig is wrong: compare the server and certificate-authority-data in ~/.kube/config with /etc/kubernetes/admin.conf (kubectl config view --raw)."
   - id: q2
     title: StorageClass ${Q2_NAME}
+    recipe: { builder: storageclass, parts: [ make-default, change-binding ] }
     points: 5
     checks:
       - id: q2-provisioner

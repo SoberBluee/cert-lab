@@ -15,6 +15,7 @@ variables:
 tasks:
   - id: q1
     title: New Pods rejected in batch
+    recipe: { category: admission }
     points: 5
     setup:
       - node: controlplane

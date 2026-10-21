@@ -28,12 +28,17 @@ checks:
     run: kubectl get pod ${POD} -o jsonpath='{.spec.containers[0].livenessProbe.exec.command[0]}/{.spec.containers[0].livenessProbe.httpGet}'
     expect: { equals: "cat/" }
     weight: 1
-  - id: delay
-    description: initialDelaySeconds is at least 5
+  # The outcome, not one fix: a probe that fires before /healthcheck exists restarts the container within seconds.
+  - id: stable
+    description: the container of ${POD} has run for 20 seconds or more without a restart
     type: kubectl
-    run: kubectl get pod ${POD} -o jsonpath='{.spec.containers[0].livenessProbe.initialDelaySeconds}'
-    expect: { gte: 5 }
+    run: |
+      s=$(kubectl get pod ${POD} -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}')
+      r=$(kubectl get pod ${POD} -o jsonpath='{.status.containerStatuses[0].restartCount}')
+      [ -n "$s" ] && [ "$r" = 0 ] && echo $(( $(date +%s) - $(date -d "$s" +%s) ))
+    expect: { gte: 20 }
     weight: 1
+    retrySeconds: 90
   - id: args
     description: the container args were not changed
     type: kubectl
@@ -43,4 +48,4 @@ checks:
 hints:
   - "kubectl apply -f /opt/course/${POD}.yaml shows the validation error; fix the probe type first."
   - "After the Pod starts, watch restarts and kubectl describe pod / get events for Unhealthy liveness failures."
-  - "Do not change the args: section. Raise initialDelaySeconds so the probe runs after /healthcheck exists."
+  - "Do not change the args: section. Compare when the probe first runs with when the args create the file it reads."

@@ -27,6 +27,7 @@ variables:
 tasks:
   - id: q1
     title: Helm release ${Q1_REL}
+    recipe: { builder: helm, parts: [ replicas, upgrade ] }
     points: 5
     setup:
       - node: controlplane
@@ -65,6 +66,7 @@ tasks:
       - helm upgrade --reuse-values keeps the values of the current revision; helm history shows the revisions.
   - id: q2
     title: Deployment ${Q2_APP} not running
+    recipe: { category: scheduling }
     points: 5
     setup:
       - node: controlplane
@@ -98,6 +100,7 @@ tasks:
       - What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${Q2_NS} get all,resourcequota,limitrange and kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml.
   - id: q3
     title: Deployment ${Q3_APP} does not serve its page
+    recipe: { category: podconfig }
     points: 6
     setup:
       - node: controlplane
@@ -139,6 +142,7 @@ tasks:
       - Compare the volumes and volumeMounts of the Deployment with the ConfigMaps and Secrets that exist and the keys they hold; check the ConfigMap content too, not only its name.
   - id: q4
     title: PersistentVolumeClaim ${Q4_NAME}
+    recipe: { builder: pvc, parts: [ volume-name ] }
     points: 4
     setup:
       - node: controlplane
@@ -169,6 +173,7 @@ tasks:
       - spec.volumeName on the claim binds it to one named PV.
   - id: q5
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane

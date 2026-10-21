@@ -3,6 +3,7 @@ import type {
   BaseImage,
   BlueprintSummary,
   CreateScenarioRequest,
+  FocusReport,
   GradeResult,
   LessonSummary,
   LessonTrack,
@@ -67,10 +68,13 @@ export const api = {
   reroll: () => request<SessionView>('POST', '/sessions/current/reset', { reroll: true }),
   grade: () => request<GradeResult>('POST', '/sessions/current/grade'),
   openTask: (taskId: string) => request<SessionView>('POST', `/sessions/current/tasks/${encodeURIComponent(taskId)}/open`),
+  /** Which question is on screen (null: none), for minutes per question in History. */
+  focus: (taskId: string | null) => request<SessionView>('POST', '/sessions/current/focus', { taskId }),
   hint: (taskId?: string) => request<SessionView>('POST', '/sessions/current/hint', { taskId }),
   solution: () => request<SessionView>('POST', '/sessions/current/solution'),
   end: () => request<SessionView>('DELETE', '/sessions/current'),
   history: () => request<{ attempts: AttemptRecord[] }>('GET', '/history'),
+  topicScores: () => request<FocusReport>('GET', '/focus'),
   lessons: (track?: LessonTrack) =>
     request<{ lessons: LessonSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/lessons${track ? `?track=${track}` : ''}`),
   startLesson: (id: string) => request<SessionView>('POST', `/lessons/${encodeURIComponent(id)}/start`),

@@ -22,6 +22,7 @@ setup:
 tasks:
   - id: q1
     title: Frontend cannot reach api
+    recipe: { category: netpol }
     points: 7
     context: k8s-web
     setup:
@@ -62,6 +63,7 @@ tasks:
       - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."
   - id: q2
     title: web unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     context: k8s-alpha
     setup:

@@ -168,3 +168,18 @@ snapshot_all() {
     "$TART" clone "$i" "$i-$1"
   done
 }
+
+# Replaces the working VMs with clones of snapshot $1 and starts them (extras.sh).
+restore_all() {
+  local n vm
+  for n in "${NODES[@]}"; do
+    vm="$(inst "$n")"
+    "$TART" stop --timeout 0 "$vm" >/dev/null 2>&1 || true
+    "$TART" delete "$vm" >/dev/null 2>&1 || true
+    "$TART" clone "$vm-$1" "$vm"
+  done
+  start_all
+}
+
+# snapshot_all already deletes the old golden VM before cloning the new one.
+replace_snapshot_all() { snapshot_all "$1"; }

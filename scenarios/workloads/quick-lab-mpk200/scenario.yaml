@@ -22,6 +22,7 @@ variables:
 tasks:
   - id: q1
     title: Deployment ${Q1_APP} does not serve its page
+    recipe: { category: podconfig }
     points: 6
     setup:
       - node: controlplane
@@ -63,6 +64,7 @@ tasks:
       - Compare the volumes and volumeMounts of the Deployment with the ConfigMaps and Secrets that exist and the keys they hold; check the ConfigMap content too, not only its name.
   - id: q2
     title: Service ${Q2_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -103,6 +105,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q3
     title: CronJob ${Q3_APP} never succeeds
+    recipe: { category: cronjobs }
     points: 6
     setup:
       - node: controlplane

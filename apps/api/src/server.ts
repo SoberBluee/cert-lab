@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyError } from 'fastify';
-import { createOrchestrator, gradeQuiz, OrchestratorError, repoRoot, Studio, toLessonSummary, toQuizSummary, toQuizView, toSummary } from '@cka/core';
+import { createOrchestrator, focusReport, gradeQuiz, OrchestratorError, repoRoot, Studio, toLessonSummary, toQuizSummary, toQuizView, toSummary } from '@cka/core';
 import type { AttemptRecord, Mode, ScenarioDetail, ScenarioSummary } from '@cka/schema';
 import { registerStudio } from './studio';
 import { registerTerminal } from './terminal';
@@ -179,6 +179,7 @@ app.post<{ Params: { id: string } }>('/api/sessions/current/tasks/:id/open', asy
 });
 
 app.post('/api/sessions/current/grade', async () => sessions.grade());
+app.post<{ Body: { taskId?: string | null } }>('/api/sessions/current/focus', async (req) => sessions.focus(req.body?.taskId ?? null));
 app.post('/api/sessions/current/submit', async () => sessions.submit());
 app.post<{ Body: { taskId?: string } | null }>('/api/sessions/current/hint', async (req) => sessions.hint(req.body?.taskId));
 app.post('/api/sessions/current/solution', async () => sessions.solution());
@@ -196,6 +197,9 @@ app.get('/api/sessions/current/kubeconfig', async (_req, reply) => {
   reply.header('Content-Disposition', 'attachment; filename="cka-lab.kubeconfig"');
   return reply.send(createReadStream(path));
 });
+
+// Per-topic scores from every graded question, for the Focus page.
+app.get('/api/focus', async () => focusReport(store, library));
 
 app.get<{ Querystring: { scenarioId?: string; domain?: string; limit?: string } }>('/api/history', async (req) => {
   const attempts: AttemptRecord[] = store

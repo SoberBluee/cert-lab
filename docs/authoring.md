@@ -81,6 +81,8 @@ tasks:
 
 Top-level `setup` and tasks with `setupStage: 0` run when the session starts. A task with a higher stage is set up the first time the learner opens it, after every unopened task with a lower non-zero stage. Quick Create uses stage 1 for questions that break a node and stage 2 for questions that may take the API server down, so a broken control plane does not block the other questions. A question that was never opened scores 0 and its checks are reported as not attempted. `dry-run` and `verify` set up every task at start, in stage order.
 
+In a scenario with several questions, give each one its own `tags` (for example `tags: [ hpa, autoscaling ]`): the Focus tab scores each question toward the topics its tags name, and falls back to the scenario's tags, which cover every question. Quick Create writes `recipe:` instead, naming the builder and add-ons or the category that generated the question.
+
 #### Task variants
 
 A question slot can hold several sibling questions, of which one is rolled per start. Name a visible `oneOf` variable in `variant`, and give `variants` one entry per value (the keys must equal the values exactly):
@@ -121,6 +123,25 @@ Every setup step, solution step and check runs as **root** with `KUBECONFIG=/etc
 Common fields: `id`, `description` (shown to the user after grading), `weight` (default 1), and `retrySeconds`, which overrides `settleSeconds`.
 
 Expectation operators, all of which must hold: `equals`, `contains`, `notContains`, `matches` (regex, multiline), `exitCode`, `notEmpty`, `gte`, `lte`. Comparisons use stdout with surrounding whitespace trimmed. A command that fails without an `exitCode` operator is judged only on its stdout.
+
+## Writing the task
+
+The exam states what must be true at the end, not how to get there. Write tasks the same way:
+
+- **Symptom, end state, constraints.** "Pods of `api` in `shop` cannot reach `db` on port 5432. Fix it without changing the `db` Pods." Not the cause ("the NetworkPolicy selects the wrong label"), and not a field-by-field spec of the healthy object. Put the healthy setup in `solution.md`.
+- **Evidence when the answer is a value.** Ask for a file with a value only the cluster can give (a node name, an exit code, a log line), so the check proves the learner looked.
+- **Say when there is more than one problem.** "There may be more than one problem" is enough; don't count them.
+- **Hints teach a method.** "Compare the Service's selector with the labels of the Pods it should reach" rather than "the selector says `app=web2`". A hint must never name a hidden fault.
+
+## Recipes
+
+Quick Create builds labs from recipes in `packages/core/src/recipes/` instead of folders:
+
+- **Create builders** (`create/`) pick random fields, add-ons and follow-ups. A builder made with `taskBuilder` (`create/tasks.ts`) holds several single-purpose tasks on one topic, such as Kustomize or the cluster upgrade: each task has its own text, setup, checks, solution and hints, scores the builder's `points`, and Quick lab rolls one per start. Mark a builder `solo` when it must be the only question of its lab (it rebuilds the cluster), `breaksApi` when it can take the API server down, and `disruptive` when it restarts a node.
+- **Fault categories** (`troubleshoot/`) share one healthy setup and a pool of faults, each with `break`, optional `nodeBreak`, `settle`, `fix` and `wait`. A fix must not wait; put the wait in `wait`, so stacked fixes run before any of them is waited on.
+- **Layers.** A category can group its faults into `layers` (for example Service, backend Pods, network path). A stacked question rolls one fault per layer into `Q1_FAULT`, `Q1_FAULT_2` and `Q1_FAULT_3`, in layer order. Faults in different layers must not undo each other, and each snippet runs in its own subshell, so pass state between them through a file, not shell variables.
+
+Recipe scripts receive variables as environment variables; checks, task text and YAML are templated. So `${Q1_NS}` works in a script only outside single quotes and quoted heredocs. `npm test` builds every task and fault, lints the result and runs each script against stubs; `./cka verify <draft> --each Q1_FAULT` proves them on the VMs.
 
 ## Rules for good scenarios
 

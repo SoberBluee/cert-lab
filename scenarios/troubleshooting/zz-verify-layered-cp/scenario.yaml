@@ -20,6 +20,7 @@ solution:
 tasks:
   - id: q1
     title: Control plane after maintenance
+    recipe: { category: controlplane }
     points: 8
     setup:
       - node: controlplane
