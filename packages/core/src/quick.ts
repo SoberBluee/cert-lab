@@ -7,6 +7,7 @@ import type {
   QuickPreviewQuestion,
   QuickQuestion,
   RecipeField,
+  RecipeRef,
   ScenarioBundle,
   VariableDef,
 } from '@cka/schema';
@@ -96,7 +97,7 @@ function toYaml(def: Record<string, unknown>): string {
       const key = isScalar(pair.key) ? pair.key.value : undefined;
       if (key === 'variables' && isMap(pair.value)) {
         for (const item of pair.value.items) if (isCollection(item.value)) item.value.flow = true;
-      } else if ((key === 'nodes' || key === 'expect' || key === 'tags') && isCollection(pair.value)) {
+      } else if ((key === 'nodes' || key === 'expect' || key === 'tags' || key === 'recipe') && isCollection(pair.value)) {
         pair.value.flow = true;
       }
     },
@@ -245,7 +246,7 @@ export function buildQuickBundle(req: QuickCreateRequest): {
   if (!Array.isArray(req.questions) || !req.questions.length) return { errors: ['Add at least one question.'] };
 
   const ctx: Ctx = { errors: [], variables: {} };
-  const built: { n: number; out: QuestionOutput }[] = [];
+  const built: { n: number; out: QuestionOutput; recipe: RecipeRef }[] = [];
   req.questions.forEach((q, i) => {
     const n = i + 1;
     const out =
@@ -254,7 +255,11 @@ export function buildQuickBundle(req: QuickCreateRequest): {
         : q?.type === 'troubleshoot'
           ? buildTrouble(q, n, ctx)
           : void ctx.errors.push(`Question ${n}: unknown question type`);
-    if (out) built.push({ n, out });
+    if (!out) return;
+    // Recorded on the task, so Focus counts the question toward exactly its topics.
+    const recipe: RecipeRef =
+      q.type === 'create' ? { builder: q.builder, parts: [...(q.addons ?? []), ...(q.followUps ?? [])].map((p) => p.id) } : { category: q.category };
+    built.push({ n, out, recipe });
   });
   if (built.filter((b) => b.out.breaksApi).length > 1) ctx.errors.push('Only one control plane question per lab.');
   // A disruptive category breaks shared cluster state (e.g. DNS edits the single CoreDNS
@@ -355,7 +360,9 @@ export function buildQuickBundle(req: QuickCreateRequest): {
   });
 
   const points = built.reduce((s, b) => s + b.out.points, 0);
-  const minutes = built.reduce((s, b) => s + b.out.minutes, 0);
+  const estimated = built.reduce((s, b) => s + b.out.minutes, 0);
+  // A full mock sits for a fixed time, as the exam does, whatever the questions' estimates add up to.
+  const minutes = req.minutes && Number.isInteger(req.minutes) && req.minutes > 0 ? req.minutes : estimated;
   const def: Record<string, unknown> = {
     id: req.id,
     title: req.title?.trim() || req.id,
@@ -384,6 +391,7 @@ export function buildQuickBundle(req: QuickCreateRequest): {
         ...(stage(b) ? { setupStage: stage(b) } : {}),
         checks: out.checks.map((c) => ({ ...c, id: `q${n}-${c.id}` })),
         hints: out.hints,
+        recipe: b.recipe,
       };
     }),
   };

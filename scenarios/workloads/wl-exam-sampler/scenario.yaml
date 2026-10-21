@@ -22,6 +22,7 @@ setup:
 tasks:
   - id: q1
     title: Scale the Deployment
+    tags: [ deployment, scale ]
     points: 3
     checks:
       - id: q1-spec-replicas
@@ -41,6 +42,7 @@ tasks:
       - "kubectl -n ${NS} scale deployment ${DEPLOY} --replicas=${REPLICAS}"
   - id: q2
     title: Expose it on a NodePort
+    tags: [ service, expose, nodeport ]
     points: 4
     checks:
       - id: q2-service-shape
@@ -60,6 +62,7 @@ tasks:
       - "kubectl -n ${NS} expose deployment ${DEPLOY} --name=${DEPLOY}-np --type=NodePort --port=80 $do > svc.yaml, add nodePort: ${NODEPORT}, apply."
   - id: q3
     title: Configure from a ConfigMap
+    tags: [ configmap, env ]
     points: 3
     checks:
       - id: q3-env-ref

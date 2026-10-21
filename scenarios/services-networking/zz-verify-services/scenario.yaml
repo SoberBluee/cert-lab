@@ -15,6 +15,7 @@ variables:
 tasks:
   - id: q1
     title: Service web unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane

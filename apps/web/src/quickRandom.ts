@@ -1,4 +1,4 @@
-import type { BuilderSummary, CategorySummary, LabTopic, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
+import type { BuilderSummary, CategorySummary, Domain, LabTopic, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
 import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import { studioApi } from './api';
 
@@ -254,4 +254,43 @@ export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind
   const items = pickItems(catalog, n, kind, seen, topic, layers);
   localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, items, itemPool(catalog, n, kind, topic, layers))]));
   return Promise.all(items.map((item) => validRandomQuestion(item, layers)));
+}
+
+/** Questions per curriculum domain in a full mock: 17, as the CKA curriculum weights its domains. */
+export const MOCK_PLAN: Record<Domain, number> = {
+  troubleshooting: 5,
+  'cluster-architecture': 4,
+  'services-networking': 3,
+  workloads: 3,
+  storage: 2,
+};
+/** The exam's time limit: a full mock sits for this long, whatever its questions' estimates add up to. */
+export const MOCK_MINUTES = 120;
+export const MOCK_QUESTIONS = Object.values(MOCK_PLAN).reduce((s, n) => s + n, 0);
+
+/**
+ * A full mock exam: questions drawn per domain by MOCK_PLAN, distinct topics, at most one that can
+ * take the API server down, in random order. Like randomLab, it prefers what has not come up lately.
+ */
+export async function fullMock(catalog: RecipeCatalog): Promise<Question[]> {
+  const seen = loadSeen();
+  const pool = itemPool(catalog, MOCK_QUESTIONS, 'random');
+  const out: Item[] = [];
+  let apiTaken = false;
+  for (const [domain, want] of Object.entries(MOCK_PLAN) as [Domain, number][]) {
+    const inDomain = pool.filter((i) => info(i).domain === domain);
+    const ordered = [...shuffle(inDomain.filter((i) => !seen.has(itemId(i)))), ...shuffle(inDomain.filter((i) => seen.has(itemId(i))))];
+    let taken = 0;
+    for (const item of ordered) {
+      if (taken >= want) break;
+      const x = info(item);
+      if (x.breaksApi && apiTaken) continue;
+      if (out.some((o) => info(o).id === x.id)) continue;
+      apiTaken ||= x.breaksApi;
+      out.push(item);
+      taken++;
+    }
+  }
+  localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, out, pool)]));
+  return Promise.all(shuffle(out).map((item) => validRandomQuestion(item, 1)));
 }

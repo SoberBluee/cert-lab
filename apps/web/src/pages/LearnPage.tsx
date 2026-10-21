@@ -14,6 +14,7 @@ const QUIZ_TOPIC_META: Record<QuizTopic, { name: string; blurb: string }> = {
   'quiz-workloads': { name: 'Workloads', blurb: 'probes, rollouts, Jobs and scheduling' },
   'quiz-networking': { name: 'Services and networking', blurb: 'Service, DNS, NetworkPolicy, Ingress and HTTPRoute' },
   'quiz-storage-rbac': { name: 'Storage and RBAC', blurb: 'PVC binding, access modes, reclaim, Role versus ClusterRole' },
+  'quiz-cluster': { name: 'Cluster architecture', blurb: 'Highly available control planes, etcd quorum, upgrades and version skew' },
   'quiz-linux-openssl': { name: 'openssl Q&A', blurb: 'Near-identical commands: pick the one flag or subcommand that makes it right' },
 };
 

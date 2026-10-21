@@ -17,6 +17,7 @@ variables:
 tasks:
   - id: q1
     title: Unhealthy Deployment storefront
+    recipe: { category: pods }
     points: 8
     setup:
       - node: controlplane

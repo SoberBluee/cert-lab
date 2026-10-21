@@ -41,6 +41,7 @@ variables:
 tasks:
   - id: q1
     title: Service ${Q1_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -81,6 +82,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q2
     title: Service ${Q2_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -121,6 +123,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q3
     title: Service ${Q3_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -161,6 +164,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q4
     title: Service ${Q4_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -201,6 +205,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q5
     title: Service ${Q5_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -241,6 +246,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q6
     title: Service ${Q6_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -281,6 +287,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q7
     title: Service ${Q7_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -321,6 +328,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q8
     title: Service ${Q8_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -361,6 +369,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q9
     title: Service ${Q9_APP} unreachable
+    recipe: { category: services }
     points: 6
     # kube-proxy-down is cluster-wide: set up after other Service questions, fix before their waits.
     setupStage: 1

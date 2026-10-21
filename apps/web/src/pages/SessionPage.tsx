@@ -335,6 +335,25 @@ export function SessionPage() {
   const task = session?.tasks[activeTask] ?? session?.tasks[0];
 
   const state = session?.state;
+
+  // Minutes per question: tell the server which question is on screen while the lab runs, and
+  // that none is when the page is hidden or left.
+  const focusId = session && state === 'running' && !playground && !learn ? task?.id : undefined;
+  useEffect(() => {
+    if (!focusId) return;
+    const report = () => api.focus(document.visibilityState === 'visible' ? focusId : null).catch(() => {});
+    report();
+    document.addEventListener('visibilitychange', report);
+    return () => document.removeEventListener('visibilitychange', report);
+  }, [focusId]);
+  const hasFocus = !!focusId;
+  useEffect(() => {
+    if (!hasFocus) return;
+    return () => {
+      api.focus(null).catch(() => {});
+    };
+  }, [hasFocus]);
+
   const openActive = () => task && !task.ready && state === 'running' && openTask.mutate(task.id);
   const selectTask = (i: number) => {
     setActiveTask(i);

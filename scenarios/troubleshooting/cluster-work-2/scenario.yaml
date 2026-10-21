@@ -31,6 +31,7 @@ solution:
 tasks:
   - id: q1
     title: Control plane after maintenance
+    recipe: { category: controlplane }
     points: 8
     setup:
       - node: controlplane
@@ -80,6 +81,7 @@ tasks:
       - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
   - id: q2
     title: Back up etcd
+    recipe: { builder: etcd-backup, parts: [] }
     points: 5
     setup:
       - node: controlplane
@@ -112,6 +114,7 @@ tasks:
       - ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save <file>
   - id: q3
     title: Worker after a configuration change
+    recipe: { category: nodeconfig }
     points: 7
     setup:
       - node: controlplane
@@ -160,6 +163,7 @@ tasks:
       - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
   - id: q4
     title: Cluster certificates
+    recipe: { builder: certificates, parts: [] }
     points: 2
     setup:
       - node: controlplane

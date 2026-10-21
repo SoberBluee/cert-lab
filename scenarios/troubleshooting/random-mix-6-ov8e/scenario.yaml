@@ -45,6 +45,7 @@ solution:
 tasks:
   - id: q1
     title: Control plane after maintenance
+    recipe: { category: controlplane }
     points: 8
     setup:
       - node: controlplane
@@ -94,6 +95,7 @@ tasks:
       - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
   - id: q2
     title: Pod ${Q2_CLAIM}-app stuck
+    recipe: { category: storage }
     points: 5
     setup:
       - node: controlplane
@@ -128,6 +130,7 @@ tasks:
       - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."
   - id: q3
     title: Pod ${Q3_NAME}
+    recipe: { builder: pod, parts: [ capabilities, exec-probe, label, update-image ] }
     points: 8
     setup:
       - node: controlplane
@@ -180,6 +183,7 @@ tasks:
       - kubectl label --help
   - id: q4
     title: Unhealthy Deployment ${Q4_APP}
+    recipe: { category: pods }
     points: 8
     setup:
       - node: controlplane
@@ -239,6 +243,7 @@ tasks:
       - "kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."
   - id: q5
     title: ${Q5_APP} unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     setup:
       - node: controlplane
@@ -284,6 +289,7 @@ tasks:
       - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
   - id: q6
     title: Unhealthy worker
+    recipe: { category: nodes }
     points: 6
     setup:
       - node: controlplane

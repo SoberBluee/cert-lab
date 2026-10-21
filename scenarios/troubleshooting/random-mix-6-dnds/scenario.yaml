@@ -31,6 +31,7 @@ variables:
 tasks:
   - id: q1
     title: Unhealthy Deployment ${Q1_APP}
+    recipe: { category: pods }
     points: 8
     setup:
       - node: controlplane
@@ -90,6 +91,7 @@ tasks:
       - "kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."
   - id: q2
     title: Back up etcd
+    recipe: { builder: etcd-backup, parts: [] }
     points: 5
     setup:
       - node: controlplane
@@ -122,6 +124,7 @@ tasks:
       - ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save <file>
   - id: q3
     title: PersistentVolumeClaim ${Q3_NAME}
+    recipe: { builder: pvc, parts: [ selector, consumer-pod, delete-keep-data ] }
     points: 4
     setup:
       - node: controlplane
@@ -148,6 +151,7 @@ tasks:
       - A claim in use by a Pod stays Terminating until the Pod is gone. With reclaim policy Retain the PV becomes Released.
   - id: q4
     title: Frontend cannot reach ${Q4_APP}
+    recipe: { category: netpol }
     points: 7
     setup:
       - node: controlplane
@@ -187,6 +191,7 @@ tasks:
       - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."
   - id: q5
     title: CronJob ${Q5_APP} never succeeds
+    recipe: { category: cronjobs }
     points: 6
     setup:
       - node: controlplane
@@ -227,6 +232,7 @@ tasks:
       - "To test a fix without waiting for the next minute: kubectl -n ${Q5_NS} create job test-run --from=cronjob/${Q5_APP}"
   - id: q6
     title: Cluster certificates
+    recipe: { builder: certificates, parts: [ renew ] }
     points: 4
     setup:
       - node: controlplane

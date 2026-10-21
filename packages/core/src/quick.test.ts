@@ -73,10 +73,15 @@ function build(questions: QuickQuestion[]) {
   return { build: build!, issues: studio.validate(build!.bundle).issues };
 }
 
-/** Parts a part needs, then the part itself. */
+/** Parts a part needs, transitively, then the part itself. */
 const withRequires = (b: Builder, p: PartBase): { addons: PartBase[]; followUps: PartBase[] } => {
-  const needs = (p.requires ?? []).map((id) => [...b.addons, ...b.followUps].find((x) => x.id === id)!);
-  const all = [...needs, p];
+  const all: PartBase[] = [];
+  const add = (x: PartBase) => {
+    if (all.includes(x)) return;
+    for (const id of x.requires ?? []) add([...b.addons, ...b.followUps].find((y) => y.id === id)!);
+    all.push(x);
+  };
+  add(p);
   return {
     addons: all.filter((x) => b.addons.includes(x)),
     followUps: all.filter((x) => b.followUps.includes(x)),
@@ -130,7 +135,30 @@ const STUBS = [
   'flock',
   'systemd-run',
   'python3',
+  'shuf',
+  'getent',
+  'apt-get',
+  'apt-mark',
+  'dpkg',
+  'dpkg-deb',
+  'sysctl',
+  'modprobe',
 ];
+
+/** Stubs that must print something for the scripts that read them. */
+const STUB_BODIES: Record<string, string> = {
+  // shuf -e a b c prints its words in order (the first N with -n N); shuf -i lo-hi prints lo.
+  shuf: `#!/usr/bin/env bash
+if [[ "$1" == -e ]]; then
+  shift; words=(); n=0
+  while (($#)); do if [[ "$1" == -n ]]; then n="$2"; shift 2; else words+=("$1"); shift; fi; done
+  ((n > 0)) && words=("\${words[@]:0:n}")
+  printf '%s\\n' "\${words[@]}"
+elif [[ "$1" == -i ]]; then echo "\${2%%-*}"; fi
+exit 0
+`,
+  getent: '#!/usr/bin/env bash\necho "192.0.2.10 $2"\nexit 0\n',
+};
 
 /**
  * Runs every script with stub commands and returns what was piped to "kubectl apply -f -". Exit codes
@@ -144,7 +172,7 @@ function runWithStubs(bundle: ScenarioBundle, vars: Record<string, string>): str
     const body =
       s === 'kubectl'
         ? `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${dir}/kubectl-args\nif [[ " $* " == *" -f - "* ]]; then cat > "$(mktemp ${dir}/applied/XXXXXX)"; fi\nexit 0\n`
-        : '#!/usr/bin/env bash\nexit 0\n';
+        : (STUB_BODIES[s] ?? '#!/usr/bin/env bash\nexit 0\n');
     writeFileSync(join(bin, s), body, { mode: 0o755 });
   }
   for (const f of bundle.files.filter((x) => x.path.endsWith('.sh'))) {
@@ -497,6 +525,7 @@ describe('Hidden variables', () => {
       startedAt: '',
       progress: [],
       hintsRevealed: {},
+      taskTimes: {},
       solutionViewed: false,
       vars: { Q1_NS: 'ops', Q1_FAULT: 'cordoned', Q1_NODE: 'worker-2' },
       updatedAt: '',
@@ -520,6 +549,14 @@ describe('Quick Create', () => {
     const def = scenarioOf(res.bundle);
     assert.equal(def.tasks.length, qs.length);
     assert.equal(def.draft, true);
+  });
+
+  it('records the recipe of every question, for Focus', () => {
+    const deployment = BUILDERS.find((b) => b.id === 'deployment')!;
+    const expose = deployment.addons.find((p) => p.id === 'expose')!;
+    const def = scenarioOf(build([createQ(deployment, [expose], []), troubleQ('dns')]).build.bundle);
+    assert.deepEqual(def.tasks[0].recipe, { builder: 'deployment', parts: ['expose'] });
+    assert.deepEqual(def.tasks[1].recipe, { category: 'dns' });
   });
 
   it('a solo question gets its own lab on its own base, without a context', () => {
@@ -762,5 +799,38 @@ describe('Per-question contexts', () => {
     const def = scenarioOf(build([troubleQ('services')]).build.bundle);
     assert.equal(def.setup, undefined);
     assert.equal(def.tasks[0].context, undefined);
+  });
+});
+
+describe('Task builders', () => {
+  const taskBuilders = BUILDERS.filter((b) => b.fields[0]?.key === 'TASK');
+
+  it('cover the curriculum gaps', () => {
+    assert.deepEqual(taskBuilders.map((b) => b.id).sort(), ['crds', 'dynamic-storage', 'gateway', 'infra', 'kustomize', 'netops', 'observe', 'upgrade', 'workload-ops']);
+  });
+
+  for (const b of taskBuilders) {
+    for (const task of b.fields[0].options!) {
+      for (const randomize of [false, true]) {
+        it(`${b.id} / ${task}${randomize ? ' randomized' : ''} is valid, lint-clean, valid bash and scores ${b.points}`, () => {
+          const q = createQ(b, [], [], randomize);
+          const { build: res, issues } = build([{ ...q, values: { ...q.values, TASK: task } }]);
+          assert.deepEqual(issues, []);
+          assert.equal(res.points, b.points, 'every task of a builder scores the same');
+          bashSyntax(res.bundle);
+          assertAppliesCleanly(res.bundle, false);
+          const text = res.questions[0].markdown;
+          assert.doesNotMatch(text, /TODO|undefined/);
+        });
+      }
+    }
+  }
+});
+
+describe('Lab size and timer', () => {
+  it('uses the requested minutes instead of the sum of estimates', () => {
+    const { build: res, errors } = buildQuickBundle({ id: 'quick-test', title: 'Quick test', questions: [troubleQ('services'), troubleQ('dns')], minutes: 120 });
+    assert.deepEqual(errors, []);
+    assert.equal(scenarioOf(res!.bundle).estimatedMinutes, 120);
   });
 });

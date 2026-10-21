@@ -11,6 +11,11 @@ export function HistoryPage() {
     ? Math.round(graded.reduce((s, a) => s + (a.score! / a.maxScore!) * 100, 0) / graded.length)
     : undefined;
   const passed = graded.filter((a) => a.score === a.maxScore).length;
+  // Questions you spent the most time on, across recent attempts: where the clock goes.
+  const slowest = attempts
+    .flatMap((a) => (a.tasks ?? []).filter((t) => t.seconds >= 30).map((t) => ({ ...t, attempt: a })))
+    .sort((x, y) => y.seconds - x.seconds)
+    .slice(0, 10);
 
   return (
     <div className="space-y-4">
@@ -27,6 +32,27 @@ export function HistoryPage() {
         ))}
       </div>
       <ErrorBanner error={error} />
+      {slowest.length > 0 && (
+        <Card title="Slowest questions">
+          <p className="mb-3 text-xs text-zinc-500">
+            Time each question was open on screen. The exam allows about 7 minutes per question; anything well above that is a topic to drill.
+          </p>
+          <table className="w-full text-left text-sm">
+            <tbody className="divide-y divide-zinc-800">
+              {slowest.map((t) => (
+                <tr key={`${t.attempt.id}-${t.id}`}>
+                  <td className={`py-1.5 pr-4 font-mono whitespace-nowrap ${t.seconds > 600 ? 'text-red-400' : t.seconds > 420 ? 'text-amber-300' : 'text-zinc-300'}`}>
+                    {formatDuration(t.seconds)}
+                  </td>
+                  <td className="py-1.5 pr-4 text-zinc-200">{t.title}</td>
+                  <td className="py-1.5 pr-4 text-xs text-zinc-500">{t.attempt.scenarioTitle}</td>
+                  <td className="py-1.5 text-xs whitespace-nowrap text-zinc-400">{t.maxScore ? `${t.score}/${t.maxScore} pt` : 'not graded'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
       <Card title="Attempts">
         {isLoading ? (
           <div className="text-zinc-500">Loading…</div>
@@ -56,6 +82,26 @@ export function HistoryPage() {
                           {a.domain && <DomainBadge domain={a.domain} />}
                           <span className="font-mono text-xs text-zinc-500">{a.mode}</span>
                         </div>
+                        {a.tasks && a.tasks.some((t) => t.seconds > 0) && (
+                          <details className="mt-1 text-xs">
+                            <summary className="cursor-pointer text-zinc-500">Minutes per question</summary>
+                            <ul className="mt-1 space-y-0.5">
+                              {a.tasks.map((t, i) => (
+                                <li key={t.id} className="flex gap-3 text-zinc-400">
+                                  <span className="w-14 shrink-0 font-mono">{formatDuration(t.seconds)}</span>
+                                  <span className="text-zinc-300">
+                                    Q{i + 1}. {t.title}
+                                  </span>
+                                  {t.maxScore ? (
+                                    <span className={t.score === t.maxScore ? 'text-emerald-400' : 'text-zinc-500'}>
+                                      {t.score}/{t.maxScore} pt
+                                    </span>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                       </td>
                       <td className="py-2 pr-4 whitespace-nowrap">
                         {pct === undefined ? (

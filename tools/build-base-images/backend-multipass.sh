@@ -35,3 +35,16 @@ start_all() { multipass start $(all_insts); }
 snapshot_all() {
   for i in $(all_insts); do multipass snapshot --name "$1" --comment "cka-lab $1 $K8S_VERSION" "$i" >/dev/null; done
 }
+
+# Restores snapshot $1 on every instance and starts them (extras.sh).
+restore_all() {
+  multipass stop $(all_insts) >/dev/null 2>&1 || true
+  for i in $(all_insts); do multipass restore --destructive "$i.$1" >/dev/null; done
+  start_all
+}
+
+# Snapshot names are unique per instance: drop the old one first.
+replace_snapshot_all() {
+  for i in $(all_insts); do multipass delete --purge "$i.$1" >/dev/null; done
+  snapshot_all "$1"
+}

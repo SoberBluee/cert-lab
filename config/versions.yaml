@@ -2,6 +2,8 @@
 # A two-part version (e.g. "1.36") resolves to the latest patch release at build time.
 kubernetesVersion: "1.37.1"
 kubernetesPreviousVersion: "1.36"
+# Dynamic provisioning questions install this provisioner from the images (tools/build-base-images/node-extras.sh).
+localPathProvisionerVersion: "v0.0.31"
 calicoVersion: "v3.33.0"
 # Ingress and Gateway API: Traefik serves both, on NodePort 30080 (HTTP) and 30443 (HTTPS).
 gatewayApiVersion: "v1.6.3"

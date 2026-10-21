@@ -33,6 +33,7 @@ setup:
 tasks:
   - id: q1
     title: Deployment ${Q1_NAME}
+    recipe: { builder: deployment, parts: [ probes, strategy ] }
     points: 7
     checks:
       - id: q1-ready
@@ -72,6 +73,7 @@ tasks:
       - "kubectl -n ${Q1_NS} edit deployment ${Q1_NAME}: spec.strategy.rollingUpdate."
   - id: q2
     title: Pod ${Q2_NAME}
+    recipe: { builder: pod, parts: [ command, security, label ] }
     points: 8
     checks:
       - id: q2-running
@@ -120,6 +122,7 @@ tasks:
       - kubectl label --help
   - id: q3
     title: Unhealthy Deployment ${Q3_APP}
+    recipe: { category: pods }
     points: 8
     checks:
       - id: q3-ready

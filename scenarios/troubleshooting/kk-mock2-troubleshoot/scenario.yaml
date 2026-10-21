@@ -44,6 +44,7 @@ solution:
 tasks:
   - id: q1
     title: Fix and apply the ${Q1_POD} template
+    tags: [ probes, liveness, pod ]
     points: 5
     setup:
       - node: controlplane
@@ -82,6 +83,7 @@ tasks:
 
   - id: q2
     title: kubectl fails on the control plane
+    tags: [ kube-apiserver, etcd, static-pod ]
     points: 8
     setupStage: 1
     setup:
@@ -120,6 +122,7 @@ tasks:
 
   - id: q3
     title: NodePort site ${Q3_APP} is down
+    tags: [ configmap, volumes, nodeport ]
     points: 5
     setup:
       - node: controlplane
@@ -153,6 +156,7 @@ tasks:
 
   - id: q4
     title: PVC ${Q4_NAME}-pvc is Pending
+    tags: [ pvc, pv, storage ]
     points: 5
     setup:
       - node: controlplane
@@ -184,6 +188,7 @@ tasks:
 
   - id: q5
     title: Pod ${Q5_POD} keeps crashing
+    tags: [ crashloop, command ]
     points: 5
     setup:
       - node: controlplane
@@ -216,6 +221,7 @@ tasks:
 
   - id: q6
     title: Service ${Q6_APP}-svc is unreachable
+    tags: [ service, endpoints, selector ]
     points: 6
     setup:
       - node: controlplane

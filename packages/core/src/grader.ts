@@ -164,6 +164,9 @@ export async function runCheck(driver: Driver, sessionId: string, check: Check, 
   }
 }
 
+/** Output of every check of a question that was never opened. */
+export const NOT_ATTEMPTED = 'not attempted: the question was never opened';
+
 /**
  * Runs every task's checks in parallel. Each check is retried until it passes or its settle
  * window (check.retrySeconds, else scenario.settleSeconds) runs out. Pass a rendered scenario.
@@ -186,7 +189,7 @@ export async function runChecks(
             passed: false,
             weight: check.weight,
             detail: 'not attempted',
-            output: 'not attempted: the question was never opened',
+            output: NOT_ATTEMPTED,
           }))
         : await Promise.all(
             task.checks.map((check) =>

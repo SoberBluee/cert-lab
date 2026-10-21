@@ -6,6 +6,7 @@ import { controlPlaneCategory } from './controlplane';
 import { cronJobsCategory } from './cronjobs';
 import { dnsCategory } from './dns';
 import { drainCategory } from './drain';
+import { gatewayCategory } from './gateway';
 import { hpaCategory } from './hpa';
 import { ingressCategory } from './ingress';
 import { netpolCategory } from './netpol';
@@ -13,6 +14,7 @@ import { nodeConfigCategory } from './nodeconfig';
 import { nodesCategory } from './nodes';
 import { podConfigCategory } from './podconfig';
 import { podsCategory } from './pods';
+import { provisioningCategory } from './provisioning';
 import { rbacCategory } from './rbac';
 import { restartsCategory } from './restarts';
 import { schedulingCategory } from './scheduling';
@@ -49,6 +51,8 @@ export const CATEGORIES: FaultCategory[] = [
   admissionCategory,
   unschedulableCategory,
   controllersCategory,
+  provisioningCategory,
+  gatewayCategory,
 ];
 
 export const getCategory = (id: string): FaultCategory | undefined => CATEGORIES.find((c) => c.id === id);

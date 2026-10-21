@@ -43,6 +43,7 @@ solution:
 tasks:
   - id: q1
     title: Multi-container Deployment with placement rules
+    tags: [ deployment, sidecar, anti-affinity, topology-spread ]
     points: 9
     setup:
       - node: controlplane
@@ -158,6 +159,7 @@ tasks:
 
   - id: q2
     title: Recover a stuck rollout
+    tags: [ deployment, rollout, rollback ]
     points: 5
     variant: Q2_KIND
     variants:
@@ -237,6 +239,7 @@ tasks:
 
   - id: q3
     title: Autoscale and protect a Deployment
+    tags: [ hpa, pdb ]
     points: 6
     context: ${CTX_OPS}
     setup:
@@ -313,6 +316,7 @@ tasks:
 
   - id: q4
     title: Static Pods
+    tags: [ static-pod ]
     points: 6
     variant: Q4_KIND
     variants:
@@ -392,6 +396,7 @@ tasks:
 
   - id: q5
     title: Node agent DaemonSet
+    tags: [ daemonset, priorityclass, taints ]
     points: 6
     context: ${CTX_OPS}
     variant: Q5_KIND

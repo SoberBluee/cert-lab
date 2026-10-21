@@ -10,6 +10,7 @@ import {
   type ScenarioSummary,
   type Task,
 } from '@cka/schema';
+import { scenarioTopicIds } from './focus';
 import { scenariosDir } from './paths';
 import { PLAYGROUND_ID } from './playground';
 
@@ -180,6 +181,7 @@ export function toSummary(s: LoadedScenario, stats?: ScenarioStats): ScenarioSum
     variableNames: Object.keys(d.variables),
     draft: d.draft,
     stats: stats ?? { attempts: 0 },
+    topics: scenarioTopicIds(s),
   };
 }
 

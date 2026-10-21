@@ -29,6 +29,8 @@ export interface ScenarioSummary {
   variableNames: string[];
   draft: boolean;
   stats: ScenarioStats;
+  /** Ids of the Quick lab topics its questions belong to. */
+  topics: string[];
 }
 
 export interface ScenarioDetail extends ScenarioSummary {
@@ -167,6 +169,16 @@ export interface LearnProgress {
   completedAt?: string;
 }
 
+/** Time spent on one question of an attempt, and its score at the last grade. */
+export interface TaskTime {
+  id: string;
+  title: string;
+  /** Seconds the question was the one open on screen. */
+  seconds: number;
+  score?: number;
+  maxScore?: number;
+}
+
 export interface AttemptRecord {
   id: number;
   scenarioId: string;
@@ -180,6 +192,8 @@ export interface AttemptRecord {
   maxScore?: number;
   hintsUsed: number;
   solutionViewed: boolean;
+  /** Per question, when the UI reported which question was open. */
+  tasks?: TaskTime[];
 }
 
 export interface ApiError {
@@ -331,6 +345,35 @@ export interface LabTopic {
   /** When set, a create question contains exactly these add-ons, prerequisites first. */
   addons?: string[];
   categories?: LabTopicCategory[];
+  /** Tags that put a handwritten question in this topic; generated questions name their recipe instead. */
+  tags: string[];
+}
+
+/** One graded question of an attempt, in a topic. */
+export interface FocusQuestion {
+  attemptId: number;
+  scenarioId: string;
+  scenarioTitle: string;
+  title: string;
+  percent: number;
+  at: string;
+}
+
+export interface FocusTopicStat {
+  topicId: string;
+  /** Graded questions in the topic, over all attempts. */
+  questions: number;
+  /** Mean percent of the most recent questions (at most FOCUS_RECENT). */
+  recentPercent?: number;
+  /** The weakest of those recent questions. */
+  weakest?: FocusQuestion;
+  lastAt?: string;
+}
+
+export interface FocusReport {
+  /** How many recent questions recentPercent averages. */
+  recent: number;
+  topics: FocusTopicStat[];
 }
 
 export interface RecipeCatalog {
@@ -380,6 +423,8 @@ export interface QuickCreateRequest {
    * task names the context to switch to. All of them reach the same lab cluster.
    */
   contexts?: boolean;
+  /** Time limit of the lab in minutes (the exam-mode timer); the sum of the questions' estimates when omitted. */
+  minutes?: number;
   /** Run a dry-run right after creating; defaults to true. */
   dryRun?: boolean;
 }

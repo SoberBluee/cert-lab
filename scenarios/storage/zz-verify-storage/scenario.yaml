@@ -15,6 +15,7 @@ variables:
 tasks:
   - id: q1
     title: Pod archive-app stuck
+    recipe: { category: storage }
     points: 5
     setup:
       - node: controlplane

@@ -19,6 +19,7 @@ variables:
 tasks:
   - id: q1
     title: ${Q1_APP} unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     setup:
       - node: controlplane
@@ -64,6 +65,7 @@ tasks:
       - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
   - id: q2
     title: ${Q2_APP} unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     setup:
       - node: controlplane

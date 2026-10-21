@@ -1,0 +1,136 @@
+id: cluster-ha
+title: HA control planes, etcd quorum and upgrades
+summary: A one-node lab cannot host a highly available control plane, so learn its design here, along with the upgrade order and version skew rules.
+track: cka
+topic: quiz-cluster
+estimatedMinutes: 15
+questions:
+  - id: stacked-vs-external
+    prompt: |
+      In a **stacked** kubeadm HA topology, where does etcd run?
+    choices:
+      - "On dedicated etcd hosts that the API servers reach over the network"
+      - "As a static Pod on every control plane node, next to the API server"
+      - "Inside the kube-apiserver process"
+      - "On the worker nodes, as a DaemonSet"
+      - "In a separate cluster that the control plane reaches through kubectl"
+    answer: 1
+    explain: |
+      Stacked: every control plane node runs its own etcd member as a static Pod, and that node's API server talks to it. External etcd: the etcd cluster runs on separate hosts. Stacked needs fewer machines; external isolates failures better.
+
+  - id: control-plane-endpoint
+    prompt: |
+      You will add more control plane nodes later. Which `kubeadm init` flag must you set now so that every node and kubeconfig points at a shared address instead of the first node's IP?
+    choices:
+      - "`--apiserver-advertise-address`"
+      - "`--control-plane-endpoint`"
+      - "`--upload-certs`"
+      - "`--service-dns-domain`"
+      - "`--node-name`"
+    answer: 1
+    explain: |
+      `--control-plane-endpoint` (a DNS name or a load balancer address) is written into every kubeconfig and the cluster configuration. It is very hard to add after the cluster exists. `--apiserver-advertise-address` is only the address this one API server listens on.
+
+  - id: upload-certs
+    prompt: |
+      What does `kubeadm init --upload-certs` do?
+    choices:
+      - "Renews every certificate in /etc/kubernetes/pki"
+      - "Uploads the control plane certificates, encrypted, to Secret kubeadm-certs, so that new control plane nodes can download them when they join"
+      - "Publishes the cluster CA to a public URL"
+      - "Copies the certificates to every worker"
+      - "Uploads the kubeconfig of every user to a ConfigMap"
+    answer: 1
+    explain: |
+      The shared CA, service account key and front-proxy and etcd CAs are uploaded to Secret `kube-system/kubeadm-certs`, encrypted with a certificate key that is printed once. That Secret is deleted after two hours; `kubeadm init phase upload-certs --upload-certs` uploads them again with a new key.
+
+  - id: join-control-plane
+    prompt: |
+      Which command adds another **control plane** node to a kubeadm cluster?
+    choices:
+      - "`kubeadm join <endpoint> --token ... --discovery-token-ca-cert-hash ...`"
+      - "`kubeadm join <endpoint> --token ... --discovery-token-ca-cert-hash ... --control-plane --certificate-key <key>`"
+      - "`kubeadm init --control-plane-endpoint <endpoint>` on the new node"
+      - "`kubeadm upgrade node --control-plane`"
+      - "`kubeadm token create --control-plane`"
+    answer: 1
+    explain: |
+      A control plane join is a normal join plus `--control-plane` and the `--certificate-key` that decrypts the uploaded certificates. Without `--control-plane` the node joins as a worker.
+
+  - id: quorum-three
+    prompt: |
+      An etcd cluster has **3** members. How many can fail while the cluster still accepts writes?
+    choices:
+      - "0"
+      - "1"
+      - "2"
+      - "3"
+      - "It depends on which member is the leader"
+    answer: 1
+    explain: |
+      etcd needs a majority (quorum) of members: for 3 members that is 2, so one member may fail. Quorum is floor(n/2) + 1.
+
+  - id: quorum-five
+    prompt: |
+      An etcd cluster has **5** members. How many can fail while it still has quorum?
+    choices:
+      - "1"
+      - "2"
+      - "3"
+      - "4"
+      - "5"
+    answer: 1
+    explain: |
+      Quorum of 5 is 3, so 2 members may fail. A 4-member cluster also tolerates only 1 failure (quorum 3), which is why etcd clusters have an odd number of members.
+
+  - id: even-members
+    prompt: |
+      Why is a 4-member etcd cluster a poor choice?
+    choices:
+      - "etcd refuses to start with an even number of members"
+      - "It tolerates the same single failure as 3 members, but has one more machine that can fail and more members to replicate to"
+      - "Leader election never finishes"
+      - "Even numbers disable snapshots"
+      - "Even-sized clusters cannot be backed up with etcdctl"
+    answer: 1
+    explain: |
+      Quorum of 4 is 3, so it survives one failure, like a 3-member cluster, while costing more and writing to more members.
+
+  - id: load-balancer
+    prompt: |
+      In an HA control plane, what normally sits behind the `--control-plane-endpoint` address?
+    choices:
+      - "A Service of type LoadBalancer inside the cluster"
+      - "A TCP load balancer (or a virtual IP) in front of every API server on port 6443"
+      - "The CoreDNS Service"
+      - "The first control plane node only"
+      - "An Ingress in kube-system"
+    answer: 1
+    explain: |
+      Something outside the cluster must reach the API servers before the cluster works: a TCP load balancer such as HAProxy or a cloud load balancer, or a virtual IP managed by keepalived or kube-vip.
+
+  - id: upgrade-order
+    prompt: |
+      In which order does the kubeadm upgrade guide upgrade a node?
+    choices:
+      - "kubelet, then kubeadm, then `kubeadm upgrade apply`"
+      - "kubeadm package, `kubeadm upgrade plan` / `apply` (or `kubeadm upgrade node`), drain, kubelet and kubectl packages, restart the kubelet, uncordon"
+      - "Drain, `kubeadm reset`, then `kubeadm join` with the new version"
+      - "kubectl first, then the control plane, then kubeadm"
+      - "All nodes at once, with `kubeadm upgrade apply` on each of them"
+    answer: 1
+    explain: |
+      kubeadm itself is upgraded first, because it performs the upgrade. The first control plane node runs `kubeadm upgrade apply <version>`; other control plane nodes and workers run `kubeadm upgrade node`. The kubelet is upgraded last, while the node is drained.
+
+  - id: version-skew
+    prompt: |
+      The control plane runs 1.37. Which kubelet versions are supported on the workers?
+    choices:
+      - "Only 1.37"
+      - "1.37 down to 1.34 (up to three minors older), never newer than the API server"
+      - "Any version, as long as kubeadm matches"
+      - "1.38 and 1.37"
+      - "Only 1.36, one minor older"
+    answer: 1
+    explain: |
+      The kubelet may be up to three minor versions older than the kube-apiserver, but never newer. That is why the control plane is always upgraded before the workers, and why you upgrade one minor version at a time.

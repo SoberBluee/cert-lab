@@ -5,9 +5,8 @@ import type { LabTopic, LessonTrack, ScenarioSummary } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
-import { scenarioTopics } from '../focusTopics';
 import { isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
-import { RANDOM_MAX, randomLab, toRequest, type LabKind } from '../quickRandom';
+import { fullMock, MOCK_MINUTES, MOCK_QUESTIONS, RANDOM_MAX, randomLab, toRequest, type LabKind } from '../quickRandom';
 import { SECTIONS } from '../section';
 
 const KIND_LABELS: Record<LabKind, string> = { create: 'Create', troubleshoot: 'Troubleshoot', random: 'Random' };
@@ -82,12 +81,11 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   // Focus page preferences: a practised topic shows only its scenarios; otherwise hidden topics are dropped.
   const visibleScenarios = useMemo(() => {
     const list = filtered.data?.scenarios ?? [];
-    if (!catalog.data) return list;
-    if (focusTopic) return list.filter((s) => scenarioTopics(s, catalog.data).includes(focusTopic));
+    if (focusTopic) return list.filter((s) => s.topics.includes(focusTopic));
     if (!hiddenTopics.length) return list;
     const hidden = new Set(hiddenTopics);
-    return list.filter((s) => !scenarioTopics(s, catalog.data).some((id) => hidden.has(id)));
-  }, [filtered.data, catalog.data, focusTopic, hiddenTopics]);
+    return list.filter((s) => !s.topics.some((id) => hidden.has(id)));
+  }, [filtered.data, focusTopic, hiddenTopics]);
   const [labKind, setLabKind] = useState<LabKind>('random');
   const [labTopic, setLabTopic] = useState('any');
   const [labCount, setLabCount] = useState('1');
@@ -119,9 +117,39 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   });
   const labN = Math.min(RANDOM_MAX, Math.max(1, Math.floor(Number(labCount)) || 1));
 
+  // A full mock exam: curriculum-weighted questions, the exam's time limit, a context per question,
+  // and always exam mode (no hints, one submit).
+  const mockStart = useMutation({
+    mutationFn: async () => {
+      setLabPhase('generating');
+      const questions = await fullMock(catalog.data!);
+      const id = `quick-lab-${Math.random().toString(36).slice(2, 8).padEnd(6, '0')}`;
+      await studioApi.quickCreate({ ...toRequest(questions, id, 'Full mock exam', { contexts: true }), minutes: MOCK_MINUTES, dryRun: false });
+      setLabPhase('starting');
+      qc.invalidateQueries({ queryKey: ['scenarios'] });
+      try {
+        return await api.start(id, 'mock');
+      } catch (e) {
+        throw new Error(`Created draft ${id} but could not start it: ${(e as Error).message}`);
+      }
+    },
+    onSuccess: (view) => {
+      qc.setQueryData(sessionKey, view);
+      navigate(sessionPath);
+    },
+  });
+
   useEffect(() => {
     if (labTopic !== 'any' && !topicIds.split('\n').includes(labTopic)) setLabTopic('any');
   }, [labTopic, topicIds]);
+
+  // Practising a topic from Focus also points the Quick lab at it, for topics with few or no scenarios.
+  useEffect(() => {
+    const topic = focusTopic ? catalog.data?.topics.find((t) => t.id === focusTopic) : undefined;
+    if (!topic) return;
+    setLabKind(topic.group);
+    setLabTopic(topic.id);
+  }, [focusTopic, catalog.data]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -319,6 +347,13 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
         >
           {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
         </Button>
+        <Button
+          disabled={active || !recipesReady || !catalog.data || quickStart.isPending || mockStart.isPending || start.isPending}
+          title={`${MOCK_QUESTIONS} questions weighted like the CKA curriculum, ${MOCK_MINUTES} minutes, exam mode, a kubeconfig context per question`}
+          onClick={() => mockStart.mutate()}
+        >
+          {mockStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : `Full mock (${MOCK_QUESTIONS} Qs, ${MOCK_MINUTES} min)`}
+        </Button>
         <span className="text-xs text-zinc-500">
           {!recipesReady
             ? 'Linux Quick lab recipes are not available yet.'
@@ -329,6 +364,7 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
       </div>
 
       <ErrorBanner error={quickStart.error} onDismiss={() => quickStart.reset()} />
+      <ErrorBanner error={mockStart.error} onDismiss={() => mockStart.reset()} />
       <ErrorBanner error={catalog.error} />
       <ErrorBanner error={start.error} onDismiss={() => start.reset()} />
       <ErrorBanner error={filtered.error} />

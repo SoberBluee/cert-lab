@@ -23,6 +23,7 @@ solution:
 tasks:
   - id: q1
     title: Unhealthy worker
+    recipe: { category: nodes }
     points: 6
     setup:
       - node: controlplane

@@ -45,6 +45,7 @@ solution:
 tasks:
   - id: q1
     title: Record the lab Helm repository URL
+    tags: [ helm, chartrepo ]
     points: 3
     setup:
       - node: controlplane
@@ -68,6 +69,7 @@ tasks:
 
   - id: q2
     title: Restore an etcd snapshot
+    tags: [ etcd, restore ]
     points: 6
     setup:
       - node: controlplane
@@ -94,6 +96,7 @@ tasks:
 
   - id: q3
     title: Add DNS domain cka.local
+    tags: [ coredns, dns ]
     points: 6
     setupStage: 1
     setup:
@@ -129,6 +132,7 @@ tasks:
 
   - id: q4
     title: Replace Ingress with HTTPRoute
+    tags: [ gateway-api, httproute, migration ]
     points: 8
     setup:
       - node: controlplane
@@ -168,6 +172,7 @@ tasks:
 
   - id: q5
     title: Restore CNI on a worker
+    tags: [ troubleshooting, node, cni, calico ]
     points: 6
     setupStage: 1
     setup:
@@ -206,6 +211,7 @@ tasks:
 
   - id: q6
     title: IP forwarding and containerd
+    tags: [ sysctl, containerd ]
     points: 5
     setupStage: 1
     setup:

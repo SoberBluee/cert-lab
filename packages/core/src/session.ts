@@ -304,6 +304,7 @@ export class SessionManager extends EventEmitter {
       vars = rollScenarioVars(raw, Object.fromEntries(Object.entries(row.vars).filter(([k]) => Object.hasOwn(raw.def.variables, k))));
     }
     this.stopWatching();
+    if (row.mode !== 'playground' && row.mode !== 'learn') this.flushFocus(row, null);
     this.finalizeAttempt(row);
     const attemptId = this.store.createAttempt({
       scenarioId: row.scenarioId,
@@ -323,6 +324,9 @@ export class SessionManager extends EventEmitter {
       tasksReady: [],
       preparingTask: undefined,
       vars,
+      taskTimes: {},
+      focusTask: undefined,
+      focusAt: undefined,
       ...(opts.reroll && { hintsRevealed: {}, solutionViewed: false }),
     });
     this.log.info({ sessionId: row.id, vars }, opts.reroll ? 'session re-rolled' : 'session reset');
@@ -375,6 +379,7 @@ export class SessionManager extends EventEmitter {
       if (this.store.getSession(row.id)?.state === 'grading') {
         this.store.updateSession(row.id, { state: 'running', lastGrade: result });
       }
+      this.flushFocus(this.store.getSession(row.id)!, undefined, result);
       this.log.info({ sessionId: row.id, score: result.score, maxScore: result.maxScore }, 'graded');
       this.emitChange(row.id);
       return result;
@@ -407,6 +412,44 @@ export class SessionManager extends EventEmitter {
     this.log.info({ sessionId: row.id, task: task.id, hint: hintsRevealed[task.id] }, 'hint revealed');
     this.emitChange(row.id);
     return this.toView(this.store.getSession(row.id)!);
+  }
+
+  /**
+   * Records which question is on screen; null when none is (the page is hidden or closed). Each
+   * question's time adds up while the lab runs, for minutes per question in History.
+   */
+  focus(taskId: string | null): SessionView {
+    const row = this.requireTasks();
+    if (taskId !== null && !this.scenarioFor(row).tasks.some((t) => t.id === taskId)) throw new OrchestratorError(`Unknown task "${taskId}".`, 404);
+    if (row.state === 'running' || row.state === 'grading') this.flushFocus(row, taskId);
+    return this.toView(this.store.getSession(row.id)!);
+  }
+
+  /**
+   * Adds the time since focusAt to the question on screen, then moves the focus to `next`
+   * (undefined: keep it), and saves the per-question times and scores on the attempt.
+   */
+  private flushFocus(row: SessionRow, next: string | null | undefined, grade?: GradeResult) {
+    const at = now();
+    const taskTimes = { ...row.taskTimes };
+    if (row.focusTask && row.focusAt) {
+      const seconds = Math.max(0, Math.round((Date.parse(at) - Date.parse(row.focusAt)) / 1000));
+      taskTimes[row.focusTask] = (taskTimes[row.focusTask] ?? 0) + seconds;
+    }
+    const focusTask = next === undefined ? row.focusTask : (next ?? undefined);
+    this.store.updateSession(row.id, { taskTimes, focusTask, focusAt: focusTask ? at : undefined });
+    let s: LoadedScenario;
+    try {
+      s = this.scenarioFor(row);
+    } catch {
+      return;
+    }
+    const last = grade ?? row.lastGrade;
+    const tasks = s.tasks.map((t) => {
+      const scored = last?.tasks?.find((x) => x.id === t.id) ?? (s.tasks.length === 1 && last ? { score: last.score, maxScore: last.maxScore } : undefined);
+      return { id: t.id, title: t.title, seconds: taskTimes[t.id] ?? 0, ...(scored ? { score: scored.score, maxScore: scored.maxScore } : {}) };
+    });
+    this.store.updateAttempt(row.attemptId, { tasks });
   }
 
   solution(): SessionView {
@@ -508,6 +551,7 @@ export class SessionManager extends EventEmitter {
 
   private close(row: SessionRow) {
     if (this.watcher?.sessionId === row.id) this.stopWatching();
+    if (row.mode !== 'playground' && row.mode !== 'learn') this.flushFocus(this.store.getSession(row.id) ?? row, null);
     this.finalizeAttempt(row);
     this.store.updateSession(row.id, { state: 'completed', endedAt: now() });
     this.log.info({ sessionId: row.id }, 'session ended');

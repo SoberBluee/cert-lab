@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import type { AttemptRecord, Base, GradeResult, LearnProgress, Mode, ProgressLine, ScenarioStats, SessionState } from '@cka/schema';
+import type { AttemptRecord, Base, GradeResult, LearnProgress, Mode, ProgressLine, ScenarioStats, SessionState, TaskTime, Vars } from '@cka/schema';
 import type { ConnectionInfo } from '@cka/schema';
 import { dataDir } from './paths';
 
@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   tasks_ready TEXT,
   preparing_task TEXT,
   learn_progress TEXT,
+  task_times TEXT,
+  focus_task TEXT,
+  focus_at TEXT,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS mock_exams (
@@ -47,7 +50,8 @@ CREATE TABLE IF NOT EXISTS attempts (
   max_score REAL,
   hints_used INTEGER NOT NULL DEFAULT 0,
   solution_viewed INTEGER NOT NULL DEFAULT 0,
-  mock_exam_id INTEGER REFERENCES mock_exams(id)
+  mock_exam_id INTEGER REFERENCES mock_exams(id),
+  task_times TEXT
 );
 CREATE INDEX IF NOT EXISTS attempts_scenario ON attempts(scenario_id, started_at);
 CREATE TABLE IF NOT EXISTS check_results (
@@ -93,6 +97,11 @@ export interface SessionRow {
   preparingTask?: string;
   /** Learn mode: progress through the lesson's steps. */
   learnProgress?: LearnProgress;
+  /** Seconds each task was the one open on screen, up to focusAt. */
+  taskTimes: Record<string, number>;
+  /** The task open on screen since focusAt, if any. */
+  focusTask?: string;
+  focusAt?: string;
   updatedAt: string;
 }
 
@@ -135,6 +144,9 @@ function toSession(r: Row): SessionRow {
     tasksReady: json<string[]>(r.tasks_ready),
     preparingTask: opt(r.preparing_task),
     learnProgress: json<LearnProgress>(r.learn_progress),
+    taskTimes: json<Record<string, number>>(r.task_times) ?? {},
+    focusTask: opt(r.focus_task),
+    focusAt: opt(r.focus_at),
     updatedAt: r.updated_at as string,
   };
 }
@@ -154,6 +166,9 @@ const SESSION_COLUMNS: Record<string, string> = {
   preparingTask: 'preparing_task',
   learnProgress: 'learn_progress',
   vars: 'vars',
+  taskTimes: 'task_times',
+  focusTask: 'focus_task',
+  focusAt: 'focus_at',
 };
 
 const ATTEMPT_COLUMNS: Record<string, string> = {
@@ -163,6 +178,7 @@ const ATTEMPT_COLUMNS: Record<string, string> = {
   maxScore: 'max_score',
   hintsUsed: 'hints_used',
   solutionViewed: 'solution_viewed',
+  tasks: 'task_times',
 };
 
 function toSql(v: unknown): SQLInputValue {
@@ -189,6 +205,9 @@ export class Store {
     if (!cols.includes('tasks_ready')) this.db.exec('ALTER TABLE sessions ADD COLUMN tasks_ready TEXT');
     if (!cols.includes('preparing_task')) this.db.exec('ALTER TABLE sessions ADD COLUMN preparing_task TEXT');
     if (!cols.includes('learn_progress')) this.db.exec('ALTER TABLE sessions ADD COLUMN learn_progress TEXT');
+    for (const c of ['task_times', 'focus_task', 'focus_at']) if (!cols.includes(c)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${c} TEXT`);
+    const attemptCols = (this.db.prepare('PRAGMA table_info(attempts)').all() as Row[]).map((r) => r.name);
+    if (!attemptCols.includes('task_times')) this.db.exec('ALTER TABLE attempts ADD COLUMN task_times TEXT');
   }
 
   private update(table: string, columns: Record<string, string>, id: string | number, patch: Record<string, unknown>) {
@@ -251,7 +270,7 @@ export class Store {
 
   updateAttempt(
     id: number,
-    patch: Partial<{ endedAt: string; durationS: number; score: number; maxScore: number; hintsUsed: number; solutionViewed: boolean }>,
+    patch: Partial<{ endedAt: string; durationS: number; score: number; maxScore: number; hintsUsed: number; solutionViewed: boolean; tasks: TaskTime[] }>,
   ) {
     this.update('attempts', ATTEMPT_COLUMNS, id, patch);
   }
@@ -295,6 +314,37 @@ export class Store {
       maxScore: opt<number>(r.max_score),
       hintsUsed: Number(r.hints_used),
       solutionViewed: Boolean(r.solution_viewed),
+      ...(r.task_times ? { tasks: json<TaskTime[]>(r.task_times) } : {}),
+    }));
+  }
+
+  /** Graded attempts, oldest first, with their check results and the variables their session rolled. */
+  gradedAttempts(): { id: number; scenarioId: string; startedAt: string; vars: Vars; checks: { id: string; passed: boolean; weight: number; output: string }[] }[] {
+    const graded = `mode IN ${USER_MODES} AND score IS NOT NULL`;
+    const attempts = this.db
+      .prepare(
+        `SELECT id, scenario_id, started_at, (SELECT vars FROM sessions WHERE attempt_id = attempts.id LIMIT 1) AS vars
+         FROM attempts WHERE ${graded} ORDER BY started_at ASC`,
+      )
+      .all() as Row[];
+    const checks = new Map<number, { id: string; passed: boolean; weight: number; output: string }[]>();
+    const rows = this.db
+      .prepare(
+        // Only the start of the output: enough to tell a question that was never opened.
+        `SELECT attempt_id, check_id, passed, weight, substr(output, 1, 64) AS output FROM check_results
+         WHERE attempt_id IN (SELECT id FROM attempts WHERE ${graded})`,
+      )
+      .all() as Row[];
+    for (const r of rows) {
+      const id = Number(r.attempt_id);
+      checks.set(id, [...(checks.get(id) ?? []), { id: r.check_id as string, passed: Boolean(r.passed), weight: Number(r.weight), output: (r.output as string) ?? '' }]);
+    }
+    return attempts.map((r) => ({
+      id: Number(r.id),
+      scenarioId: r.scenario_id as string,
+      startedAt: r.started_at as string,
+      vars: json<Vars>(r.vars) ?? {},
+      checks: checks.get(Number(r.id)) ?? [],
     }));
   }
 

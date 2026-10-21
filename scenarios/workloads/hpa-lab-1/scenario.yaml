@@ -19,6 +19,7 @@ variables:
 tasks:
   - id: q1
     title: Autoscale ${Q1_NAME}
+    recipe: { builder: hpa, parts: [ memory-target, scale-down-window, change-range ] }
     points: 7
     setup:
       - node: controlplane

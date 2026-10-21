@@ -33,6 +33,8 @@ export interface CreateCtx {
   hints: string[];
   /** Controlplane setup snippets, run before the learner starts. */
   setup: string[];
+  /** Seconds the setup may take; the step default (300) when unset. */
+  setupTimeout?: number;
   /** Solution commands after the manifests are applied (waits, follow-up commands). */
   solution: string[];
 }
@@ -77,6 +79,8 @@ export interface Builder {
   track?: 'create' | 'cluster';
   /** May take the API server down: set up last and fixed first, at most one per lab. */
   breaksApi?: boolean;
+  /** Takes a node away while it is set up or solved: set up after and fixed before the other questions. */
+  disruptive?: boolean;
   /** Snapshot the lab starts from; cluster when omitted. */
   base?: 'cluster' | 'bare';
   /** Must be the only question of its lab. */

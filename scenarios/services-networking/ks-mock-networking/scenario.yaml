@@ -24,6 +24,7 @@ setup:
 tasks:
   - id: q1
     title: NetworkPolicy
+    tags: [ networkpolicy, egress ]
     points: 6
     setup:
       - node: controlplane
@@ -168,6 +169,7 @@ tasks:
 
   - id: q2
     title: Gateway API routing
+    tags: [ gateway-api, httproute ]
     points: 6
     setup:
       - node: controlplane
@@ -286,6 +288,7 @@ tasks:
 
   - id: q3
     title: DNS for individual Pods
+    tags: [ dns, headless, statefulset ]
     points: 6
     setup:
       - node: controlplane
@@ -409,6 +412,7 @@ tasks:
 
   - id: q4
     title: Cluster network facts
+    tags: [ cidr, kube-proxy ]
     points: 4
     variant: Q4_KIND
     variants:

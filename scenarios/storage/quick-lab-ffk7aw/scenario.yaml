@@ -22,6 +22,7 @@ variables:
 tasks:
   - id: q1
     title: Pod ${Q1_CLAIM}-app stuck
+    recipe: { category: storage }
     points: 5
     setup:
       - node: controlplane
@@ -56,6 +57,7 @@ tasks:
       - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."
   - id: q2
     title: Deployment ${Q2_APP} not running
+    recipe: { category: scheduling }
     points: 5
     setup:
       - node: controlplane
@@ -89,6 +91,7 @@ tasks:
       - What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${Q2_NS} get all,resourcequota,limitrange and kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml.
   - id: q3
     title: CronJob ${Q3_APP} never succeeds
+    recipe: { category: cronjobs }
     points: 6
     setup:
       - node: controlplane

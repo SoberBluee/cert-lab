@@ -13,6 +13,7 @@ variables:
 tasks:
   - id: q1
     title: Install a cluster
+    recipe: { builder: install-cluster, parts: [] }
     points: 9
     checks:
       - id: q1-nodes

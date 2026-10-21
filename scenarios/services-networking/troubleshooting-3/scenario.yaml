@@ -40,6 +40,7 @@ solution:
 tasks:
   - id: q1
     title: Service ${Q1_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -80,6 +81,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q2
     title: ${Q2_APP} cannot list Pods
+    recipe: { category: rbac }
     points: 6
     setup:
       - node: controlplane
@@ -118,6 +120,7 @@ tasks:
       - "Follow the chain from the Pod to the permission: which ServiceAccount the Pod runs as, which RoleBinding names that exact account, which Role the binding points at, and what that Role allows."
   - id: q3
     title: Frontend cannot reach ${Q3_APP}
+    recipe: { category: netpol }
     points: 7
     setup:
       - node: controlplane
@@ -157,6 +160,7 @@ tasks:
       - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."
   - id: q4
     title: Name resolution broken
+    recipe: { category: dns }
     points: 7
     setup:
       - node: controlplane
@@ -204,6 +208,7 @@ tasks:
       - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q5
     title: ${Q5_APP} unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     setup:
       - node: controlplane
@@ -249,6 +254,7 @@ tasks:
       - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
   - id: q6
     title: Unhealthy worker
+    recipe: { category: nodes }
     points: 6
     setup:
       - node: controlplane
@@ -305,6 +311,7 @@ tasks:
       - systemctl is-enabled tells you whether a service comes back after a reboot.
   - id: q7
     title: Pod ${Q7_CLAIM}-app stuck
+    recipe: { category: storage }
     points: 5
     setup:
       - node: controlplane

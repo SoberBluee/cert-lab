@@ -13,7 +13,8 @@ const WAIT = ' --wait --timeout 3m';
  */
 export const CHARTREPO_SCRIPT = String.raw`#!/usr/bin/env bash
 # Local Helm chart repository on controlplane, so Helm questions need no internet.
-# Charts: webapp 1.0.0 / 1.1.0 / 2.0.0 (nginx), node-agent 0.1.0 / 0.2.0 (busybox DaemonSet).
+# Charts: webapp 1.0.0 / 1.1.0 / 2.0.0 (nginx), node-agent 0.1.0 / 0.2.0 (busybox DaemonSet),
+# db-operator 1.1.0 / 1.2.0 (a do-nothing operator with two CRDs in crds/).
 # Served at http://controlplane:8879 by a transient systemd unit. Keep this file free of
 # dollar-brace expansions: packages/core/src/recipes/create/helm.ts embeds the same script.
 set -euo pipefail
@@ -25,7 +26,7 @@ command -v python3 >/dev/null || { echo "python3 is missing on controlplane" >&2
 # Several questions of one lab may run this at the same time; the first one builds the repository.
 exec 9>/run/cka-chartrepo.lock
 flock 9
-if curl -sf http://controlplane:8879/index.yaml 2>/dev/null | grep -q 'node-agent-0.2.0.tgz'; then
+if curl -sf http://controlplane:8879/index.yaml 2>/dev/null | grep -q 'db-operator-1.2.0.tgz'; then
   exit 0
 fi
 
@@ -109,6 +110,82 @@ EOF
 }
 agent 0.1.0
 agent 0.2.0
+
+# CRD of group db.example.lab, as the operator chart ships it in crds/.
+crd() {
+  local plural=$1 kind=$2
+  cat <<EOF
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: $plural.db.example.lab
+spec:
+  group: db.example.lab
+  scope: Namespaced
+  names:
+    plural: $plural
+    singular: $(echo "$kind" | tr '[:upper:]' '[:lower:]')
+    kind: $kind
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+EOF
+}
+operator() {
+  local version=$1
+  rm -rf db-operator
+  mkdir -p db-operator/templates db-operator/crds
+  cat > db-operator/Chart.yaml <<EOF
+apiVersion: v2
+name: db-operator
+description: Runs Database objects (a lab operator that only logs what it watches)
+type: application
+version: $version
+appVersion: "$version"
+EOF
+  cat > db-operator/values.yaml <<'EOF'
+replicas: 1
+image:
+  repository: busybox
+  tag: "1.36"
+EOF
+  crd databases Database > db-operator/crds/databases.yaml
+  crd backups Backup > db-operator/crds/backups.yaml
+  cat > db-operator/templates/deployment.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: db-operator
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: db-operator
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: operator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command: [sh, -c, "echo watching databases.db.example.lab; while true; do sleep 3600; done"]
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }
+EOF
+  helm package db-operator -d /opt/charts/repo >/dev/null
+}
+operator 1.1.0
+operator 1.2.0
 
 helm repo index /opt/charts/repo --url http://controlplane:8879
 systemd-run --unit cka-chartrepo --collect python3 -m http.server 8879 --directory /opt/charts/repo >/dev/null

@@ -19,6 +19,7 @@ solution:
 tasks:
   - id: q1
     title: kubectl stopped working
+    recipe: { category: apiaccess }
     points: 8
     setup:
       - node: controlplane

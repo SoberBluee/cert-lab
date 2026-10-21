@@ -23,7 +23,7 @@ multipass authenticate              # in the terminal that will run cka
 
 The build:
 
-1. launches 3 Ubuntu VMs and installs containerd, kubeadm, kubelet and kubectl at the version pinned in `config/versions.yaml`, then snapshots **`bare`**;
+1. launches 3 Ubuntu VMs and installs containerd, kubeadm, kubelet and kubectl at the version pinned in `config/versions.yaml`, adds the extras (below), then snapshots **`bare`**;
 2. runs `kubeadm init`, installs Calico, joins the workers, waits for everything to be Ready, installs Helm, the Gateway API CRDs and Traefik (see below), then snapshots **`cluster`**;
 3. writes `~/.cka-lab/images.json` (build date, versions, node IPs, `addons`) and leaves the VMs stopped.
 
@@ -36,6 +36,14 @@ The node images also pre-pull every container image the scenarios use, so sessio
 - the NodePorts `30080` (HTTP) and `30443` (HTTPS) on every node, e.g. `curl -H 'Host: app.example.local' http://controlplane:30080/`.
 
 The versions are pinned in `config/versions.yaml` (`gatewayApiVersion`, `traefikChartVersion`, `helmVersion`). Images built before this change lack all three. Quick Create questions that need them (the Ingress and HTTPRoute category, and the Ingress and HTTPRoute add-ons) stop with a clear error at setup until you rebuild with `./cka images build --force`.
+
+**Extras.** The upgrade and dynamic provisioning questions run offline from content the build adds to every node (`tools/build-base-images/node-extras.sh`):
+
+- a local apt repository in `/opt/cka/apt` with kubeadm, kubelet and kubectl at `kubernetesVersion` and at the newest patch of `kubernetesPreviousVersion`, and `/opt/cka/versions.env` naming both;
+- the control plane images of both versions;
+- the local-path provisioner image (`localPathProvisionerVersion`) and, on controlplane, its manifest in `/opt/cka/addons/local-path-storage.yaml`, pinned to pre-pulled images.
+
+Images built before the extras existed get them with `./cka images extras` (5-10 minutes, needs the internet). It restores `bare`, adds the extras, re-snapshots, does the same for `cluster`, and records them in `images.json`. Until then those questions stop at setup with a message naming the command.
 
 Per-node build logs go to `~/.cka-lab/logs/build-*.log`. To rebuild from scratch, for example after bumping versions or once the certificates near their one-year expiry, run `./cka images build --force`.
 

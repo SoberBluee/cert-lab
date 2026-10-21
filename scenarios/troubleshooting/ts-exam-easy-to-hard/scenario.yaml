@@ -41,6 +41,7 @@ solution:
 tasks:
   - id: q1
     title: Unhealthy Deployment ${Q1_APP}
+    recipe: { category: pods }
     points: 8
     setup:
       - node: controlplane
@@ -100,6 +101,7 @@ tasks:
       - "kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."
   - id: q2
     title: Service ${Q2_APP} unreachable
+    recipe: { category: services }
     points: 6
     setup:
       - node: controlplane
@@ -140,6 +142,7 @@ tasks:
       - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q3
     title: Pod ${Q3_CLAIM}-app stuck
+    recipe: { category: storage }
     points: 5
     setup:
       - node: controlplane
@@ -174,6 +177,7 @@ tasks:
       - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."
   - id: q4
     title: ${Q4_APP} unreachable through the ingress
+    recipe: { category: ingress }
     points: 7
     setup:
       - node: controlplane
@@ -219,6 +223,7 @@ tasks:
       - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
   - id: q5
     title: Unhealthy worker
+    recipe: { category: nodes }
     points: 6
     setup:
       - node: controlplane
@@ -275,6 +280,7 @@ tasks:
       - systemctl is-enabled tells you whether a service comes back after a reboot.
   - id: q6
     title: Control plane after maintenance
+    recipe: { category: controlplane }
     points: 8
     setup:
       - node: controlplane

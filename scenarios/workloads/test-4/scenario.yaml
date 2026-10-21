@@ -32,6 +32,7 @@ solution:
 tasks:
   - id: q1
     title: Deployment ${Q1_APP} not running
+    recipe: { category: scheduling }
     points: 5
     setup:
       - node: controlplane
@@ -65,6 +66,7 @@ tasks:
       - What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${Q1_NS} get all,resourcequota,limitrange and kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml.
   - id: q2
     title: Control plane after maintenance
+    recipe: { category: controlplane }
     points: 8
     setup:
       - node: controlplane
@@ -114,6 +116,7 @@ tasks:
       - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
   - id: q3
     title: StorageClass ${Q3_NAME}
+    recipe: { builder: storageclass, parts: [ allow-expansion, make-default ] }
     points: 5
     checks:
       - id: q3-provisioner
@@ -152,6 +155,7 @@ tasks:
       - kubectl annotate storageclass ${Q3_NAME} storageclass.kubernetes.io/is-default-class=true
   - id: q4
     title: Deployment ${Q4_NAME}
+    recipe: { builder: deployment, parts: [ expose, toleration, autoscale ] }
     points: 11
     setup:
       - node: controlplane

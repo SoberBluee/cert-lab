@@ -22,6 +22,7 @@ variables:
 tasks:
   - id: q1
     title: CronJob ${Q1_APP} never succeeds
+    recipe: { category: cronjobs }
     points: 6
     setup:
       - node: controlplane
@@ -62,6 +63,7 @@ tasks:
       - "To test a fix without waiting for the next minute: kubectl -n ${Q1_NS} create job test-run --from=cronjob/${Q1_APP}"
   - id: q2
     title: Unhealthy Deployment ${Q2_APP}
+    recipe: { category: pods }
     points: 8
     setup:
       - node: controlplane
@@ -121,6 +123,7 @@ tasks:
       - "kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."
   - id: q3
     title: Autoscaler ${Q3_APP} not working
+    recipe: { category: hpa }
     points: 7
     setup:
       - node: controlplane

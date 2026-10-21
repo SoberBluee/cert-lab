@@ -1,4 +1,5 @@
 export * from './authoring';
+export * from './focus';
 export * from './grader';
 export * from './learn';
 export * from './lessons';
