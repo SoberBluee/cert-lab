@@ -1,0 +1,70 @@
+id: node-kubelet-client-ca-path
+title: Node (Kubelet Client CA Path)
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 12
+points: 7
+tags: [ troubleshooting, node, kubelet, kubeconfig, systemd ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+variables:
+  Q1_NS: { oneOf: [ fleet, edge, infra, nodes, config, workers, daemon, system, host-ops, platform ] }
+  Q1_FAULT: { oneOf: [ kubelet-client-ca ], hidden: true }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+solution:
+  - node: worker-1
+    script: setup/q1-solution.sh
+  - node: worker-2
+    script: setup/q1-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: Worker after a configuration change
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+      - node: worker-1
+        script: setup/q1-2.sh
+      - node: worker-2
+        script: setup/q1-3.sh
+      - node: controlplane
+        script: setup/q1-4.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-all-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 3
+        retrySeconds: 90
+      - id: q1-kubelet-worker-1
+        description: the kubelet is running and enabled on worker-1
+        type: ssh
+        node: worker-1
+        run: echo $(systemctl is-active kubelet) $(systemctl is-enabled kubelet)
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q1-kubelet-worker-2
+        description: the kubelet is running and enabled on worker-2
+        type: ssh
+        node: worker-2
+        run: echo $(systemctl is-active kubelet) $(systemctl is-enabled kubelet)
+        expect: { equals: active enabled }
+        weight: 1
+      - id: q1-agent
+        description: node-agent has a ready Pod on every worker
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get daemonset node-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
+        expect: { equals: 2/2 }
+        weight: 2
+        retrySeconds: 90
+    hints:
+      - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
+      - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
+      - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
