@@ -74,6 +74,10 @@ export const labTopics = (): LabTopic[] => {
     trouble('trouble-apiaccess', 'API access', [{ id: 'apiaccess' }]),
     trouble('trouble-webhooks', 'Admission webhooks', [{ id: 'webhooks' }]),
     trouble('trouble-drain', 'Node drain', [{ id: 'drain' }]),
+    trouble('trouble-restarts', 'Restarting Pods', [{ id: 'restarts' }]),
+    trouble('trouble-admission', 'Rejected Pods', [{ id: 'admission' }]),
+    trouble('trouble-unschedulable', 'Unschedulable node', [{ id: 'unschedulable' }]),
+    trouble('trouble-controllers', 'Controllers and scheduler', [{ id: 'controllers' }]),
   ];
   for (const topic of topics) {
     if (topic.group === 'create') {

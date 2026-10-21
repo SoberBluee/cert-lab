@@ -9,7 +9,7 @@ import type { FieldInput, PartInput, QuickQuestion, RecipeField, ScenarioBundle 
 import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import { selectFaults } from './faults';
 import { buildQuickBundle } from './quick';
-import { BUILDERS, CATEGORIES, composeCreate, faultList, recipeCatalog, type Builder, type PartBase } from './recipes';
+import { BUILDERS, CATEGORIES, composeCreate, faultList, maxLayers, recipeCatalog, type Builder, type PartBase } from './recipes';
 import { CHARTREPO_SCRIPT } from './recipes/create/helm';
 import { ScenarioLibrary } from './scenarios';
 import { SessionManager } from './session';
@@ -652,5 +652,115 @@ describe('Quick Create', () => {
         }),
       /already exists/,
     );
+  });
+});
+
+describe('Layered troubleshoot questions', () => {
+  const layered = CATEGORIES.filter((c) => c.layers);
+
+  for (const c of layered) {
+    it(`${c.id}: every layer names real faults, and no fault sits in two layers`, () => {
+      const known = new Set(faultList(c).map((f) => f.id));
+      const seen = new Set<string>();
+      for (const layer of c.layers!) {
+        assert.ok(layer.faults.length, `${layer.name} is empty`);
+        for (const id of layer.faults) {
+          assert.ok(known.has(id), `${c.id} has no fault ${id}`);
+          assert.ok(!seen.has(id), `${id} sits in two layers`);
+          seen.add(id);
+        }
+      }
+    });
+
+    for (let n = 2; n <= maxLayers(c); n++) {
+      it(`${c.id} with ${n} layers is valid, lint-clean, valid bash and applies well-formed manifests`, () => {
+        const { build: res, issues } = build([{ ...troubleQ(c.id, undefined, true), layers: n } as QuickQuestion]);
+        assert.deepEqual(issues, []);
+        bashSyntax(res.bundle);
+        assertAppliesCleanly(res.bundle);
+        const def = scenarioOf(res.bundle);
+        const slots = Object.keys(def.variables).filter((k) => /^Q1_FAULT(_\d)?$/.test(k));
+        assert.equal(slots.length, n);
+        // Each slot rolls from one layer, and no two slots from the same one.
+        const layerOf = (id: string) => c.layers!.findIndex((l) => l.faults.includes(id));
+        const layers = slots.map((k) => new Set(def.variables[k].oneOf.map(layerOf)));
+        for (const l of layers) assert.equal(l.size, 1);
+        assert.equal(new Set(layers.map((l) => [...l][0])).size, n);
+        assert.match(res.questions[0].markdown, /more than one problem/);
+        // The solution shows exactly the rolled fault of each layer.
+        const solutionMd = res.bundle.files.find((x) => x.path === 'solution.md')!.content;
+        const rolled = Object.fromEntries(slots.map((k) => [k, String(def.variables[k].oneOf[0])]));
+        const shown = selectFaults(solutionMd, rolled);
+        for (const k of slots) {
+          for (const id of def.variables[k].oneOf) {
+            const re = new RegExp(`\\(\`${id}\`\\)`);
+            if (id === rolled[k]) assert.match(shown, re);
+            else assert.doesNotMatch(shown, re, `solution still shows ${id}`);
+          }
+        }
+      });
+    }
+  }
+
+  it('caps layers at what the category has, and keeps single-fault categories single', () => {
+    const { build: res } = build([{ ...troubleQ('hpa'), layers: 3 } as QuickQuestion, { ...troubleQ('ingress'), layers: 3 } as QuickQuestion]);
+    const def = scenarioOf(res.bundle);
+    assert.deepEqual(
+      Object.keys(def.variables).filter((k) => k.includes('_FAULT')).sort(),
+      ['Q1_FAULT', 'Q2_FAULT', 'Q2_FAULT_2'],
+    );
+  });
+
+  it('rejects a layer count out of range, or faults that cover too few layers', () => {
+    for (const q of [
+      { ...troubleQ('services'), layers: 0 },
+      { ...troubleQ('services'), layers: 4 },
+      { ...troubleQ('services', ['selector-mismatch', 'target-port']), layers: 2 },
+    ]) {
+      const { build: res, errors } = buildQuickBundle({ id: 'bad', title: 'Bad', questions: [q as QuickQuestion] });
+      assert.equal(res, undefined);
+      assert.ok(errors.length, JSON.stringify(q));
+    }
+  });
+
+  it('never states a fault, the old intended-setup list, or a backup location in the task text', () => {
+    for (const c of CATEGORIES) {
+      const { build: res } = build([troubleQ(c.id)]);
+      const text = res.questions[0].markdown;
+      assert.doesNotMatch(text, /intended setup|intended spec/i, `${c.id} still lists its spec`);
+      assert.doesNotMatch(text, /cka-bak|cni-backup|claimRef|spec\.paused|immutable/i, `${c.id} names a fix`);
+      const solutionMd = res.bundle.files.find((x) => x.path === 'solution.md')!.content;
+      assert.match(solutionMd, /The healthy setup/, `${c.id} has no healthy setup in its solution`);
+    }
+  });
+});
+
+describe('Per-question contexts', () => {
+  it('gives every question its own context, created at setup', () => {
+    const { build: res, errors } = buildQuickBundle({
+      id: 'quick-test',
+      title: 'Quick test',
+      contexts: true,
+      questions: [troubleQ('services'), troubleQ('rbac'), troubleQ('storage')],
+    });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(studio.validate(res!.bundle).issues, []);
+    bashSyntax(res!.bundle);
+    const def = scenarioOf(res!.bundle);
+    const contexts = def.tasks.map((t: { context?: string }) => t.context);
+    assert.equal(new Set(contexts).size, 3);
+    assert.ok(contexts.every((c: string | undefined) => c && c !== 'kubernetes-admin@kubernetes'));
+    assert.deepEqual(def.setup, [{ node: 'controlplane', script: 'setup/contexts.sh' }]);
+    const script = res!.bundle.files.find((f) => f.path === 'setup/contexts.sh')!.content;
+    res!.questions.forEach((q, i) => {
+      assert.ok(q.markdown.startsWith(`Use context: \`kubectl config use-context ${contexts[i]}\``));
+      assert.ok(script.includes(contexts[i]));
+    });
+  });
+
+  it('keeps the admin context when not asked', () => {
+    const def = scenarioOf(build([troubleQ('services')]).build.bundle);
+    assert.equal(def.setup, undefined);
+    assert.equal(def.tasks[0].context, undefined);
   });
 });

@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import type { SessionView } from '@cka/schema';
 import { Shell, type NavItem } from './components/Shell';
-import { useExamMode, useSession, useSessionStream } from './hooks';
+import { useBlindGrading, useExamMode, useSession, useSessionStream } from './hooks';
 import { BrowserPage } from './pages/BrowserPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { SessionPage } from './pages/SessionPage';
@@ -47,6 +47,29 @@ function ExamToggle({ session }: { session?: SessionView | null }) {
   );
 }
 
+/** Practice grading without check descriptions, so a grade cannot point at what to fix. */
+function BlindToggle({ session }: { session?: SessionView | null }) {
+  const [blind, setBlind] = useBlindGrading();
+  if (session?.mode === 'mock') return null;
+  return (
+    <label
+      className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300"
+      title="Practice grades show only the score until you view the solution or end the session, so a check name cannot tell you what to fix"
+    >
+      <button
+        type="button"
+        role="switch"
+        aria-checked={blind}
+        onClick={() => setBlind(!blind)}
+        className={`relative h-5 w-9 rounded-full transition ${blind ? 'bg-sky-500' : 'bg-zinc-700'}`}
+      >
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${blind ? 'left-[18px]' : 'left-0.5'}`} />
+      </button>
+      Blind grading
+    </label>
+  );
+}
+
 const CKA_NAV: NavItem[] = [
   { to: '/', label: 'Scenarios', end: true },
   { to: '/focus', label: 'Focus' },
@@ -60,7 +83,16 @@ const CKA_NAV: NavItem[] = [
 function CkaShell() {
   const session = useSession().data;
   return (
-    <Shell section="cka" nav={CKA_NAV} actions={<ExamToggle session={session} />}>
+    <Shell
+      section="cka"
+      nav={CKA_NAV}
+      actions={
+        <div className="flex items-center gap-4">
+          <BlindToggle session={session} />
+          <ExamToggle session={session} />
+        </div>
+      }
+    >
       <Routes>
         <Route path="/" element={<BrowserPage track="cka" />} />
         <Route

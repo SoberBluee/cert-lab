@@ -91,17 +91,19 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   const [labKind, setLabKind] = useState<LabKind>('random');
   const [labTopic, setLabTopic] = useState('any');
   const [labCount, setLabCount] = useState('1');
+  const [labLayers, setLabLayers] = useState('1');
+  const [labContexts, setLabContexts] = useState(false);
   const [labPhase, setLabPhase] = useState<'generating' | 'starting'>('generating');
   const topics = catalog.data?.topics ?? [];
   const topicChoices = topics.filter((t) => labKind === 'random' || t.group === labKind);
   const chosenTopic = topicChoices.find((t) => t.id === labTopic);
   const topicIds = topicChoices.map((t) => t.id).join('\n');
   const quickStart = useMutation({
-    mutationFn: async ({ kind, n, topic }: { kind: LabKind; n: number; topic?: LabTopic }) => {
+    mutationFn: async ({ kind, n, topic, layers, contexts }: { kind: LabKind; n: number; topic?: LabTopic; layers: number; contexts: boolean }) => {
       setLabPhase('generating');
-      const questions = await randomLab(catalog.data!, n, kind, topic);
+      const questions = await randomLab(catalog.data!, n, kind, topic, layers);
       const id = `quick-lab-${Math.random().toString(36).slice(2, 8).padEnd(6, '0')}`;
-      await studioApi.quickCreate({ ...toRequest(questions, id, `Quick lab: ${topic?.label ?? KIND_LABELS[kind]}`), dryRun: false });
+      await studioApi.quickCreate({ ...toRequest(questions, id, `Quick lab: ${topic?.label ?? KIND_LABELS[kind]}`, { contexts }), dryRun: false });
       setLabPhase('starting');
       qc.invalidateQueries({ queryKey: ['scenarios'] });
       try {
@@ -281,6 +283,24 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
           />
           question{labN === 1 ? '' : 's'}
         </label>
+        <select
+          className={select}
+          value={labLayers}
+          onChange={(e) => setLabLayers(e.target.value)}
+          disabled={quickStart.isPending || !recipesReady || labKind === 'create'}
+          title="Troubleshooting questions can stack several separate faults, one per layer (for example the Service, the Pods and a NetworkPolicy). Categories without layers stay single."
+        >
+          <option value="1">1 fault each</option>
+          <option value="2">2 faults stacked</option>
+          <option value="3">3 faults stacked</option>
+        </select>
+        <label
+          className="flex items-center gap-1.5 text-sm text-zinc-400"
+          title="Each question names its own kubeconfig context to switch to, as the exam names a host per task."
+        >
+          <input type="checkbox" checked={labContexts} onChange={(e) => setLabContexts(e.target.checked)} disabled={quickStart.isPending || !recipesReady} />
+          Per-question contexts
+        </label>
         <Button
           variant="primary"
           disabled={active || !recipesReady || !catalog.data || quickStart.isPending || start.isPending}
@@ -293,7 +313,9 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
                   ? 'Could not load the recipe catalog'
                   : undefined
           }
-          onClick={() => quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic })}
+          onClick={() =>
+            quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic, layers: labKind === 'create' ? 1 : Number(labLayers), contexts: labContexts })
+          }
         >
           {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
         </Button>

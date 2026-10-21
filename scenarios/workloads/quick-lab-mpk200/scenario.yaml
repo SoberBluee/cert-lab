@@ -51,16 +51,16 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q1-spec-volumes
-        description: the volumes still come from the ConfigMap and the Secret
+        description: the volumes still come from a ConfigMap and the Secret
         type: kubectl
-        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[*].configMap.name} {.spec.template.spec.volumes[*].secret.secretName}'
-        expect: { equals: "nginx:1.27-alpine ${Q1_APP}-content ${Q1_APP}-secret" }
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[?(@.configMap)].configMap.name} {.spec.template.spec.volumes[?(@.secret)].secret.secretName}'
+        expect: { matches: "^nginx:1.27-alpine \\S+ ${Q1_APP}-secret$" }
         weight: 1
     hints:
       - "kubectl -n ${Q1_NS} get pods -l app=${Q1_APP}: are the Pods Pending, ContainerCreating, crashing, or running but not ready?"
-      - "kubectl -n ${Q1_NS} describe pod <pod>: the Events name mount failures and container config errors."
-      - kubectl -n ${Q1_NS} logs <pod> (or --previous) shows why nginx exits or what it cannot find.
-      - Compare the volumes, volumeMounts and securityContext in kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml with the spec and with the ConfigMap and Secret keys.
+      - "kubectl -n ${Q1_NS} describe pod <pod>: the Events name mount and container start errors."
+      - kubectl -n ${Q1_NS} logs <pod> (or --previous) shows why nginx exits; kubectl -n ${Q1_NS} exec deploy/${Q1_APP} -- ls -l /usr/share/nginx/html /etc/${Q1_APP} shows what a running container really sees.
+      - Compare the volumes and volumeMounts of the Deployment with the ConfigMaps and Secrets that exist and the keys they hold; check the ConfigMap content too, not only its name.
   - id: q2
     title: Service ${Q2_APP} unreachable
     points: 6
@@ -85,22 +85,22 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q2-spec-service
-        description: Service ${Q2_APP} matches the spec
+        description: Service ${Q2_APP} is a ClusterIP Service on port 80
         type: kubectl
-        run: kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
-        expect: { equals: "ClusterIP ${Q2_APP} 80 http" }
+        run: kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
         weight: 1
       - id: q2-spec-deployment
-        description: Deployment ${Q2_APP} matches the spec
+        description: Deployment ${Q2_APP} is the original one, with 2 replicas, its image and a readiness probe
         type: kubectl
-        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
-        expect: { equals: "2 ${Q2_APP} http 80" }
+        run: "[ ! -f /var/tmp/cka-q2.uid ] || [ \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q2.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
         weight: 1
     hints:
-      - "kubectl -n ${Q2_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
-      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q2_NS} get pods --show-labels).
-      - Can the client reach a Pod IP directly? kubectl -n ${Q2_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
-      - "kubectl -n ${Q2_NS} get networkpolicy: anything selecting the ${Q2_APP} Pods?"
+      - "Split the path into hops and test each one from client: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n ${Q2_NS} get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n ${Q2_NS} describe svc ${Q2_APP} and kubectl -n ${Q2_NS} get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n ${Q2_NS} get pods --show-labels and kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q3
     title: CronJob ${Q3_APP} never succeeds
     points: 6
@@ -118,11 +118,18 @@ tasks:
         weight: 3
         retrySeconds: 150
       - id: q3-spec
-        description: ${Q3_APP} matches the spec
+        description: ${Q3_APP} runs every minute, is not suspended and keeps image busybox:1.36
         type: kubectl
-        run: kubectl -n ${Q3_NS} get cronjob ${Q3_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.backoffLimit}|{.spec.jobTemplate.spec.activeDeadlineSeconds}|{.spec.jobTemplate.spec.template.spec.containers[0].image}|{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}'
-        expect: { equals: "* * * * *|false|2||busybox:1.36|date; sleep 8; echo report done" }
-        weight: 2
+        run: kubectl -n ${Q3_NS} get cronjob ${Q3_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.template.spec.containers[0].image}'
+        expect: { matches: ^(\* \* \* \* \*|\*/1 \* \* \* \*)\|false\|busybox:1\.36$ }
+        weight: 1
+      - id: q3-output
+        description: the newest successful Job of ${Q3_APP} printed "report done"
+        type: kubectl
+        run: j=$(kubectl -n ${Q3_NS} get jobs -o jsonpath='{range .items[?(@.status.succeeded==1)]}{.metadata.creationTimestamp} {.metadata.name}{"\n"}{end}' | sort | tail -1 | cut -d' ' -f2); [ -n "$j" ] && kubectl -n ${Q3_NS} logs "job/$j" 2>/dev/null || echo none
+        expect: { contains: report done }
+        weight: 1
+        retrySeconds: 150
       - id: q3-same-cronjob
         description: ${Q3_APP} was not deleted or recreated
         type: kubectl
@@ -131,6 +138,6 @@ tasks:
         weight: 1
     hints:
       - "kubectl -n ${Q3_NS} get cronjob ${Q3_APP}: look at SUSPEND, SCHEDULE and LAST SCHEDULE. Has it created any Job at all?"
-      - "kubectl -n ${Q3_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q3_NS} describe job <job> shows the reason (BackoffLimitExceeded, DeadlineExceeded, ...)."
+      - "kubectl -n ${Q3_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q3_NS} describe job <job> shows the reason."
       - kubectl -n ${Q3_NS} logs <pod> and kubectl -n ${Q3_NS} describe pod <pod> show what the container did, or why it never started.
       - "To test a fix without waiting for the next minute: kubectl -n ${Q3_NS} create job test-run --from=cronjob/${Q3_APP}"

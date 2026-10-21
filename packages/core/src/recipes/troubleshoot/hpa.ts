@@ -35,12 +35,12 @@ export const hpaCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }, state) => ({
     title: `Autoscaler ${APP} not working`,
-    text: `HorizontalPodAutoscaler \`${APP}\` in namespace \`${NS}\` should scale Deployment \`${APP}\` on CPU, but \`kubectl -n ${NS} get hpa\` shows it is not working. Fix it so that it matches this spec and reads current CPU metrics:
+    text: `HorizontalPodAutoscaler \`${APP}\` in namespace \`${NS}\` should keep Deployment \`${APP}\` between \`2\` and \`6\` replicas at \`50%\` average CPU utilization, but it is not working. Fix it so that it reads current CPU metrics and can scale \`${APP}\`.
 
-- the autoscaler targets Deployment \`${APP}\`, between \`2\` and \`6\` replicas, at \`50%\` average CPU utilization
-- Deployment \`${APP}\` runs image \`${IMAGE}\`, container \`web\`, requesting \`50m\` CPU and \`32Mi\` memory, with at least \`2\` ready replicas
-
-The cluster's metrics pipeline (metrics-server in \`kube-system\`) may be repaired too. Do not delete or recreate the Deployment.`,
+The cluster's metrics pipeline may be repaired too. Keep the Deployment's image, and do not delete or recreate the Deployment.`,
+    spec: `- the autoscaler targets Deployment \`${APP}\`, between \`2\` and \`6\` replicas, at \`50%\` average CPU utilization
+- Deployment \`${APP}\` runs image \`${IMAGE}\`, container \`web\`, requesting \`50m\` CPU and \`32Mi\` memory
+- metrics-server runs in \`kube-system\`, and APIService \`v1beta1.metrics.k8s.io\` is available`,
     before: `${requireMetrics}
 ${createNs(NS)}
 kubectl apply -f - <<EOF
@@ -135,10 +135,10 @@ done`,
       },
       {
         id: 'spec',
-        description: 'image and requests match the spec',
+        description: `${APP} keeps its image and has a CPU request`,
         type: 'kubectl',
-        run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory}'`,
-        expect: { equals: `${IMAGE} 50m 32Mi` },
+        run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu}'`,
+        expect: { matches: `^${IMAGE.replace(/\./g, '\\.')} \\S+$` },
         weight: 1,
       },
       {
@@ -151,9 +151,9 @@ done`,
       },
     ],
     hints: [
-      `kubectl -n ${NS} get hpa ${APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics.`,
-      `kubectl -n ${NS} describe hpa ${APP}: the Conditions and Events say why (FailedGetScale, FailedGetResourceMetric, ...).`,
-      `kubectl top pods -n ${NS}: if this fails, the problem is the metrics pipeline, not the autoscaler. Check kubectl get apiservice v1beta1.metrics.k8s.io and kubectl -n kube-system get deploy,svc metrics-server.`,
+      `kubectl -n ${NS} get hpa ${APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics; MINPODS and MAXPODS show its range.`,
+      `kubectl -n ${NS} describe hpa ${APP}: the Conditions and Events say why it cannot scale.`,
+      `kubectl top pods -n ${NS}: when this fails, the problem is the metrics pipeline (kubectl get apiservice, then the Deployment and Service behind it), not the autoscaler.`,
     ],
   }),
   faults: ({ NS, APP }) => [

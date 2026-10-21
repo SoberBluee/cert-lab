@@ -28,15 +28,12 @@ export const cronJobsCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }, state) => ({
     title: `CronJob ${APP} never succeeds`,
-    text: `CronJob \`${APP}\` in namespace \`${NS}\` should complete a Job every minute, but none of its runs has succeeded.
+    text: `CronJob \`${APP}\` in namespace \`${NS}\` should run every minute, but none of its Jobs has succeeded. Fix it so that its Jobs complete again.
 
-Fix it so that its Jobs complete again. The intended spec is:
-
-- schedule \`${SCHEDULE}\` (every minute)
+Each run must still print \`report done\` using image \`${IMAGE}\`. Do not delete or recreate the CronJob.`,
+    spec: `- schedule \`${SCHEDULE}\` (every minute), not suspended
 - each Job retries a failed Pod up to \`2\` times (\`backoffLimit: 2\`) and has no time limit
-- container \`report\` runs image \`${IMAGE}\` with the command \`sh -c "${COMMAND}"\`
-
-Do not delete or recreate the CronJob.`,
+- container \`report\` runs image \`${IMAGE}\` with the command \`sh -c "${COMMAND}"\``,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: batch/v1
@@ -74,11 +71,20 @@ chmod 644 "${state}.uid"`,
       },
       {
         id: 'spec',
-        description: `${APP} matches the spec`,
+        description: `${APP} runs every minute, is not suspended and keeps image ${IMAGE}`,
         type: 'kubectl',
-        run: `kubectl -n ${NS} get cronjob ${APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.backoffLimit}|{.spec.jobTemplate.spec.activeDeadlineSeconds}|{.spec.jobTemplate.spec.template.spec.containers[0].image}|{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}'`,
-        expect: { equals: `${SCHEDULE}|false|2||${IMAGE}|${COMMAND}` },
-        weight: 2,
+        run: `kubectl -n ${NS} get cronjob ${APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.template.spec.containers[0].image}'`,
+        expect: { matches: `^(\\* \\* \\* \\* \\*|\\*/1 \\* \\* \\* \\*)\\|false\\|${IMAGE.replace(/\./g, '\\.')}$` },
+        weight: 1,
+      },
+      {
+        id: 'output',
+        description: `the newest successful Job of ${APP} printed "report done"`,
+        type: 'kubectl',
+        run: `j=$(kubectl -n ${NS} get jobs -o jsonpath='{range .items[?(@.status.succeeded==1)]}{.metadata.creationTimestamp} {.metadata.name}{"\\n"}{end}' | sort | tail -1 | cut -d' ' -f2); [ -n "$j" ] && kubectl -n ${NS} logs "job/$j" 2>/dev/null || echo none`,
+        expect: { contains: 'report done' },
+        weight: 1,
+        retrySeconds: 150,
       },
       {
         id: 'same-cronjob',
@@ -91,7 +97,7 @@ chmod 644 "${state}.uid"`,
     ],
     hints: [
       `kubectl -n ${NS} get cronjob ${APP}: look at SUSPEND, SCHEDULE and LAST SCHEDULE. Has it created any Job at all?`,
-      `kubectl -n ${NS} get jobs,pods: why did the Jobs fail? kubectl -n ${NS} describe job <job> shows the reason (BackoffLimitExceeded, DeadlineExceeded, ...).`,
+      `kubectl -n ${NS} get jobs,pods: why did the Jobs fail? kubectl -n ${NS} describe job <job> shows the reason.`,
       `kubectl -n ${NS} logs <pod> and kubectl -n ${NS} describe pod <pod> show what the container did, or why it never started.`,
       `To test a fix without waiting for the next minute: kubectl -n ${NS} create job test-run --from=cronjob/${APP}`,
     ],

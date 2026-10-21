@@ -42,7 +42,7 @@ export const ingressCategory: FaultCategory = {
     const api = `api.${NS}.lab`;
     return {
       title: `${APP} unreachable through the ingress`,
-      text: `The cluster's Traefik controller serves Ingress and Gateway API traffic on NodePort \`30080\` of every node. In namespace \`${NS}\`, Deployment \`${APP}\` is published on two hosts, and users report that one of them no longer shows the nginx welcome page.
+      text: `The cluster's Traefik controller serves Ingress and Gateway API traffic on NodePort \`30080\` of every node. In namespace \`${NS}\`, Deployment \`${APP}\` is published on two hosts: Ingress \`${APP}\` serves \`${www}\` and HTTPRoute \`${APP}\` serves \`${api}\`. Users report that the app is not reachable on all of them.
 
 Both of these must return the nginx welcome page:
 
@@ -51,13 +51,10 @@ curl -H 'Host: ${www}' http://controlplane:30080/
 curl -H 'Host: ${api}' http://controlplane:30080/
 \`\`\`
 
-The intended setup is:
-
-- Service \`${APP}\`: port \`80\`, forwarding to the \`${APP}\` Pods
+Do not change the Deployment or the Service, and do not delete the Ingress or the HTTPRoute.`,
+      spec: `- Service \`${APP}\`: port \`80\`, forwarding to the \`${APP}\` Pods
 - Ingress \`${APP}\`: class \`traefik\`, host \`${www}\`, path \`/\` (\`Prefix\`) to Service \`${APP}\` on port \`80\`
-- HTTPRoute \`${APP}\`: attached to the \`web\` listener of Gateway \`traefik-gateway\` in namespace \`traefik\`, host \`${api}\`, to Service \`${APP}\` on port \`80\`
-
-Fix it without changing the Deployment or the Service, and without deleting the Ingress or the HTTPRoute.`,
+- HTTPRoute \`${APP}\`: attached to the \`web\` listener of Gateway \`traefik-gateway\` in namespace \`traefik\`, host \`${api}\`, path \`/\` to Service \`${APP}\` on port \`80\``,
       before: `${requireIngress}
 ${createNs(NS)}
 kubectl apply -f - <<EOF
@@ -160,7 +157,7 @@ ${waitServing(api)}`,
         },
         {
           id: 'spec-backend',
-          description: `Deployment and Service ${APP} match the spec`,
+          description: `Deployment and Service ${APP} are unchanged`,
           type: 'kubectl',
           run: `echo $(kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${NS} get svc ${APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')`,
           expect: { equals: `2 ${APP} ${APP} 80` },
@@ -169,12 +166,32 @@ ${waitServing(api)}`,
       ],
       hints: [
         `curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken.`,
-        `kubectl -n ${NS} describe ingress ${APP}: check the class, the path and the backend Service and port against kubectl -n ${NS} get svc ${APP}.`,
-        `kubectl -n ${NS} describe httproute ${APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used.`,
-        'kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.',
+        `kubectl -n ${NS} describe ingress ${APP} and kubectl -n ${NS} describe httproute ${APP}: read the Status conditions and the Events, then compare every name, host, path and port with what really exists.`,
+        'kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.',
       ],
     };
   },
+  layers: [
+    {
+      name: 'the Ingress',
+      faults: ['ingress-service-name', 'ingress-service-port', 'ingress-class', 'ingress-path', 'ingress-host-typo', 'ingress-path-prefix', 'ingress-tls-secret-missing'],
+    },
+    {
+      name: 'the HTTPRoute',
+      faults: [
+        'route-parent',
+        'route-section',
+        'route-backend-port',
+        'route-hostname-typo',
+        'route-parent-namespace',
+        'route-backend-name',
+        'route-path-prefix',
+        'route-weight-zero',
+        'route-parent-group',
+        'route-filter-redirect',
+      ],
+    },
+  ],
   faults: ({ NS, APP }) => {
     const www = `www.${NS}.lab`;
     const api = `api.${NS}.lab`;

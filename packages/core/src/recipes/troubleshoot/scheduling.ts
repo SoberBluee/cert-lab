@@ -27,13 +27,13 @@ export const schedulingCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }, state) => ({
     title: `Deployment ${APP} not running`,
-    text: `Deployment \`${APP}\` in namespace \`${NS}\` should run \`2\` ready replicas, but it does not. Fix it so that it matches this spec and both Pods run:
+    text: `Deployment \`${APP}\` in namespace \`${NS}\` should run \`2\` replicas, but it does not. Make both replicas run.
 
-- \`2\` replicas of image \`${IMAGE}\`, container \`web\`
+Keep the image, the replica count and the container's requests of \`100m\` CPU and \`64Mi\` memory. Objects in namespace \`${NS}\` that stand in the way may be changed or removed, but do not change any node. Do not delete or recreate the Deployment.`,
+    spec: `- \`2\` replicas of image \`${IMAGE}\`, container \`web\`
 - requests \`100m\` CPU and \`64Mi\` memory, and no limits
-- no restriction on which node it runs, and the default priority
-
-Objects in namespace \`${NS}\` that stand in the way may be changed or removed. Do not delete or recreate the Deployment.`,
+- no affinity, nodeSelector or topology spread constraint, and the default priority
+- no ResourceQuota or LimitRange in \`${NS}\` that rejects those Pods`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -90,12 +90,16 @@ ${waitUnhealthy(NS, `app=${APP}`, 15)}
       },
     ],
     hints: [
-      `kubectl -n ${NS} get deployment,replicaset,pods -o wide: are there fewer Pods than replicas, or Pods stuck in Pending?`,
-      `Missing Pods: kubectl -n ${NS} describe replicaset -l app=${APP} shows why creating them failed (FailedCreate events).`,
-      `Pending Pods: kubectl -n ${NS} describe pod <pod> shows the scheduler's reason under Events.`,
-      `kubectl -n ${NS} get resourcequota,limitrange: what does the namespace enforce?`,
+      `kubectl -n ${NS} get deployment,replicaset,pods -o wide: are Pods missing altogether, or do they exist and stay Pending?`,
+      `Missing Pods were refused when the ReplicaSet tried to create them: kubectl -n ${NS} describe replicaset -l app=${APP} shows the FailedCreate reason.`,
+      `Pending Pods were never placed: kubectl -n ${NS} describe pod <pod> shows the scheduler's reason under Events.`,
+      `What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${NS} get all,resourcequota,limitrange and kubectl -n ${NS} get deployment ${APP} -o yaml.`,
     ],
   }),
+  layers: [
+    { name: 'what the namespace enforces', faults: ['quota-pods', 'quota-limits', 'limitrange-max'] },
+    { name: 'the Pod template', faults: ['node-affinity', 'priority-class', 'topology-spread-zone'] },
+  ],
   faults: ({ NS, APP }) => [
     {
       id: 'quota-pods',

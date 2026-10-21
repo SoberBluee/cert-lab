@@ -23,15 +23,14 @@ export const podsCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }, state) => ({
     title: `Unhealthy Deployment ${APP}`,
-    text: `Deployment \`${APP}\` in namespace \`${NS}\` is not healthy, or a required rollout cannot finish. Fix it so that it matches this spec and all its Pods are ready and stable:
+    text: `Deployment \`${APP}\` in namespace \`${NS}\` is not healthy. Make it run \`2\` up-to-date, ready replicas that stay stable.
 
-- \`2\` replicas of image \`${IMAGE}\`, container \`web\` listening on port \`80\`
+Keep the image \`${IMAGE}\`, a readiness and a liveness probe, and resource requests and limits on the container. The application reads \`APP_MODE=production\` from ConfigMap \`${APP}-config\`; it must keep doing so. Do not delete or recreate the Deployment.`,
+    spec: `- \`2\` replicas of image \`${IMAGE}\`, container \`web\` listening on port \`80\`
 - requests \`50m\` CPU and \`32Mi\` memory; limits \`250m\` CPU and \`128Mi\` memory
 - a readiness probe doing an HTTP GET of \`/\` on port \`80\`, and a liveness probe opening a TCP connection to port \`80\`
 - the environment variable \`APP_MODE\` taken from key \`mode\` of ConfigMap \`${APP}-config\`, whose value is \`production\`
-- no restriction on which worker it runs
-
-Do not delete or recreate the Deployment.`,
+- no nodeSelector or affinity, and a normal RollingUpdate strategy, not paused`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -108,27 +107,28 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
       },
       {
         id: 'spec-resources',
-        description: 'image, requests and limits match the spec',
+        description: `${APP} keeps its image, and requests and limits for CPU and memory`,
         type: 'kubectl',
         run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'`,
-        expect: { equals: `${IMAGE} 50m 32Mi 250m 128Mi` },
+        expect: { matches: `^${IMAGE.replace(/\./g, '\\.')} \\S+ \\S+ \\S+ \\S+$` },
         weight: 1,
       },
       {
         id: 'spec-probes',
-        description: 'probes match the spec',
+        description: `${APP} keeps a readiness and a liveness probe`,
         type: 'kubectl',
-        run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'`,
-        expect: { equals: '/ 80 80' },
+        run: `c='{.spec.template.spec.containers[0]'; r=$(kubectl -n ${NS} get deployment ${APP} -o jsonpath="$c.readinessProbe}"); l=$(kubectl -n ${NS} get deployment ${APP} -o jsonpath="$c.livenessProbe}"); echo "$([ -n "$r" ] && echo readiness) $([ -n "$l" ] && echo liveness)"`,
+        expect: { equals: 'readiness liveness' },
         weight: 1,
       },
       {
         id: 'spec-config',
-        description: `APP_MODE comes from key mode of ${APP}-config, set to production`,
+        description: `the running Pods read APP_MODE=production from ConfigMap ${APP}-config`,
         type: 'kubectl',
-        run: `echo "$(kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${NS} get configmap ${APP}-config -o jsonpath='{.data.mode}')"`,
-        expect: { equals: `${APP}-config mode production` },
+        run: `echo "$(kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name}') $(kubectl -n ${NS} exec deployment/${APP} -- printenv APP_MODE 2>/dev/null)"`,
+        expect: { equals: `${APP}-config production` },
         weight: 1,
+        retrySeconds: 30,
       },
       {
         id: 'same-deployment',
@@ -140,18 +140,24 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
       },
     ],
     hints: [
-      `kubectl -n ${NS} get pods -l app=${APP} -o wide: what state are the Pods in, and do they restart?`,
-      `kubectl -n ${NS} describe pod <pod>: read the container state, the last termination reason and the Events.`,
-      `kubectl -n ${NS} logs <pod> --previous shows why a crashed container exited.`,
-      `Compare kubectl -n ${NS} get deployment ${APP} -o yaml (and the ConfigMap) against the spec, line by line.`,
+      `kubectl -n ${NS} get deployment,replicaset,pods -l app=${APP} -o wide: are Pods missing, Pending, crashing, running but not ready, or is an old and a new ReplicaSet stuck side by side?`,
+      `kubectl -n ${NS} describe pod <pod>: the container state, the last termination reason and the Events usually name the problem.`,
+      `kubectl -n ${NS} logs <pod> --previous shows why a crashed container exited; kubectl -n ${NS} rollout status deployment/${APP} shows whether a rollout is progressing.`,
+      `kubectl -n ${NS} get deployment ${APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically.`,
     ],
   }),
+  layers: [
+    { name: 'the container', faults: ['image-pull', 'bad-command', 'busybox-bash', 'configmap-key', 'oom-killed'] },
+    { name: 'the probes', faults: ['liveness-port', 'readiness-path'] },
+    { name: 'scheduling', faults: ['requests-too-large', 'node-selector'] },
+  ],
   faults: ({ NS, APP }) => [
     {
       id: 'oom-killed',
       label: 'Memory limit too low (OOMKilled)',
       break: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=memory=4Mi --limits=memory=4Mi`,
-      fix: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=50m,memory=32Mi --limits=cpu=250m,memory=128Mi\n${rollout(NS, APP)}`,
+      fix: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=50m,memory=32Mi --limits=cpu=250m,memory=128Mi`,
+      wait: rollout(NS, APP),
       explain:
         'The memory limit was lowered to 4Mi, so the container is killed as soon as it starts: `describe pod` shows `OOMKilled` (or a start error) and the restart count climbs. Put the requests and limits back to the spec.',
     },
@@ -159,14 +165,16 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
       id: 'image-pull',
       label: 'Image tag does not exist (ImagePullBackOff)',
       break: `kubectl -n "${NS}" set image "deployment/${APP}" web=nginx:1.27-alpne`,
-      fix: `kubectl -n "${NS}" set image "deployment/${APP}" web=${IMAGE}\n${rollout(NS, APP)}`,
+      fix: `kubectl -n "${NS}" set image "deployment/${APP}" web=${IMAGE}`,
+      wait: rollout(NS, APP),
       explain: `The image was changed to \`nginx:1.27-alpne\`, which does not exist: the Pods sit in \`ErrImagePull\` / \`ImagePullBackOff\`. Set the image back to \`${IMAGE}\`.`,
     },
     {
       id: 'bad-command',
       label: 'Broken command (CrashLoopBackOff)',
       break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["nginx","-g","daemon off; worker_procs 2;"]}]}}}}`),
-      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]', 'json')}\n${rollout(NS, APP)}`,
+      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]', 'json')}`,
+      wait: rollout(NS, APP),
       explain:
         'A `command` override starts nginx with an unknown directive, so it exits immediately and the Pods go into `CrashLoopBackOff`. `kubectl logs --previous` shows the nginx error. Remove the command so the image default runs.',
     },
@@ -174,7 +182,8 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
       id: 'busybox-bash',
       label: 'Command uses /bin/bash on an image without it',
       break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["/bin/bash","-c","nginx -g daemon off;"]}]}}}}`),
-      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]', 'json')}\n${rollout(NS, APP)}`,
+      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]', 'json')}`,
+      wait: rollout(NS, APP),
       explain:
         'The container `command` starts with `/bin/bash`, which this alpine-based image does not ship. Events show `exec: "/bin/bash": no such file` and the Pods CrashLoop. Remove the command override (or use `/bin/sh`) so nginx starts again.',
     },
@@ -186,7 +195,8 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
         APP,
         `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["/bin/sh","-c","sleep 8; exec nginx -g daemon off;"],"livenessProbe":{"tcpSocket":{"port":80},"initialDelaySeconds":1,"periodSeconds":2,"failureThreshold":1}}]}}}}`,
       ),
-      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"},{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe","value":{"tcpSocket":{"port":80}}}]', 'json')}\n${rollout(NS, APP)}`,
+      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"},{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe","value":{"tcpSocket":{"port":80}}}]', 'json')}`,
+      wait: rollout(NS, APP),
       explain:
         'A startup `sleep` delays nginx, but the liveness probe uses `initialDelaySeconds: 1` and `failureThreshold: 1`, so the kubelet kills the container before it listens. Restarts climb with `Liveness probe failed`. Remove the command override and restore a normal liveness probe on port 80.',
     },
@@ -195,15 +205,16 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
       label: 'ConfigMap key missing (CreateContainerConfigError)',
       break: `kubectl -n "${NS}" patch configmap "${APP}-config" --type=json -p '[{"op":"move","from":"/data/mode","path":"/data/mod"}]'`,
       fix: `kubectl -n "${NS}" patch configmap "${APP}-config" --type=json -p '[{"op":"move","from":"/data/mod","path":"/data/mode"}]'
-kubectl -n "${NS}" rollout restart "deployment/${APP}"
-${rollout(NS, APP)}`,
+kubectl -n "${NS}" rollout restart "deployment/${APP}"`,
+      wait: rollout(NS, APP),
       explain: `ConfigMap \`${APP}-config\` has the key \`mod\` instead of \`mode\`, so the containers cannot be created: \`CreateContainerConfigError\`, with the missing key named in the Events. Rename the key in the ConfigMap; the Pods start on their next retry.`,
     },
     {
       id: 'liveness-port',
       label: 'Liveness probe on the wrong port',
       break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","livenessProbe":{"tcpSocket":{"port":8080}}}]}}}}`),
-      fix: `${patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","livenessProbe":{"tcpSocket":{"port":80}}}]}}}}`)}\n${rollout(NS, APP)}`,
+      fix: `${patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","livenessProbe":{"tcpSocket":{"port":80}}}]}}}}`)}`,
+      wait: rollout(NS, APP),
       explain:
         'The liveness probe checks port 8080, where nothing listens, so the kubelet keeps killing healthy containers: the restart count climbs and the Events show `Liveness probe failed`. Point the probe back at port 80.',
     },
@@ -211,7 +222,8 @@ ${rollout(NS, APP)}`,
       id: 'readiness-path',
       label: 'Readiness probe on the wrong path',
       break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","readinessProbe":{"httpGet":{"path":"/healthz"}}}]}}}}`),
-      fix: `${patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","readinessProbe":{"httpGet":{"path":"/"}}}]}}}}`)}\n${rollout(NS, APP)}`,
+      fix: `${patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","readinessProbe":{"httpGet":{"path":"/"}}}]}}}}`)}`,
+      wait: rollout(NS, APP),
       explain:
         'The readiness probe requests `/healthz`, which nginx answers with 404, so the Pods run but are never `Ready` (0/1). The Events show `Readiness probe failed: HTTP probe failed with statuscode: 404`. Use `/`.',
     },
@@ -219,7 +231,8 @@ ${rollout(NS, APP)}`,
       id: 'requests-too-large',
       label: 'CPU request larger than any node (Pending)',
       break: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=64 --limits=cpu=64`,
-      fix: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=50m,memory=32Mi --limits=cpu=250m,memory=128Mi\n${rollout(NS, APP)}`,
+      fix: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=50m,memory=32Mi --limits=cpu=250m,memory=128Mi`,
+      wait: rollout(NS, APP),
       explain:
         'The CPU request was raised to 64 cores, so no node can fit a Pod: they stay `Pending` with `Insufficient cpu` in the Events. Put the requests and limits back to the spec.',
     },
@@ -227,7 +240,8 @@ ${rollout(NS, APP)}`,
       id: 'node-selector',
       label: 'nodeSelector matching no node (Pending)',
       break: patch(NS, APP, `{"spec":{"template":{"spec":{"nodeSelector":{"disktype":"ssd"}}}}}`),
-      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]', 'json')}\n${rollout(NS, APP)}`,
+      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]', 'json')}`,
+      wait: rollout(NS, APP),
       explain:
         "A `nodeSelector` of `disktype=ssd` matches no node, so the Pods stay `Pending` with `didn't match Pod's node affinity/selector` in the Events. The spec allows any worker: remove the nodeSelector.",
     },
@@ -244,8 +258,8 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.spec.paused}' | grep -qx true`,
-      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=strategic -p '{"spec":{"paused":false,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"}}}}'
-${rollout(NS, APP)}`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=strategic -p '{"spec":{"paused":false,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"}}}}'`,
+      wait: rollout(NS, APP),
       explain:
         'The Deployment is paused (`spec.paused: true`) after a template change, and `maxSurge: 0` so no surge Pods can help the rollout. Existing Pods look fine, but `updatedReplicas` never catches up and `kubectl rollout status` hangs. Set `paused: false`, restore a normal surge/unavailable (for example `25%`), and let the rollout finish.',
     },

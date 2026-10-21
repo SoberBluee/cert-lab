@@ -49,6 +49,6 @@ checks:
     expect: { matches: "^(0|1|gone)$" }
     weight: 2
 hints:
-  - "kubectl drain ${NODE} --ignore-daemonsets --delete-emptydir-data — read the error about the disruption budget."
-  - "kubectl -n ${NS} get pdb,pods -o wide — minAvailable equal to the replica count blocks every eviction."
-  - "Pods are pinned with nodeSelector drain-lab=yes; after loosening the PDB, remove that pin so replicas can land elsewhere, then drain."
+  - "kubectl drain ${NODE} --ignore-daemonsets --delete-emptydir-data: what does it say, and what keeps it waiting?"
+  - "Evictions respect PodDisruptionBudgets: compare kubectl -n ${NS} get pdb with the replica count."
+  - "An evicted Pod is recreated by its Deployment: check where its Pod template lets the new one go."

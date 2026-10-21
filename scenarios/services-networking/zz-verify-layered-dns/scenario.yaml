@@ -1,0 +1,63 @@
+id: zz-verify-layered-dns
+title: zz-verify-layered-dns
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 20
+points: 7
+tags: [ troubleshooting, dns, coredns, service, layered ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ corefile-typo, cluster-domain, corefile-loop, coredns-hosts-plugin, corefile-key ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ scaled-to-zero, coredns-image, coredns-config-volume, coredns-memory-limit, coredns-ready-port, coredns-rbac ], hidden: true }
+  Q1_FAULT_3: { oneOf: [ kube-dns-selector, kube-dns-target-port, client-dns-policy ], hidden: true }
+tasks:
+  - id: q1
+    title: Name resolution broken
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+    checks:
+      - id: q1-short-name
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n shop exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-fqdn
+        description: client resolves web.shop.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n shop get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n shop exec client -- nslookup -type=a web.shop.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q1-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - "Is it DNS at all? From client, compare nslookup web with nslookup web.shop.svc.cluster.local, and both with a lookup sent straight to a CoreDNS Pod IP: nslookup <name> <pod-ip>."
+      - "Work outwards from the client: kubectl -n shop exec client -- cat /etc/resolv.conf, then kubectl -n kube-system get svc,endpointslices -l k8s-app=kube-dns, then the CoreDNS Pods."
+      - "CoreDNS Pods that are missing, crashing or never ready say why: kubectl -n kube-system get deploy,pods -l k8s-app=kube-dns, then describe and logs."
+      - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.

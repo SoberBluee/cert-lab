@@ -94,6 +94,30 @@ export function useExamMode(): [boolean, (on: boolean) => void] {
   return [on, set];
 }
 
+const BLIND_KEY = 'cka.blind';
+const BLIND_EVENT = 'cka-blind-change';
+const subscribeBlind = (cb: () => void) => {
+  window.addEventListener(BLIND_EVENT, cb);
+  window.addEventListener('storage', cb);
+  return () => {
+    window.removeEventListener(BLIND_EVENT, cb);
+    window.removeEventListener('storage', cb);
+  };
+};
+
+/**
+ * Practice grades show scores only: the check descriptions name the objects to fix, so they stay
+ * hidden until the solution is viewed or the session ends. The exam gives no feedback at all.
+ */
+export function useBlindGrading(): [boolean, (on: boolean) => void] {
+  const on = useSyncExternalStore(subscribeBlind, () => localStorage.getItem(BLIND_KEY) === '1');
+  const set = (v: boolean) => {
+    localStorage.setItem(BLIND_KEY, v ? '1' : '0');
+    window.dispatchEvent(new Event(BLIND_EVENT));
+  };
+  return [on, set];
+}
+
 export const isActive = (s?: SessionView | null) =>
   !!s && (s.state === 'provisioning' || s.state === 'running' || s.state === 'grading');
 

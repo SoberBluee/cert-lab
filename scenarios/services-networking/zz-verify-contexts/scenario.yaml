@@ -1,0 +1,108 @@
+id: zz-verify-contexts
+title: zz-verify-contexts
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 33
+points: 14
+tags: [ troubleshooting, networkpolicy, dns, layered, ingress, gateway-api, httproute ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ dns-egress-port, dns-namespace-selector, dns-policy-deleted, dns-udp-only, dns-pod-selector ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ egress-to-label, egress-port, frontend-egress-deleted, frontend-egress-selector, netpol-egress-ipblock-except ], hidden: true }
+  Q1_FAULT_3: { oneOf: [ ingress-port, ingress-from-label, ingress-namespace-and, ingress-pod-selector, ingress-ports-cleared ], hidden: true }
+  Q2_FAULT: { oneOf: [ ingress-service-name, ingress-service-port, ingress-class, ingress-path, ingress-host-typo, ingress-path-prefix, ingress-tls-secret-missing ], hidden: true }
+  Q2_FAULT_2: { oneOf: [ route-parent, route-section, route-backend-port, route-hostname-typo, route-parent-namespace, route-backend-name, route-path-prefix, route-weight-zero, route-parent-group, route-filter-redirect ], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/contexts.sh
+tasks:
+  - id: q1
+    title: Frontend cannot reach api
+    points: 7
+    context: k8s-web
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+        lane: q1
+    checks:
+      - id: q1-reachable
+        description: client gets the nginx page from http://api
+        type: kubectl
+        run: kubectl -n secure exec client -- wget -qO- -T 3 http://api
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-stranger-blocked
+        description: stranger still cannot reach api
+        type: kubectl
+        run: kubectl -n secure exec stranger -- wget -qO- -T 3 http://api >/dev/null 2>&1 && echo open || echo blocked
+        expect: { equals: blocked }
+        weight: 2
+      - id: q1-default-deny
+        description: default-deny still selects every Pod for ingress and egress
+        type: kubectl
+        run: kubectl -n secure get networkpolicy default-deny -o jsonpath='{.spec.podSelector.matchLabels}|{.spec.policyTypes[*]}|{.spec.ingress}{.spec.egress}'
+        expect: { equals: "|Ingress Egress|" }
+        weight: 1
+      - id: q1-ingress-rule
+        description: api-ingress allows role=frontend on port 80
+        type: kubectl
+        run: kubectl -n secure get networkpolicy api-ingress -o jsonpath='{.spec.ingress[0].from[0].podSelector.matchLabels.role} {.spec.ingress[0].ports[0].port}'
+        expect: { equals: frontend 80 }
+        weight: 1
+    hints:
+      - "kubectl -n secure get networkpolicy, then kubectl -n secure describe networkpolicy <name> for each: which Pods does it select, and what does it let in or out?"
+      - "Separate name resolution from the connection: kubectl -n secure exec client -- nslookup api, then wget the Service IP and a Pod IP directly."
+      - A connection needs egress allowed at the client and ingress allowed at the server, on the port the Pod listens on. Check both ends.
+      - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."
+  - id: q2
+    title: web unreachable through the ingress
+    points: 7
+    context: k8s-alpha
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 800
+        lane: q2
+    checks:
+      - id: q2-ingress-serves
+        description: www.shop.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: www.shop.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-route-serves
+        description: api.shop.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: api.shop.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-spec-ingress
+        description: Ingress web still serves host www.shop.lab
+        type: kubectl
+        run: kubectl -n shop get ingress web -o jsonpath='{.spec.rules[0].host}'
+        expect: { equals: www.shop.lab }
+        weight: 1
+      - id: q2-spec-route
+        description: HTTPRoute web still serves host api.shop.lab
+        type: kubectl
+        run: kubectl -n shop get httproute web -o jsonpath='{.spec.hostnames[0]}'
+        expect: { equals: api.shop.lab }
+        weight: 1
+      - id: q2-spec-backend
+        description: Deployment and Service web are unchanged
+        type: kubectl
+        run: echo $(kubectl -n shop get deployment web -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n shop get svc web -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
+        expect: { equals: 2 web web 80 }
+        weight: 1
+    hints:
+      - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
+      - "kubectl -n shop describe ingress web and kubectl -n shop describe httproute web: read the Status conditions and the Events, then compare every name, host, path and port with what really exists."
+      - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.

@@ -143,23 +143,24 @@ tasks:
         expect: { contains: nginx }
         weight: 1
       - id: q3-spec-resources
-        description: image, requests and limits match the spec
+        description: ${Q3_APP} keeps its image, and requests and limits for CPU and memory
         type: kubectl
         run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
-        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        expect: { matches: ^nginx:1\.27-alpine \S+ \S+ \S+ \S+$ }
         weight: 1
       - id: q3-spec-probes
-        description: probes match the spec
+        description: ${Q3_APP} keeps a readiness and a liveness probe
         type: kubectl
-        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
-        expect: { equals: / 80 80 }
+        run: c='{.spec.template.spec.containers[0]'; r=$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath="$c.readinessProbe}"); l=$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath="$c.livenessProbe}"); echo "$([ -n "$r" ] && echo readiness) $([ -n "$l" ] && echo liveness)"
+        expect: { equals: readiness liveness }
         weight: 1
       - id: q3-spec-config
-        description: APP_MODE comes from key mode of ${Q3_APP}-config, set to production
+        description: the running Pods read APP_MODE=production from ConfigMap ${Q3_APP}-config
         type: kubectl
-        run: echo "$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q3_NS} get configmap ${Q3_APP}-config -o jsonpath='{.data.mode}')"
-        expect: { equals: "${Q3_APP}-config mode production" }
+        run: echo "$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name}') $(kubectl -n ${Q3_NS} exec deployment/${Q3_APP} -- printenv APP_MODE 2>/dev/null)"
+        expect: { equals: "${Q3_APP}-config production" }
         weight: 1
+        retrySeconds: 30
       - id: q3-same-deployment
         description: ${Q3_APP} was not deleted or recreated
         type: kubectl
@@ -167,7 +168,7 @@ tasks:
         expect: { equals: same }
         weight: 1
     hints:
-      - "kubectl -n ${Q3_NS} get pods -l app=${Q3_APP} -o wide: what state are the Pods in, and do they restart?"
-      - "kubectl -n ${Q3_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
-      - kubectl -n ${Q3_NS} logs <pod> --previous shows why a crashed container exited.
-      - Compare kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o yaml (and the ConfigMap) against the spec, line by line.
+      - "kubectl -n ${Q3_NS} get deployment,replicaset,pods -l app=${Q3_APP} -o wide: are Pods missing, Pending, crashing, running but not ready, or is an old and a new ReplicaSet stuck side by side?"
+      - "kubectl -n ${Q3_NS} describe pod <pod>: the container state, the last termination reason and the Events usually name the problem."
+      - kubectl -n ${Q3_NS} logs <pod> --previous shows why a crashed container exited; kubectl -n ${Q3_NS} rollout status deployment/${Q3_APP} shows whether a rollout is progressing.
+      - "kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."

@@ -44,6 +44,6 @@ checks:
     weight: 1
     retrySeconds: 60
 hints:
-  - "kubectl -n ${NS} describe rs -l app=${APP}: look for FailedCreate / admission webhook errors."
-  - "kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration — does any webhook target Pods with failurePolicy Fail?"
-  - "A webhook whose Service no longer exists will time out every create when failurePolicy is Fail."
+  - "No Pods at all? The ReplicaSet could not create them: kubectl -n ${NS} describe rs -l app=${APP} shows the FailedCreate message."
+  - "Read that message word for word: it names whatever refused the request."
+  - "Admission webhooks are cluster-scoped: kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration -o yaml shows which namespaces and resources each covers, which Service it calls, and what happens when that call fails."

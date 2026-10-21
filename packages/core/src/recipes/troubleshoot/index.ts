@@ -1,5 +1,7 @@
-import type { CategorySummary } from '@cka/schema';
+import { QUICK_MAX_LAYERS, type CategorySummary } from '@cka/schema';
+import { admissionCategory } from './admission';
 import { apiAccessCategory } from './apiaccess';
+import { controllersCategory } from './controllers';
 import { controlPlaneCategory } from './controlplane';
 import { cronJobsCategory } from './cronjobs';
 import { dnsCategory } from './dns';
@@ -12,14 +14,16 @@ import { nodesCategory } from './nodes';
 import { podConfigCategory } from './podconfig';
 import { podsCategory } from './pods';
 import { rbacCategory } from './rbac';
+import { restartsCategory } from './restarts';
 import { schedulingCategory } from './scheduling';
 import { servicesCategory } from './services';
 import { storageCategory } from './storage';
 import type { FaultCategory } from './types';
+import { unschedulableCategory } from './unschedulable';
 import { vpaCategory } from './vpa';
 import { webhooksCategory } from './webhooks';
 
-export { composeTrouble, WORKERS } from './compose';
+export { composeTrouble, WORKERS, type FaultSlot } from './compose';
 export type { Fault, FaultCategory, Shell } from './types';
 
 export const CATEGORIES: FaultCategory[] = [
@@ -41,6 +45,10 @@ export const CATEGORIES: FaultCategory[] = [
   apiAccessCategory,
   webhooksCategory,
   drainCategory,
+  restartsCategory,
+  admissionCategory,
+  unschedulableCategory,
+  controllersCategory,
 ];
 
 export const getCategory = (id: string): FaultCategory | undefined => CATEGORIES.find((c) => c.id === id);
@@ -50,6 +58,9 @@ export const faultList = (c: FaultCategory) => c.faults(sample(c), '/tmp/x').map
 
 const sample = (c: FaultCategory) =>
   Object.fromEntries([...c.fields.map((f) => [f.key, f.default]), ['FAULT', ''], ...Object.keys(c.hidden ?? {}).map((k) => [k, ''])]);
+
+/** How many faults one question of the category can stack. */
+export const maxLayers = (c: FaultCategory) => Math.max(1, Math.min(QUICK_MAX_LAYERS, c.layers?.length ?? 1));
 
 export const categorySummaries = (spoilers = false): CategorySummary[] =>
   CATEGORIES.map((c) => {
@@ -68,6 +79,7 @@ export const categorySummaries = (spoilers = false): CategorySummary[] =>
       disruptive: !!c.disruptive,
       breaksApi: !!c.breaksApi,
       faultCount: faults.length,
+      maxLayers: maxLayers(c),
       ...(spoilers ? { faults } : {}),
     };
   });

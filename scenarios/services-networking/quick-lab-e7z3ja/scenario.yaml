@@ -38,19 +38,19 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q1-spec-service
-        description: Service ${Q1_APP} matches the spec
+        description: Service ${Q1_APP} is a ClusterIP Service on port 80
         type: kubectl
-        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
-        expect: { equals: "ClusterIP ${Q1_APP} 80 http" }
+        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
         weight: 1
       - id: q1-spec-deployment
-        description: Deployment ${Q1_APP} matches the spec
+        description: Deployment ${Q1_APP} is the original one, with 2 replicas, its image and a readiness probe
         type: kubectl
-        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
-        expect: { equals: "2 ${Q1_APP} http 80" }
+        run: "[ ! -f /var/tmp/cka-q1.uid ] || [ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
         weight: 1
     hints:
-      - "kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
-      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q1_NS} get pods --show-labels).
-      - Can the client reach a Pod IP directly? kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
-      - "kubectl -n ${Q1_NS} get networkpolicy: anything selecting the ${Q1_APP} Pods?"
+      - "Split the path into hops and test each one from client: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n ${Q1_NS} describe svc ${Q1_APP} and kubectl -n ${Q1_NS} get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n ${Q1_NS} get pods --show-labels and kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."

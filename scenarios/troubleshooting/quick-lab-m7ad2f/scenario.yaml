@@ -68,9 +68,9 @@ tasks:
         weight: 2
         retrySeconds: 90
     hints:
-      - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
-      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
-      - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
+      - "kubectl get nodes, then kubectl describe node <node>: which node is unhealthy, which condition, and since when?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job?"
+      - systemctl cat kubelet shows the unit and drop-ins, and so every file and flag the kubelet starts with. Check each path and value against what exists on the node and against a healthy worker.
       - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
   - id: q2
     title: Pod ${Q2_CLAIM}-app stuck
@@ -88,26 +88,21 @@ tasks:
         expect: { equals: "Bound/${Q2_CLAIM}-pv" }
         weight: 2
         retrySeconds: 30
-      - id: q2-spec-claim
-        description: PVC ${Q2_CLAIM} matches the spec
-        type: kubectl
-        run: kubectl -n ${Q2_NS} get pvc ${Q2_CLAIM} -o jsonpath='{.spec.storageClassName} {.spec.accessModes[0]} {.spec.resources.requests.storage}'
-        expect: { equals: manual ReadWriteOnce 500Mi }
-        weight: 1
       - id: q2-pod-running
         description: Pod ${Q2_CLAIM}-app is Running with the claim at /data
         type: kubectl
         run: kubectl -n ${Q2_NS} get pod ${Q2_CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
         expect: { matches: "^Running ${Q2_CLAIM} .*/data" }
-        weight: 1
+        weight: 2
         retrySeconds: 60
       - id: q2-pv-kept
-        description: PV ${Q2_CLAIM}-pv is unchanged
+        description: PV ${Q2_CLAIM}-pv keeps its class, capacity and access mode
         type: kubectl
         run: kubectl get pv ${Q2_CLAIM}-pv -o jsonpath='{.spec.storageClassName} {.spec.capacity.storage} {.spec.accessModes[0]}'
         expect: { equals: manual 1Gi ReadWriteOnce }
         weight: 1
     hints:
-      - "kubectl -n ${Q2_NS} describe pod ${Q2_CLAIM}-app, then kubectl -n ${Q2_NS} describe pvc ${Q2_CLAIM}: what are the Events waiting for?"
-      - "Put kubectl get pv ${Q2_CLAIM}-pv next to kubectl -n ${Q2_NS} get pvc ${Q2_CLAIM} -o yaml: class, access mode and size must all fit."
+      - "kubectl -n ${Q2_NS} describe pod ${Q2_CLAIM}-app: is the Pod waiting for its claim to bind, or for a node it can run on? The Events say which."
+      - "kubectl -n ${Q2_NS} describe pvc ${Q2_CLAIM} and kubectl get pv ${Q2_CLAIM}-pv -o yaml: class, access modes, size and the volume's status (and any claimRef) must all fit."
+      - "A bound volume can still pin its Pod: compare the volume's node affinity with where the Pod is allowed to run (kubectl get pod ${Q2_CLAIM}-app -o yaml)."
       - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."

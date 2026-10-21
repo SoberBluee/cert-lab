@@ -1,0 +1,41 @@
+id: zz-verify-admission
+title: zz-verify-admission
+domain: workloads
+difficulty: 2
+estimatedMinutes: 8
+points: 5
+tags: [ troubleshooting, admission, resourcequota, limitrange, pod-security, webhook ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ quota-pods, quota-limits, limitrange-max, limitrange-min, pod-security, webhook ], hidden: true }
+tasks:
+  - id: q1
+    title: New Pods rejected in batch
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: worker runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n batch get deployment worker -o jsonpath='{.status.readyReplicas}/{.status.replicas}'
+        expect: { equals: 2/2 }
+        weight: 4
+        retrySeconds: 90
+      - id: q1-unchanged
+        description: Deployment worker was not changed or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n batch get deployment worker -o jsonpath='{.metadata.uid} {.spec.replicas} {.spec.template.spec}')\" = \"$(cat /var/tmp/cka-q1.deploy)\" ] && echo unchanged || echo changed"
+        expect: { equals: unchanged }
+        weight: 1
+    hints:
+      - "kubectl -n batch get deployment,replicaset,pods: no Pods at all, or fewer than wanted, means they were refused before they existed."
+      - "kubectl -n batch describe replicaset -l app=worker: the FailedCreate event quotes the refusal word for word."
+      - That message names whatever refused the Pod. Find that object, whether it lives in the namespace, on the namespace or cluster-wide, and read what it enforces.

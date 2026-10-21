@@ -38,15 +38,12 @@ export const rbacCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }) => ({
     title: `${APP} cannot list Pods`,
-    text: `Deployment \`${APP}\` in namespace \`${NS}\` calls the Kubernetes API every few seconds to list the Pods of its namespace, and logs the HTTP status of each call. It used to log \`200\`; now it does not.
+    text: `Deployment \`${APP}\` in namespace \`${NS}\` lists the Pods of its namespace through the Kubernetes API every few seconds, and logs the HTTP status of each call. It used to log \`200\`; now it does not. Make it log \`200\` again.
 
-Fix it so that \`${APP}\` logs \`200\` again. The intended setup is:
-
-- Deployment \`${APP}\` runs as ServiceAccount \`${APP}-sa\`, using the token Kubernetes mounts into the Pod
+Repair the existing ServiceAccount, Role, RoleBinding and Deployment: do not create RBAC objects or ServiceAccounts under other names, do not grant permissions to any other account, and do not give \`${APP}\`'s account more than read access to Pods.`,
+    spec: `- Deployment \`${APP}\` runs as ServiceAccount \`${APP}-sa\`, using the token Kubernetes mounts into the Pod
 - Role \`${APP}-reader\` allows \`get\` and \`list\` on \`pods\` in \`${NS}\`, and nothing else
-- RoleBinding \`${APP}-reader\` grants that Role to \`${APP}-sa\`
-
-Do not grant \`${APP}-sa\` any other permission.`,
+- RoleBinding \`${APP}-reader\` grants that Role to ServiceAccount \`${APP}-sa\` in \`${NS}\``,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -159,12 +156,16 @@ done
       },
     ],
     hints: [
-      `kubectl -n ${NS} logs deployment/${APP}: 401, 403 or a missing token point at different problems.`,
-      `kubectl auth can-i list pods -n ${NS} --as=${sa(NS, APP)} tells you whether RBAC allows the call at all.`,
-      `kubectl -n ${NS} get role,rolebinding -o yaml: check the verbs, the resource names, the roleRef and the subject's namespace.`,
-      `kubectl -n ${NS} get pod -l app=${APP} -o yaml | grep -i serviceaccount, and kubectl -n ${NS} get sa ${APP}-sa -o yaml.`,
+      `kubectl -n ${NS} logs deployment/${APP}: a 401, a 403 and a missing token point at different problems. A 403 names the account the API saw.`,
+      `kubectl auth can-i list pods -n ${NS} --as=system:serviceaccount:${NS}:<account> answers for any account, without the Pod.`,
+      'Follow the chain from the Pod to the permission: which ServiceAccount the Pod runs as, which RoleBinding names that exact account, which Role the binding points at, and what that Role allows.',
     ],
   }),
+  layers: [
+    { name: 'the Role', faults: ['role-verb', 'role-resource'] },
+    { name: 'the RoleBinding', faults: ['binding-subject-ns', 'binding-role-ref'] },
+    { name: 'the workload', faults: ['wrong-sa', 'automount-off'] },
+  ],
   faults: ({ NS, APP }) => [
     {
       id: 'role-verb',
