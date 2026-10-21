@@ -117,7 +117,7 @@ tasks:
         expect: { equals: frontend 80 }
         weight: 1
     hints:
-      - "kubectl -n ${Q3_NS} get networkpolicy, then kubectl -n ${Q3_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?"
-      - "Separate DNS from the connection: kubectl -n ${Q3_NS} exec client -- nslookup ${Q3_APP}, then wget the Service IP or a Pod IP directly."
-      - "Compare every selector with the real labels: kubectl -n ${Q3_NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns."
-      - A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.
+      - "kubectl -n ${Q3_NS} get networkpolicy, then kubectl -n ${Q3_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it let in or out?"
+      - "Separate name resolution from the connection: kubectl -n ${Q3_NS} exec client -- nslookup ${Q3_APP}, then wget the Service IP and a Pod IP directly."
+      - A connection needs egress allowed at the client and ingress allowed at the server, on the port the Pod listens on. Check both ends.
+      - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."

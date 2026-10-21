@@ -8,8 +8,7 @@ const jsonPatch = (ns: string, app: string, ops: string) => `kubectl -n "${ns}" 
 
 const rollout = (ns: string, app: string) => `kubectl -n "${ns}" rollout status "deployment/${app}" --timeout=240s`;
 
-const dropSecurityContext = (ns: string, app: string) =>
-  `${jsonPatch(ns, app, '[{"op":"remove","path":"/spec/template/spec/containers/0/securityContext"}]')}\n${rollout(ns, app)}`;
+const dropSecurityContext = (ns: string, app: string) => jsonPatch(ns, app, '[{"op":"remove","path":"/spec/template/spec/containers/0/securityContext"}]');
 
 export const podConfigCategory: FaultCategory = {
   id: 'podconfig',
@@ -27,13 +26,13 @@ export const podConfigCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }) => ({
     title: `Deployment ${APP} does not serve its page`,
-    text: `Deployment \`${APP}\` in namespace \`${NS}\` was just reconfigured and is no longer healthy. Fix it so that it matches this spec and both Pods are ready:
+    text: `Deployment \`${APP}\` in namespace \`${NS}\` was reconfigured and no longer serves its page. Fix it so that both replicas are ready, \`/\` returns the page \`<h1>${APP} is up</h1>\`, and the containers can read the token from Secret \`${APP}-secret\` at \`/etc/${APP}/token\`.
 
-- \`2\` replicas of image \`${IMAGE}\`, container \`web\` serving on port \`80\`, with a readiness probe doing an HTTP GET of \`/\`
-- the page \`index.html\` from ConfigMap \`${APP}-content\`, mounted at \`/usr/share/nginx/html\`
+Keep the image, keep serving the page from a ConfigMap and the token from Secret \`${APP}-secret\`, and do not change that Secret. Do not delete or recreate the Deployment.`,
+    spec: `- \`2\` replicas of image \`${IMAGE}\`, container \`web\` serving on port \`80\`, with a readiness probe doing an HTTP GET of \`/\`
+- the page \`index.html\` from ConfigMap \`${APP}-content\` (\`<h1>${APP} is up</h1>\`), mounted at \`/usr/share/nginx/html\`
 - key \`token\` of Secret \`${APP}-secret\`, mounted as the file \`/etc/${APP}/token\`
-
-Do not delete or recreate the Deployment. Prefer fixing mounts and securityContext on the Pod template; replace the ConfigMap or Secret only if they cannot be patched (for example when marked immutable).`,
+- no securityContext on the container`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -125,31 +124,38 @@ ${waitUnhealthy(NS, `app=${APP}`)}
     ],
     hints: [
       `kubectl -n ${NS} get pods -l app=${APP}: are the Pods Pending, ContainerCreating, crashing, or running but not ready?`,
-      `kubectl -n ${NS} describe pod <pod>: the Events name mount failures and container config errors.`,
-      `kubectl -n ${NS} logs <pod> (or --previous) shows why nginx exits or what it cannot find.`,
-      `Compare the volumes, volumeMounts and securityContext in kubectl -n ${NS} get deployment ${APP} -o yaml with the spec and with the ConfigMap and Secret keys.`,
+      `kubectl -n ${NS} describe pod <pod>: the Events name mount and container start errors.`,
+      `kubectl -n ${NS} logs <pod> (or --previous) shows why nginx exits; kubectl -n ${NS} exec deploy/${APP} -- ls -l /usr/share/nginx/html /etc/${APP} shows what a running container really sees.`,
+      `Compare the volumes and volumeMounts of the Deployment with the ConfigMaps and Secrets that exist and the keys they hold; check the ConfigMap content too, not only its name.`,
     ],
   }),
+  layers: [
+    { name: 'the volumes', faults: ['configmap-volume-missing', 'secret-items-key', 'mount-path', 'immutable-configmap'] },
+    { name: 'the security context', faults: ['run-as-non-root', 'readonly-root'] },
+  ],
   faults: ({ NS, APP }) => [
     {
       id: 'configmap-volume-missing',
       label: 'Volume names a ConfigMap that does not exist',
       break: jsonPatch(NS, APP, `[{"op":"replace","path":"/spec/template/spec/volumes/0/configMap/name","value":"${APP}-contents"}]`),
-      fix: `${jsonPatch(NS, APP, `[{"op":"replace","path":"/spec/template/spec/volumes/0/configMap/name","value":"${APP}-content"}]`)}\n${rollout(NS, APP)}`,
+      fix: `${jsonPatch(NS, APP, `[{"op":"replace","path":"/spec/template/spec/volumes/0/configMap/name","value":"${APP}-content"}]`)}`,
+      wait: rollout(NS, APP),
       explain: `The \`content\` volume refers to ConfigMap \`${APP}-contents\`, which does not exist, so the Pods stay in \`ContainerCreating\` and the Events show \`FailedMount ... configmap "${APP}-contents" not found\`. Point the volume back at \`${APP}-content\`.`,
     },
     {
       id: 'secret-items-key',
       label: 'Secret volume asks for a key the Secret does not have',
       break: jsonPatch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/volumes/1/secret/items/0/key","value":"api-token"}]'),
-      fix: `${jsonPatch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/volumes/1/secret/items/0/key","value":"token"}]')}\n${rollout(NS, APP)}`,
+      fix: `${jsonPatch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/volumes/1/secret/items/0/key","value":"token"}]')}`,
+      wait: rollout(NS, APP),
       explain: `The \`secret\` volume projects key \`api-token\`, but Secret \`${APP}-secret\` only has \`token\`. The mount fails (\`references non-existent secret key: api-token\` in the Events) and the Pods stay in \`ContainerCreating\`. Set the item key back to \`token\`.`,
     },
     {
       id: 'mount-path',
       label: 'ConfigMap mounted one directory too high',
       break: jsonPatch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/containers/0/volumeMounts/0/mountPath","value":"/usr/share/nginx"}]'),
-      fix: `${jsonPatch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/containers/0/volumeMounts/0/mountPath","value":"/usr/share/nginx/html"}]')}\n${rollout(NS, APP)}`,
+      fix: `${jsonPatch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/containers/0/volumeMounts/0/mountPath","value":"/usr/share/nginx/html"}]')}`,
+      wait: rollout(NS, APP),
       explain:
         'The ConfigMap is mounted at `/usr/share/nginx`, which hides the `html` directory nginx serves from. nginx runs, but `/` returns 404, so the readiness probe fails and the Pods stay `0/1`. `kubectl exec` and `ls /usr/share/nginx` show `index.html` in the wrong place. Mount it at `/usr/share/nginx/html`.',
     },
@@ -158,6 +164,7 @@ ${waitUnhealthy(NS, `app=${APP}`)}
       label: 'runAsNonRoot on an image that runs as root',
       break: jsonPatch(NS, APP, '[{"op":"add","path":"/spec/template/spec/containers/0/securityContext","value":{"runAsNonRoot":true}}]'),
       fix: dropSecurityContext(NS, APP),
+      wait: rollout(NS, APP),
       explain:
         'The container sets `runAsNonRoot: true`, but the nginx image starts as root, so the kubelet refuses to start it: `CreateContainerConfigError` with `container has runAsNonRoot and image will run as root`. Remove the securityContext (or run an image built for a non-root user).',
     },
@@ -166,6 +173,7 @@ ${waitUnhealthy(NS, `app=${APP}`)}
       label: 'Read-only root filesystem',
       break: jsonPatch(NS, APP, '[{"op":"add","path":"/spec/template/spec/containers/0/securityContext","value":{"readOnlyRootFilesystem":true}}]'),
       fix: dropSecurityContext(NS, APP),
+      wait: rollout(NS, APP),
       explain:
         'The container sets `readOnlyRootFilesystem: true`. nginx needs to write its cache and pid files, so it exits at startup and the Pods go into `CrashLoopBackOff`; `kubectl logs --previous` shows `Read-only file system`. Remove the securityContext, or mount writable `emptyDir` volumes where nginx writes.',
     },
@@ -176,8 +184,8 @@ ${waitUnhealthy(NS, `app=${APP}`)}
 kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"'"${APP}"'-content","namespace":"'"${NS}"'"},"immutable":true,"data":{"index.html":"<h1>wrong page</h1>"}}'`,
       fix: `kubectl -n "${NS}" create configmap "${APP}-content-fixed" --from-literal=index.html="<h1>${APP} is up</h1>"
 ${jsonPatch(NS, APP, `[{"op":"replace","path":"/spec/template/spec/volumes/0/configMap/name","value":"${APP}-content-fixed"}]`)}
-${rollout(NS, APP)}
 kubectl -n "${NS}" delete configmap "${APP}-content" --ignore-not-found`,
+      wait: rollout(NS, APP),
       explain: `ConfigMap \`${APP}-content\` is \`immutable: true\` and serves the wrong \`index.html\`. Edits are rejected, and recreating it under the same name often leaves the kubelet serving the cached immutable object. Create a new ConfigMap with the correct page, point the Deployment volume at it, then delete the old ConfigMap.`,
     },
   ],

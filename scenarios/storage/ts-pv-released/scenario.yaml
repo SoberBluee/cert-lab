@@ -44,6 +44,6 @@ checks:
     expect: { equals: "manual 1Gi ReadWriteOnce" }
     weight: 1
 hints:
-  - "kubectl get pv ${CLAIM}-pv -o yaml: look at status.phase and spec.claimRef."
-  - "A Retain volume stuck Released keeps a stale claimRef until you clear it."
-  - "kubectl patch pv ${CLAIM}-pv --type=json -p '[{\"op\":\"remove\",\"path\":\"/spec/claimRef\"}]'"
+  - "kubectl -n ${NS} describe pod ${CLAIM}-app, then kubectl -n ${NS} describe pvc ${CLAIM}: what are the Events waiting for?"
+  - "kubectl get pv ${CLAIM}-pv -o yaml: a claim can only bind a volume that fits it and is free. Read the volume's status, and what it still points at."
+  - "A volume with reclaim policy Retain is never cleaned up for you after its claim is deleted."

@@ -1,0 +1,76 @@
+id: zz-verify-layered-pods
+title: zz-verify-layered-pods
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 18
+points: 8
+tags: [ troubleshooting, pods, deployment, layered ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ image-pull, bad-command, busybox-bash, configmap-key, oom-killed ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ liveness-port, readiness-path ], hidden: true }
+  Q1_FAULT_3: { oneOf: [ requests-too-large, node-selector ], hidden: true }
+tasks:
+  - id: q1
+    title: Unhealthy Deployment storefront
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: storefront has 2 ready replicas
+        type: kubectl
+        run: kubectl -n retail get deployment storefront -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-stable
+        description: storefront's Pods do not restart over 20 seconds
+        type: kubectl
+        run: r() { kubectl -n retail get pods -l app=storefront --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 20; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-serves
+        description: storefront serves HTTP on port 80
+        type: kubectl
+        run: kubectl -n retail exec deployment/storefront -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: nginx }
+        weight: 1
+      - id: q1-spec-resources
+        description: storefront keeps its image, and requests and limits for CPU and memory
+        type: kubectl
+        run: kubectl -n retail get deployment storefront -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { matches: ^nginx:1\.27-alpine \S+ \S+ \S+ \S+$ }
+        weight: 1
+      - id: q1-spec-probes
+        description: storefront keeps a readiness and a liveness probe
+        type: kubectl
+        run: c='{.spec.template.spec.containers[0]'; r=$(kubectl -n retail get deployment storefront -o jsonpath="$c.readinessProbe}"); l=$(kubectl -n retail get deployment storefront -o jsonpath="$c.livenessProbe}"); echo "$([ -n "$r" ] && echo readiness) $([ -n "$l" ] && echo liveness)"
+        expect: { equals: readiness liveness }
+        weight: 1
+      - id: q1-spec-config
+        description: the running Pods read APP_MODE=production from ConfigMap storefront-config
+        type: kubectl
+        run: echo "$(kubectl -n retail get deployment storefront -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name}') $(kubectl -n retail exec deployment/storefront -- printenv APP_MODE 2>/dev/null)"
+        expect: { equals: storefront-config production }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-same-deployment
+        description: storefront was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n retail get deployment storefront -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n retail get deployment,replicaset,pods -l app=storefront -o wide: are Pods missing, Pending, crashing, running but not ready, or is an old and a new ReplicaSet stuck side by side?"
+      - "kubectl -n retail describe pod <pod>: the container state, the last termination reason and the Events usually name the problem."
+      - kubectl -n retail logs <pod> --previous shows why a crashed container exited; kubectl -n retail rollout status deployment/storefront shows whether a rollout is progressing.
+      - "kubectl -n retail get deployment storefront -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."

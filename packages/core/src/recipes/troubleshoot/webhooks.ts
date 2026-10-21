@@ -21,13 +21,13 @@ export const webhooksCategory: FaultCategory = {
     nsField(['hooks', 'admit', 'gate', 'policy', 'validate', 'mutate', 'control', 'guard', 'policy-lab', 'admission']),
     nameField('APP', 'Deployment name', ['frontend', 'api', 'portal', 'web', 'gateway', 'admin', 'console', 'dashboard', 'app', 'service']),
   ],
-  shell: ({ NS, APP }) => ({
+  shell: ({ NS, APP }, state) => ({
     title: `Pods cannot be created in ${NS}`,
-    text: `Deployment \`${APP}\` in namespace \`${NS}\` should run \`2\` ready replicas of \`${IMAGE}\`, but new Pods never come up.
+    text: `Deployment \`${APP}\` in namespace \`${NS}\` should run \`2\` ready replicas, but its new Pods never come up. Fix it so that \`${APP}\` runs \`2\` ready replicas and new Pods can be created in \`${NS}\` again.
 
-Find what is rejecting Pod creates and fix it so \`${APP}\` has \`2\` ready replicas. You may remove leftover admission configuration that does not belong in this cluster.
-
-Do not delete or recreate the Deployment.`,
+Keep the image, and do not delete or recreate the Deployment.`,
+    spec: `- no admission webhook rejects Pod creates in \`${NS}\`: \`${WH}\` is a leftover whose Service does not exist
+- Deployment \`${APP}\`: \`2\` replicas of \`${IMAGE}\``,
     before: `${createNs(NS)}
 kubectl label namespace "${NS}" webhook-lab=true --overwrite
 kubectl apply -f - <<EOF
@@ -51,7 +51,9 @@ spec:
           readinessProbe:
             httpGet: { path: /, port: 80 }
             periodSeconds: 5
-EOF`,
+EOF
+kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.metadata.uid}' > "${state}.uid"
+chmod 644 "${state}.uid"`,
     after: `kubectl -n "${NS}" scale "deployment/${APP}" --replicas=2
 ${waitUnhealthy(NS, `app=${APP}`, 30)}
 [[ "$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.status.readyReplicas}')" != 2 ]] || { echo "${APP} is still healthy" >&2; exit 1; }`,
@@ -66,12 +68,12 @@ ${waitUnhealthy(NS, `app=${APP}`, 30)}
         retrySeconds: 90,
       },
       {
-        id: 'no-orphan-webhook',
-        description: `ValidatingWebhookConfiguration ${WH} is gone`,
+        id: 'same-deployment',
+        description: `${APP} was not deleted or recreated`,
         type: 'kubectl',
-        run: `kubectl get validatingwebhookconfiguration ${WH} >/dev/null 2>&1 && echo present || echo gone`,
-        expect: { equals: 'gone' },
-        weight: 2,
+        run: `[ "$(kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.metadata.uid}')" = "$(cat ${state}.uid)" ] && echo same || echo recreated`,
+        expect: { equals: 'same' },
+        weight: 1,
       },
       {
         id: 'image',
@@ -83,18 +85,18 @@ ${waitUnhealthy(NS, `app=${APP}`, 30)}
       },
       {
         id: 'can-create',
-        description: 'a throwaway Pod can be created in the namespace',
+        description: `a new Pod can be created in ${NS}`,
         type: 'kubectl',
         run: `kubectl -n ${NS} delete pod webhook-probe --ignore-not-found --wait=false >/dev/null 2>&1; kubectl -n ${NS} run webhook-probe --image=busybox:1.36 --restart=Never --command -- true >/dev/null 2>&1 && kubectl -n ${NS} wait --for=jsonpath='{.status.phase}'=Succeeded pod/webhook-probe --timeout=60s >/dev/null 2>&1 && echo ok || echo fail`,
         expect: { equals: 'ok' },
-        weight: 1,
+        weight: 2,
         retrySeconds: 60,
       },
     ],
     hints: [
-      `kubectl -n ${NS} describe rs -l app=${APP}: look for FailedCreate / admission webhook errors.`,
-      'kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration — does any webhook target Pods with failurePolicy Fail?',
-      'A webhook whose Service no longer exists will time out every create when failurePolicy is Fail.',
+      `No Pods at all? The ReplicaSet could not create them: kubectl -n ${NS} describe rs -l app=${APP} shows the FailedCreate message.`,
+      'Read the message word for word: it names whatever refused the request, whether that is a quota, a policy or a webhook.',
+      'Admission webhooks are cluster-scoped: kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration, then -o yaml to see which namespaces and resources each one covers, which Service it calls, and what happens when that call fails.',
     ],
   }),
   faults: ({ NS, APP }) => [

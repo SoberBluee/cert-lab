@@ -62,22 +62,22 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q1-spec-service
-        description: Service ${Q1_APP} matches the spec
+        description: Service ${Q1_APP} is a ClusterIP Service on port 80
         type: kubectl
-        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
-        expect: { equals: "ClusterIP ${Q1_APP} 80 http" }
+        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
         weight: 1
       - id: q1-spec-deployment
-        description: Deployment ${Q1_APP} matches the spec
+        description: Deployment ${Q1_APP} is the original one, with 2 replicas, its image and a readiness probe
         type: kubectl
-        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
-        expect: { equals: "2 ${Q1_APP} http 80" }
+        run: "[ ! -f /var/tmp/cka-q1.uid ] || [ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
         weight: 1
     hints:
-      - "kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
-      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q1_NS} get pods --show-labels).
-      - Can the client reach a Pod IP directly? kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
-      - "kubectl -n ${Q1_NS} get networkpolicy: anything selecting the ${Q1_APP} Pods?"
+      - "Split the path into hops and test each one from client: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n ${Q1_NS} describe svc ${Q1_APP} and kubectl -n ${Q1_NS} get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n ${Q1_NS} get pods --show-labels and kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q2
     title: ${Q2_APP} cannot list Pods
     points: 6
@@ -113,10 +113,9 @@ tasks:
         expect: { equals: no no }
         weight: 1
     hints:
-      - "kubectl -n ${Q2_NS} logs deployment/${Q2_APP}: 401, 403 or a missing token point at different problems."
-      - kubectl auth can-i list pods -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_APP}-sa tells you whether RBAC allows the call at all.
-      - "kubectl -n ${Q2_NS} get role,rolebinding -o yaml: check the verbs, the resource names, the roleRef and the subject's namespace."
-      - kubectl -n ${Q2_NS} get pod -l app=${Q2_APP} -o yaml | grep -i serviceaccount, and kubectl -n ${Q2_NS} get sa ${Q2_APP}-sa -o yaml.
+      - "kubectl -n ${Q2_NS} logs deployment/${Q2_APP}: a 401, a 403 and a missing token point at different problems. A 403 names the account the API saw."
+      - kubectl auth can-i list pods -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:<account> answers for any account, without the Pod.
+      - "Follow the chain from the Pod to the permission: which ServiceAccount the Pod runs as, which RoleBinding names that exact account, which Role the binding points at, and what that Role allows."
   - id: q3
     title: Frontend cannot reach ${Q3_APP}
     points: 7
@@ -152,10 +151,10 @@ tasks:
         expect: { equals: frontend 80 }
         weight: 1
     hints:
-      - "kubectl -n ${Q3_NS} get networkpolicy, then kubectl -n ${Q3_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?"
-      - "Separate DNS from the connection: kubectl -n ${Q3_NS} exec client -- nslookup ${Q3_APP}, then wget the Service IP or a Pod IP directly."
-      - "Compare every selector with the real labels: kubectl -n ${Q3_NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns."
-      - A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.
+      - "kubectl -n ${Q3_NS} get networkpolicy, then kubectl -n ${Q3_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it let in or out?"
+      - "Separate name resolution from the connection: kubectl -n ${Q3_NS} exec client -- nslookup ${Q3_APP}, then wget the Service IP and a Pod IP directly."
+      - A connection needs egress allowed at the client and ingress allowed at the server, on the port the Pod listens on. Check both ends.
+      - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."
   - id: q4
     title: Name resolution broken
     points: 7
@@ -199,11 +198,10 @@ tasks:
         expect: { equals: kube-dns }
         weight: 1
     hints:
-      - Is it DNS? kubectl -n ${Q4_NS} exec client -- nslookup web.${Q4_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
-      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
-      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
-      - "kubectl -n ${Q4_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
-      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+      - "Is it DNS at all? From client, compare nslookup web with nslookup web.${Q4_NS}.svc.cluster.local, and both with a lookup sent straight to a CoreDNS Pod IP: nslookup <name> <pod-ip>."
+      - "Work outwards from the client: kubectl -n ${Q4_NS} exec client -- cat /etc/resolv.conf, then kubectl -n kube-system get svc,endpointslices -l k8s-app=kube-dns, then the CoreDNS Pods."
+      - "CoreDNS Pods that are missing, crashing or never ready say why: kubectl -n kube-system get deploy,pods -l k8s-app=kube-dns, then describe and logs."
+      - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
   - id: q5
     title: ${Q5_APP} unreachable through the ingress
     points: 7
@@ -240,16 +238,15 @@ tasks:
         expect: { equals: "api.${Q5_NS}.lab" }
         weight: 1
       - id: q5-spec-backend
-        description: Deployment and Service ${Q5_APP} match the spec
+        description: Deployment and Service ${Q5_APP} are unchanged
         type: kubectl
         run: echo $(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q5_NS} get svc ${Q5_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
         expect: { equals: "2 ${Q5_APP} ${Q5_APP} 80" }
         weight: 1
     hints:
       - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
-      - "kubectl -n ${Q5_NS} describe ingress ${Q5_APP}: check the class, the path and the backend Service and port against kubectl -n ${Q5_NS} get svc ${Q5_APP}."
-      - "kubectl -n ${Q5_NS} describe httproute ${Q5_APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used."
-      - kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.
+      - "kubectl -n ${Q5_NS} describe ingress ${Q5_APP} and kubectl -n ${Q5_NS} describe httproute ${Q5_APP}: read the Status conditions and the Events, then compare every name, host, path and port with what really exists."
+      - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
   - id: q6
     title: Unhealthy worker
     points: 6
@@ -301,12 +298,11 @@ tasks:
         weight: 1
         retrySeconds: 90
     hints:
-      - "kubectl get nodes, then kubectl describe node <node>: look at Conditions, Taints and Unschedulable."
+      - "kubectl get nodes, then kubectl describe node <node>: Conditions, Taints and Unschedulable tell you whether the node is down or only refuses Pods."
       - kubectl -n ${Q6_NS} get pods -o wide shows which worker is missing its probe Pod.
-      - "On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50."
-      - systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.
-      - journalctl -u kubelet shows why it exits or cannot register. Its config is /var/lib/kubelet/config.yaml, its kubeconfig /etc/kubernetes/kubelet.conf, and extra flags come from /etc/default/kubelet.
-      - "If a node file turns out to be missing or corrupt, you rarely have to write it from scratch: every worker is built the same, so compare with the healthy worker (ls /etc/cni/net.d, diff the kubelet and containerd configs) and copy the good version across. Also look around the broken node (ls /root, and the directory the file lives in) for a backup copy."
+      - "On a NotReady node: systemctl status kubelet containerd, then journalctl -u kubelet -n 50 (and -u containerd). Fix one error, restart, and read the log again."
+      - systemctl cat kubelet shows the unit, its drop-ins and the files the kubelet reads. Compare paths and settings with what exists on the node and with a healthy worker.
+      - systemctl is-enabled tells you whether a service comes back after a reboot.
   - id: q7
     title: Pod ${Q7_CLAIM}-app stuck
     points: 5
@@ -323,26 +319,21 @@ tasks:
         expect: { equals: "Bound/${Q7_CLAIM}-pv" }
         weight: 2
         retrySeconds: 30
-      - id: q7-spec-claim
-        description: PVC ${Q7_CLAIM} matches the spec
-        type: kubectl
-        run: kubectl -n ${Q7_NS} get pvc ${Q7_CLAIM} -o jsonpath='{.spec.storageClassName} {.spec.accessModes[0]} {.spec.resources.requests.storage}'
-        expect: { equals: manual ReadWriteOnce 500Mi }
-        weight: 1
       - id: q7-pod-running
         description: Pod ${Q7_CLAIM}-app is Running with the claim at /data
         type: kubectl
         run: kubectl -n ${Q7_NS} get pod ${Q7_CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
         expect: { matches: "^Running ${Q7_CLAIM} .*/data" }
-        weight: 1
+        weight: 2
         retrySeconds: 60
       - id: q7-pv-kept
-        description: PV ${Q7_CLAIM}-pv is unchanged
+        description: PV ${Q7_CLAIM}-pv keeps its class, capacity and access mode
         type: kubectl
         run: kubectl get pv ${Q7_CLAIM}-pv -o jsonpath='{.spec.storageClassName} {.spec.capacity.storage} {.spec.accessModes[0]}'
         expect: { equals: manual 1Gi ReadWriteOnce }
         weight: 1
     hints:
-      - "kubectl -n ${Q7_NS} describe pod ${Q7_CLAIM}-app, then kubectl -n ${Q7_NS} describe pvc ${Q7_CLAIM}: what are the Events waiting for?"
-      - "Put kubectl get pv ${Q7_CLAIM}-pv next to kubectl -n ${Q7_NS} get pvc ${Q7_CLAIM} -o yaml: class, access mode and size must all fit."
+      - "kubectl -n ${Q7_NS} describe pod ${Q7_CLAIM}-app: is the Pod waiting for its claim to bind, or for a node it can run on? The Events say which."
+      - "kubectl -n ${Q7_NS} describe pvc ${Q7_CLAIM} and kubectl get pv ${Q7_CLAIM}-pv -o yaml: class, access modes, size and the volume's status (and any claimRef) must all fit."
+      - "A bound volume can still pin its Pod: compare the volume's node affinity with where the Pod is allowed to run (kubectl get pod ${Q7_CLAIM}-app -o yaml)."
       - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."

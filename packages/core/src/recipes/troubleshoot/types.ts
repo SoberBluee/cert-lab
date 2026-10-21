@@ -32,8 +32,13 @@ export interface Fault {
 /** The part of a question that is the same whatever fault is rolled. */
 export interface Shell {
   title: string;
-  /** Describes the intended state and the symptom, never the cause. */
+  /**
+   * The symptom, the end state and the constraints, the way an exam words it. Never the cause, and
+   * no field-by-field spec: that would list every place the pool can break.
+   */
   text: string;
+  /** The healthy setup in detail, as markdown bullets. Shown in the solution, never in the task. */
+  spec?: string;
   /** Controlplane setup before the break: usually the healthy objects, scaled to zero. */
   before: string;
   /** Controlplane setup after the break: usually scaling up. */
@@ -63,6 +68,13 @@ export interface FaultCategory {
   settleSeconds?: number;
   /** Variables rolled at random and never shown, e.g. which worker breaks. Keys are field-like (NODE). */
   hidden?: Record<string, string[]>;
+  /**
+   * Pools a layered question draws one fault from each, in this order: breaks run in it, and so do
+   * fixes. Any fault of one pool must combine with any fault of another, so a pool holds the faults
+   * that touch the same object, and no fault's `fix` may wait on an outcome that another pool
+   * still blocks (waits belong in `wait`). Categories without layers only roll single faults.
+   */
+  layers?: { name: string; faults: string[] }[];
   /** `v` holds the field values plus FAULT and any hidden refs; only scripts may use those. */
   shell(v: Refs, state: string): Shell;
   faults(v: Refs, state: string): Fault[];

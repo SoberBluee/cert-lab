@@ -299,6 +299,7 @@ function TroubleBody({ q, onChange }: { q: Extract<Question, { type: 'troublesho
   const spoilers = useQuery({ queryKey: ['recipes', 'spoilers'], queryFn: () => studioApi.recipes(true), enabled: reveal, staleTime: Infinity });
   const faults = spoilers.data?.categories.find((c) => c.id === q.category.id)?.faults ?? [];
   const count = q.faults?.length ?? q.category.faultCount;
+  const layers = Math.min(q.layers ?? 1, q.category.maxLayers);
   const toggle = (id: string) => {
     const current = q.faults ?? faults.map((f) => f.id);
     const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
@@ -308,9 +309,26 @@ function TroubleBody({ q, onChange }: { q: Extract<Question, { type: 'troublesho
     <div className="space-y-4 p-4">
       <FieldGrid fields={q.category.fields} state={q.fields} onChange={(fields) => onChange({ ...q, fields })} />
       <p className="text-sm text-zinc-300">
-        {count} possible fault{count === 1 ? '' : 's'}. One is picked at random every time the lab starts, and stays hidden until you reveal the solution.
+        {count} possible fault{count === 1 ? '' : 's'}. {layers > 1 ? `${layers} of them, from different layers, are` : 'One is'} picked at random every time the
+        lab starts, and stay{layers > 1 ? '' : 's'} hidden until you reveal the solution.
         {q.category.disruptive && ' This category breaks a worker, so it is set up after and fixed before every other question.'}
       </p>
+      {q.category.maxLayers > 1 && (
+        <label className="flex items-center gap-2 text-sm text-zinc-300">
+          Faults stacked in this question
+          <select
+            className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm text-zinc-200"
+            value={layers}
+            onChange={(e) => onChange({ ...q, layers: Number(e.target.value) })}
+          >
+            {Array.from({ length: q.category.maxLayers }, (_, i) => i + 1).map((n) => (
+              <option key={n} value={n}>
+                {n === 1 ? '1 (single fault)' : `${n} (separate faults, fixed in turn)`}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <details className="rounded-lg border border-zinc-800 bg-zinc-950/40 text-sm" onToggle={(e) => setReveal(e.currentTarget.open)}>
         <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-400 select-none">Reveal fault pool (spoiler)</summary>
         <div className="space-y-1.5 px-3 pb-3">
@@ -578,6 +596,7 @@ export function QuickCreatePage({
   const [questions, setQuestions] = useState<Question[]>([]);
   const [title, setTitle] = useState('');
   const [id, setId] = useState('');
+  const [contexts, setContexts] = useState(false);
   const [created, setCreated] = useState<{ id: string; jobError: string | null } | null>(null);
   const [scrollTo, setScrollTo] = useState<number | null>(null);
 
@@ -589,10 +608,10 @@ export function QuickCreatePage({
 
   const effectiveId = id || slugify(title);
   const taken = scenarios.data?.scenarios.some((s) => s.id === effectiveId) ?? false;
-  const req = useMemo(() => toRequest(questions, effectiveId, title), [questions, effectiveId, title]);
+  const req = useMemo(() => toRequest(questions, effectiveId, title, { contexts }), [questions, effectiveId, title, contexts]);
   const debounced = useDebounced(req, 400);
   const preview = useQuery({
-    queryKey: ['quick-preview', JSON.stringify(debounced.questions)],
+    queryKey: ['quick-preview', JSON.stringify([debounced.questions, debounced.contexts ?? false])],
     queryFn: () => studioApi.quickPreview(debounced),
     enabled: debounced.questions.length > 0,
     placeholderData: keepPreviousData,
@@ -602,7 +621,7 @@ export function QuickCreatePage({
   const p = questions.length ? preview.data : undefined;
   const errors = p?.issues.filter((i) => i.level === 'error') ?? [];
   const warnings = p?.issues.filter((i) => i.level === 'warning') ?? [];
-  const settled = JSON.stringify(debounced.questions) === JSON.stringify(req.questions) && !preview.isFetching;
+  const settled = JSON.stringify([debounced.questions, debounced.contexts]) === JSON.stringify([req.questions, req.contexts]) && !preview.isFetching;
 
   const create = useMutation({
     mutationFn: () => studioApi.quickCreate(req),
@@ -780,6 +799,10 @@ export function QuickCreatePage({
                     <input className={`${input} font-mono`} value={id} onChange={(e) => setId(e.target.value)} placeholder={slugify(title) || 'my-lab'} />
                   </label>
                 </div>
+                <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
+                  <input type="checkbox" checked={contexts} onChange={(e) => setContexts(e.target.checked)} />
+                  Give every question its own kubeconfig context, as the exam names a host per task
+                </label>
                 <p className="mt-3 text-xs text-zinc-500">
                   Saved as a draft under the topic of question 1 ({questionMeta(questions[0]).domain}), then a dry-run starts on the lab VMs. Publish when you
                   are happy with it.

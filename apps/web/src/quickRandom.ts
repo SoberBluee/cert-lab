@@ -22,6 +22,8 @@ export type Question =
       fields: Fields;
       /** Fault ids to roll from; every fault when undefined. */
       faults?: string[];
+      /** Faults stacked in one question, one per layer of the category; 1 when undefined. */
+      layers?: number;
     };
 
 export type LabKind = 'create' | 'troubleshoot' | 'random';
@@ -57,10 +59,29 @@ export function toQuestion(q: Question): QuickQuestion {
         addons: q.addons.map(part),
         followUps: q.followUps.map(part),
       }
-    : { type: 'troubleshoot', category: q.category.id, values: q.fields.values, randomize: q.fields.pools, ...(q.faults ? { faults: q.faults } : {}) };
+    : {
+        type: 'troubleshoot',
+        category: q.category.id,
+        values: q.fields.values,
+        randomize: q.fields.pools,
+        ...(q.faults ? { faults: q.faults } : {}),
+        ...(q.layers && q.layers > 1 ? { layers: q.layers } : {}),
+      };
 }
 
-export const toRequest = (questions: Question[], id: string, title: string): QuickCreateRequest => ({ id, title, questions: questions.map(toQuestion) });
+export interface LabOptions {
+  /** Faults to stack in each troubleshooting question whose category has layers. */
+  layers?: number;
+  /** One kubeconfig context per question, as the exam gives each task its own host. */
+  contexts?: boolean;
+}
+
+export const toRequest = (questions: Question[], id: string, title: string, opts: LabOptions = {}): QuickCreateRequest => ({
+  id,
+  title,
+  questions: questions.map(toQuestion),
+  ...(opts.contexts ? { contexts: true } : {}),
+});
 
 export const RANDOM_MAX = 20;
 const RANDOM_TRIES = 5;
@@ -106,16 +127,19 @@ function pinnedParts(builder: BuilderSummary, ids: string[], plain: boolean): Pa
   });
 }
 
-function randomQuestion(item: Item, plain = false): Question {
+function randomQuestion(item: Item, plain = false, layers = 1): Question {
   const key = newKey();
   if (item.kind === 'troubleshoot') {
     const { category } = item;
+    // A topic's fault subset may not span several layers, so it stays single.
+    const depth = item.faults ? 1 : Math.min(layers, category.maxLayers);
     return {
       key,
       type: 'troubleshoot',
       category,
       fields: plain ? initialFields(category.fields) : randomFields(category.fields),
       ...(item.faults ? { faults: item.faults } : {}),
+      ...(depth > 1 ? { layers: depth } : {}),
     };
   }
   const { builder } = item;
@@ -148,8 +172,11 @@ function topicItems(catalog: RecipeCatalog, topic: LabTopic): Item[] {
   });
 }
 
-/** Every item a lab of `n` questions of `kind` can draw. `topic` limits that to one category. */
-function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabTopic): Item[] {
+/**
+ * Every item a lab of `n` questions of `kind` can draw. `topic` limits that to one category. Asking
+ * for stacked faults leaves out troubleshooting categories that cannot stack any.
+ */
+function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabTopic, layers = 1): Item[] {
   const items: Item[] = topic
     ? kind === 'random' || topic.group === kind
       ? topicItems(catalog, topic)
@@ -158,7 +185,8 @@ function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabT
         ...(kind === 'troubleshoot' ? [] : catalog.builders.map((builder) => ({ kind: 'create' as const, builder }))),
         ...(kind === 'create' ? [] : catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category }))),
       ];
-  return items.filter((i) => !(i.kind === 'create' && i.builder.solo && n > 1));
+  const layered = layers > 1 && !topic ? items.filter((i) => i.kind !== 'troubleshoot' || i.category.maxLayers > 1) : items;
+  return layered.filter((i) => !(i.kind === 'create' && i.builder.solo && n > 1));
 }
 
 /**
@@ -166,8 +194,15 @@ function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabT
  * that breaks the API. Items not in `seen` come first, so successive labs work through the whole
  * catalog before repeating anything.
  */
-export function pickItems(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', seen: ReadonlySet<string> = new Set(), topic?: LabTopic): Item[] {
-  const items = itemPool(catalog, n, kind, topic);
+export function pickItems(
+  catalog: RecipeCatalog,
+  n: number,
+  kind: LabKind = 'random',
+  seen: ReadonlySet<string> = new Set(),
+  topic?: LabTopic,
+  layers = 1,
+): Item[] {
+  const items = itemPool(catalog, n, kind, topic, layers);
   const order = () => [...shuffle(items.filter((i) => !seen.has(itemId(i)))), ...shuffle(items.filter((i) => seen.has(itemId(i))))];
   const out: Item[] = [];
   let apiTaken = false;
@@ -188,9 +223,9 @@ export function pickItems(catalog: RecipeCatalog, n: number, kind: LabKind = 'ra
 }
 
 /** Rolls a question until the server accepts it; after a few rejected rolls, the plain question. */
-async function validRandomQuestion(item: Item): Promise<Question> {
+async function validRandomQuestion(item: Item, layers: number): Promise<Question> {
   for (let i = 0; i < RANDOM_TRIES; i++) {
-    const q = randomQuestion(item);
+    const q = randomQuestion(item, false, layers);
     const preview = await studioApi.quickPreview({ id: 'random-check', title: 'Random check', questions: [toQuestion(q)] });
     if (!preview.issues.some((x) => x.level === 'error')) return q;
   }
@@ -214,9 +249,9 @@ export function nextSeen(seen: ReadonlySet<string>, picked: Item[], pool: Item[]
   return next;
 }
 
-export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', topic?: LabTopic): Promise<Question[]> {
+export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', topic?: LabTopic, layers = 1): Promise<Question[]> {
   const seen = loadSeen();
-  const items = pickItems(catalog, n, kind, seen, topic);
-  localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, items, itemPool(catalog, n, kind, topic))]));
-  return Promise.all(items.map(validRandomQuestion));
+  const items = pickItems(catalog, n, kind, seen, topic, layers);
+  localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, items, itemPool(catalog, n, kind, topic, layers))]));
+  return Promise.all(items.map((item) => validRandomQuestion(item, layers)));
 }

@@ -59,10 +59,10 @@ tasks:
         expect: { equals: same }
         weight: 1
     hints:
-      - "kubectl -n ${Q1_NS} get deployment,replicaset,pods -o wide: are there fewer Pods than replicas, or Pods stuck in Pending?"
-      - "Missing Pods: kubectl -n ${Q1_NS} describe replicaset -l app=${Q1_APP} shows why creating them failed (FailedCreate events)."
-      - "Pending Pods: kubectl -n ${Q1_NS} describe pod <pod> shows the scheduler's reason under Events."
-      - "kubectl -n ${Q1_NS} get resourcequota,limitrange: what does the namespace enforce?"
+      - "kubectl -n ${Q1_NS} get deployment,replicaset,pods -o wide: are Pods missing altogether, or do they exist and stay Pending?"
+      - "Missing Pods were refused when the ReplicaSet tried to create them: kubectl -n ${Q1_NS} describe replicaset -l app=${Q1_APP} shows the FailedCreate reason."
+      - "Pending Pods were never placed: kubectl -n ${Q1_NS} describe pod <pod> shows the scheduler's reason under Events."
+      - What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${Q1_NS} get all,resourcequota,limitrange and kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml.
   - id: q2
     title: Control plane after maintenance
     points: 8
@@ -80,10 +80,10 @@ tasks:
         weight: 2
         retrySeconds: 120
       - id: q2-components
-        description: etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        description: node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
         type: kubectl
-        run: kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort | xargs
-        expect: { equals: etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        run: "{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}{end}' | sort; } | xargs"
+        expect: { equals: controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
         weight: 2
         retrySeconds: 120
       - id: q2-nodes-ready
@@ -108,10 +108,10 @@ tasks:
         expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
         weight: 1
     hints:
-      - "kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down."
-      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting."
-      - Static pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).
-      - "If controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf."
+      - "Start with the symptom: does kubectl answer at all? If it does, kubectl get nodes and kubectl -n kube-system get pods show which component is unhealthy; Pending or missing Pods point at the scheduler or the controller manager."
+      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static Pod keeps exiting. journalctl -u kubelet shows Pods the kubelet cannot even start."
+      - Static Pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Check every flag, path and image against what exists (ls /etc/kubernetes/pki, crictl images).
+      - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
   - id: q3
     title: StorageClass ${Q3_NAME}
     points: 5

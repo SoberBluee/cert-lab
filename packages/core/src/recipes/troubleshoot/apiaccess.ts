@@ -44,18 +44,21 @@ export const apiAccessCategory: FaultCategory = {
   breaksApi: true,
   settleSeconds: 60,
   fields: [nsField(['ops', 'core', 'mgmt', 'control', 'api-lab', 'admin', 'cluster-ops', 'kube-system-lab', 'access', 'platform'])],
+  // User kubeconfigs break first, while the API still answers; the API server breaks second.
+  layers: [
+    {
+      name: 'the user kubeconfigs',
+      faults: ['kubeconfig-server-port', 'kubeconfig-wrong-ca', 'kubeconfig-current-context', 'kubeconfig-client-key', 'kubeconfig-server-host', 'kubeconfig-permissions'],
+    },
+    { name: 'the API server', faults: ['apiserver-client-ca', 'apiserver-secure-port', 'apiserver-manifest-yaml', 'apiserver-tls-cert-path', 'apiserver-bind-address'] },
+  ],
   shell: ({ NS }) => ({
     title: 'kubectl stopped working',
-    text: `After a certificate and configuration change on \`controlplane\`, \`kubectl\` there fails for both \`root\` and \`ubuntu\`. Deployment \`web\` in namespace \`${NS}\` should run \`2\` ready replicas.
+    text: `\`kubectl\` on \`controlplane\` fails for both \`root\` and \`ubuntu\` after a certificate and configuration change. Make \`kubectl\` work again as the cluster admin with \`/root/.kube/config\` and with \`/home/ubuntu/.kube/config\`, with the API server answering on \`https://controlplane:6443\`, every control plane component on \`controlplane\` \`Ready\`, and Deployment \`web\` in namespace \`${NS}\` running \`2\` ready replicas.
 
-Find the problem and fix it so that:
-
-- the API server answers on port \`6443\`, and \`etcd\`, \`kube-apiserver\`, \`kube-controller-manager\` and \`kube-scheduler\` run Ready on \`controlplane\`
-- \`kubectl\` works with \`/root/.kube/config\` and with \`/home/ubuntu/.kube/config\`, as the cluster admin
-- \`web\` runs \`2\` ready replicas
-- \`${M}\` holds only the four control plane manifests
-
-Do not change the Deployment, and do not regenerate any certificate.`,
+Do not regenerate any certificate, do not change the Deployment, and leave only the four control plane manifests in \`${M}\`.`,
+    spec: `- \`${APISERVER}\` keeps the kubeadm flags: secure port \`6443\`, bind address \`0.0.0.0\`, and the CA, serving certificate and key from \`${PKI}\`
+- both user kubeconfigs match \`/etc/kubernetes/admin.conf\`: server \`https://<controlplane-ip>:6443\`, the cluster CA, a matching client certificate and key, a current context that exists, and readable file permissions`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1

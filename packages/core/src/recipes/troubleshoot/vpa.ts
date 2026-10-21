@@ -41,13 +41,12 @@ export const vpaCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }, state) => ({
     title: `VPA for ${APP} not working`,
-    text: `VerticalPodAutoscaler \`${APP}-vpa\` in namespace \`${NS}\` should right-size Deployment \`${APP}\`, but the Pods of \`${APP}\` still run with the requests from the Deployment. Fix it so that it matches this spec:
+    text: `VerticalPodAutoscaler \`${APP}-vpa\` in namespace \`${NS}\` should right-size Deployment \`${APP}\` automatically, but the Pods of \`${APP}\` still run with the requests from the Deployment. Fix it so that the VPA publishes a recommendation for container \`web\` and at least \`2\` ready Pods of \`${APP}\` run with requests set by the VPA.
 
-- \`${APP}-vpa\` targets Deployment \`${APP}\` with update mode \`Recreate\` and manages container \`web\`
-- it publishes a recommendation for container \`web\`
-- the running Pods of \`${APP}\` (at least \`2\` ready) got their requests from the Vertical Pod Autoscaler (they carry its \`vpaUpdates\` annotation)
-
-The Vertical Pod Autoscaler runs in namespace \`vpa\` and may be repaired too. Do not delete or recreate the Deployment.`,
+The Vertical Pod Autoscaler components in namespace \`vpa\` may be repaired too. Do not delete or recreate the Deployment.`,
+    spec: `- \`${APP}-vpa\` targets Deployment \`${APP}\` with update mode \`Recreate\` and manages container \`web\`
+- the recommender, updater and admission controller run in namespace \`vpa\`, with their RBAC intact
+- Pods the VPA changed carry its \`vpaUpdates\` annotation`,
     before: `${requireVpa}
 ${createNs(NS)}
 kubectl apply -f - <<EOF
@@ -88,10 +87,10 @@ kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=120s >/dev/null 
     checks: [
       {
         id: 'vpa-spec',
-        description: `${APP}-vpa targets Deployment ${APP} in mode Recreate`,
+        description: `${APP}-vpa targets Deployment ${APP} and is allowed to update its Pods`,
         type: 'kubectl',
         run: `kubectl -n ${NS} get vpa ${APP}-vpa -o jsonpath='{.spec.targetRef.kind}/{.spec.targetRef.name}/{.spec.updatePolicy.updateMode}'`,
-        expect: { equals: `Deployment/${APP}/Recreate` },
+        expect: { matches: `^Deployment/${APP}/(Recreate|Auto|InPlaceOrRecreate)$` },
         weight: 1,
       },
       {
@@ -140,9 +139,9 @@ kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=120s >/dev/null 
     ],
     hints: [
       `kubectl -n ${NS} describe vpa ${APP}-vpa: is there a Recommendation, and what do its Conditions say?`,
-      'kubectl -n vpa get deploy,pods: the recommender computes recommendations, the admission controller writes them into new Pods, the updater evicts Pods that are far off.',
+      'kubectl -n vpa get deploy,pods: the recommender computes recommendations, the admission controller writes them into new Pods, the updater evicts Pods that are far off. Which part of that chain is missing?',
       `kubectl -n ${NS} get pod <pod> -o yaml: Pods the VPA changed carry a vpaUpdates annotation. Existing Pods only change when they are recreated.`,
-      'kubectl -n vpa logs deploy/vpa-recommender: errors such as "forbidden" point at RBAC.',
+      'kubectl -n vpa logs deploy/<component>: errors there point at what a component cannot do.',
     ],
   }),
   faults: ({ NS, APP }, state) => [

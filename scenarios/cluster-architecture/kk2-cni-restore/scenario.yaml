@@ -49,5 +49,5 @@ checks:
     weight: 2
     retrySeconds: 180
 hints:
-  - "kubectl describe node ${NODE}: NetworkNotReady / CNI plugin not initialized."
-  - "ls /etc/cni/net.d and /root/cni-backup on the broken worker; move the conflist back, restart containerd and kubelet."
+  - "kubectl describe node <node>: the Ready condition names the network plugin problem."
+  - "ls /etc/cni/net.d on both workers. Calico writes that file itself from its calico-node Pod; a copy from the healthy worker works too once its node name is changed."

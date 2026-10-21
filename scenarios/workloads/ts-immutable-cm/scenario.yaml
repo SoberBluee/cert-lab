@@ -45,6 +45,6 @@ checks:
     expect: { matches: "^nginx:1.27-alpine \\S+ ${APP}-secret$" }
     weight: 1
 hints:
-  - "kubectl -n ${NS} get configmap ${APP}-content -o yaml — is it immutable? Can you patch data?"
-  - "Immutable ConfigMaps cannot be updated in place. Recreating under the same name can leave the kubelet cache serving the old object — create a new ConfigMap and point the Deployment volume at it."
-  - "The page must contain \"${APP} is up\"."
+  - "kubectl -n ${NS} exec deploy/${APP} -- cat /usr/share/nginx/html/index.html shows what is served; kubectl -n ${NS} get deployment ${APP} -o yaml shows where it comes from."
+  - "kubectl -n ${NS} get configmap <name> -o yaml: read the whole object, not only its data. Try the edit you want to make: what does the API answer?"
+  - "A Deployment only picks up a different ConfigMap when its Pod template changes."

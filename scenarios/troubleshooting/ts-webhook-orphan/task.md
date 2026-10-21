@@ -1,7 +1,5 @@
 Use context: `kubectl config use-context kubernetes-admin@kubernetes`
 
-Deployment `${APP}` in namespace `${NS}` should run `2` ready replicas of `nginx:1.27-alpine`, but new Pods never come up.
+Deployment `${APP}` in namespace `${NS}` should run `2` ready replicas, but its new Pods never come up. Fix it so that `${APP}` runs `2` ready replicas and new Pods can be created in `${NS}` again.
 
-Find what is rejecting Pod creates and fix it so `${APP}` has `2` ready replicas. You may remove leftover admission configuration that does not belong in this cluster.
-
-Do not delete or recreate the Deployment.
+Keep the image, and do not delete or recreate the Deployment.

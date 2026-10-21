@@ -22,13 +22,11 @@ export const drainCategory: FaultCategory = {
   ],
   shell: ({ NS, APP, NODE }) => ({
     title: 'Node drain is stuck',
-    text: `Maintenance requires one worker to be drained: it must be cordoned and carry no Pods from Deployment \`${APP}\` in namespace \`${NS}\`.
-
-\`${APP}\` must keep \`2\` ready replicas on the remaining nodes when you are done.
-
-Something is blocking the drain. Find the worker that still hosts \`${APP}\`, fix the cluster objects that stand in the way, then drain that worker (\`kubectl drain <node> --ignore-daemonsets --delete-emptydir-data\`).
+    text: `Maintenance requires the worker that runs the Pods of Deployment \`${APP}\` (namespace \`${NS}\`) to be drained: cordoned, with no \`${APP}\` Pods left on it. \`${APP}\` must keep \`2\` ready replicas on the remaining nodes.
 
 Do not delete Deployment \`${APP}\`.`,
+    spec: `- PodDisruptionBudget \`${APP}-pdb\` leaves room for an eviction (\`minAvailable\` below the replica count)
+- the Pod template of \`${APP}\` lets replicas run on another worker (no \`drain-lab=yes\` nodeSelector)`,
     before: `${createNs(NS)}
 kubectl label node "${NODE}" drain-lab=yes --overwrite
 for n in ${WORKERS.map((w) => `"${w}"`).join(' ')}; do
@@ -107,18 +105,18 @@ kubectl -n "${NS}" get pdb "${APP}-pdb" >/dev/null`,
         retrySeconds: 120,
       },
       {
-        id: 'pdb-loose',
-        description: `PDB ${APP}-pdb allows disruption (or is gone)`,
+        id: 'right-node',
+        description: `the cordoned worker is the one that ran ${APP}`,
         type: 'kubectl',
-        run: `kubectl -n ${NS} get pdb ${APP}-pdb -o jsonpath='{.spec.minAvailable}' 2>/dev/null || echo gone`,
-        expect: { matches: '^(0|1|gone)$' },
+        run: `kubectl get nodes -l drain-lab=yes -o jsonpath='{range .items[*]}{.spec.unschedulable}{end}'`,
+        expect: { equals: 'true' },
         weight: 2,
       },
     ],
     hints: [
-      'kubectl drain <node> --ignore-daemonsets --delete-emptydir-data — read the error about the disruption budget.',
-      `kubectl -n ${NS} get pdb,pods -o wide — minAvailable equal to the replica count blocks every eviction.`,
-      'Pods are pinned with nodeSelector drain-lab=yes; after loosening the PDB, remove that pin so replicas can land elsewhere, then drain.',
+      `kubectl -n ${NS} get pods -o wide shows where ${APP} runs. kubectl drain <node> --ignore-daemonsets --delete-emptydir-data says what blocks it.`,
+      `Evictions respect PodDisruptionBudgets: compare kubectl -n ${NS} get pdb with the replica count.`,
+      'An evicted Pod is recreated by its Deployment: check where the Pod template lets the new one go.',
     ],
   }),
   faults: ({ NS, APP, NODE }) => [
