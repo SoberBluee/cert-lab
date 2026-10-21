@@ -50,13 +50,12 @@ tasks:
         expect: { equals: "api.${Q1_NS}.lab" }
         weight: 1
       - id: q1-spec-backend
-        description: Deployment and Service ${Q1_APP} match the spec
+        description: Deployment and Service ${Q1_APP} are unchanged
         type: kubectl
         run: echo $(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
         expect: { equals: "2 ${Q1_APP} ${Q1_APP} 80" }
         weight: 1
     hints:
       - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
-      - "kubectl -n ${Q1_NS} describe ingress ${Q1_APP}: check the class, the path and the backend Service and port against kubectl -n ${Q1_NS} get svc ${Q1_APP}."
-      - "kubectl -n ${Q1_NS} describe httproute ${Q1_APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used."
-      - kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.
+      - "kubectl -n ${Q1_NS} describe ingress ${Q1_APP} and kubectl -n ${Q1_NS} describe httproute ${Q1_APP}: read the Status conditions and the Events, then compare every name, host, path and port with what really exists."
+      - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.

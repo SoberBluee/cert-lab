@@ -74,10 +74,10 @@ tasks:
         expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
         weight: 1
     hints:
-      - "kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down."
-      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting."
-      - Static pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).
-      - "If controlplane itself is NotReady, or no control plane container runs at all: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml (staticPodPath)."
+      - "Start with the symptom: does kubectl answer at all? If it does, kubectl get nodes and kubectl -n kube-system get pods show which component is unhealthy; Pending or missing Pods point at the scheduler or the controller manager."
+      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static Pod keeps exiting. journalctl -u kubelet shows Pods the kubelet cannot even start."
+      - Static Pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Check every flag, path and image against what exists (ls /etc/kubernetes/pki, crictl images).
+      - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
   - id: q2
     title: Back up etcd
     points: 5
@@ -154,9 +154,9 @@ tasks:
         weight: 2
         retrySeconds: 90
     hints:
-      - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
-      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
-      - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
+      - "kubectl get nodes, then kubectl describe node <node>: which node is unhealthy, which condition, and since when?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job?"
+      - systemctl cat kubelet shows the unit and drop-ins, and so every file and flag the kubelet starts with. Check each path and value against what exists on the node and against a healthy worker.
       - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
   - id: q4
     title: Cluster certificates

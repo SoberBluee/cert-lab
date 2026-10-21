@@ -1,0 +1,49 @@
+id: zz-verify-storage
+title: zz-verify-storage
+domain: storage
+difficulty: 2
+estimatedMinutes: 8
+points: 5
+tags: [ troubleshooting, pvc, pv, storageclass ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ storageclass-mismatch, access-mode-mismatch, claim-too-large, pv-released-claimref, pod-node-pin ], hidden: true }
+tasks:
+  - id: q1
+    title: Pod archive-app stuck
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-bound
+        description: PVC archive is Bound to archive-pv
+        type: kubectl
+        run: kubectl -n files get pvc archive -o jsonpath='{.status.phase}/{.spec.volumeName}'
+        expect: { equals: Bound/archive-pv }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-pod-running
+        description: Pod archive-app is Running with the claim at /data
+        type: kubectl
+        run: kubectl -n files get pod archive-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+        expect: { matches: ^Running archive .*/data }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-pv-kept
+        description: PV archive-pv keeps its class, capacity and access mode
+        type: kubectl
+        run: kubectl get pv archive-pv -o jsonpath='{.spec.storageClassName} {.spec.capacity.storage} {.spec.accessModes[0]}'
+        expect: { equals: manual 1Gi ReadWriteOnce }
+        weight: 1
+    hints:
+      - "kubectl -n files describe pod archive-app: is the Pod waiting for its claim to bind, or for a node it can run on? The Events say which."
+      - "kubectl -n files describe pvc archive and kubectl get pv archive-pv -o yaml: class, access modes, size and the volume's status (and any claimRef) must all fit."
+      - "A bound volume can still pin its Pod: compare the volume's node affinity with where the Pod is allowed to run (kubectl get pod archive-app -o yaml)."
+      - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."

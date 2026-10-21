@@ -70,16 +70,16 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q1-spec-volumes
-        description: the volumes still come from the ConfigMap and the Secret
+        description: the volumes still come from a ConfigMap and the Secret
         type: kubectl
-        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[*].configMap.name} {.spec.template.spec.volumes[*].secret.secretName}'
-        expect: { equals: "nginx:1.27-alpine ${Q1_APP}-content ${Q1_APP}-secret" }
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[?(@.configMap)].configMap.name} {.spec.template.spec.volumes[?(@.secret)].secret.secretName}'
+        expect: { matches: "^nginx:1.27-alpine \\S+ ${Q1_APP}-secret$" }
         weight: 1
     hints:
       - "kubectl -n ${Q1_NS} get pods -l app=${Q1_APP}: are the Pods Pending, ContainerCreating, crashing, or running but not ready?"
-      - "kubectl -n ${Q1_NS} describe pod <pod>: the Events name mount failures and container config errors."
-      - kubectl -n ${Q1_NS} logs <pod> (or --previous) shows why nginx exits or what it cannot find.
-      - Compare the volumes, volumeMounts and securityContext in kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml with the spec and with the ConfigMap and Secret keys.
+      - "kubectl -n ${Q1_NS} describe pod <pod>: the Events name mount and container start errors."
+      - kubectl -n ${Q1_NS} logs <pod> (or --previous) shows why nginx exits; kubectl -n ${Q1_NS} exec deploy/${Q1_APP} -- ls -l /usr/share/nginx/html /etc/${Q1_APP} shows what a running container really sees.
+      - Compare the volumes and volumeMounts of the Deployment with the ConfigMaps and Secrets that exist and the keys they hold; check the ConfigMap content too, not only its name.
   - id: q2
     title: ${Q2_APP} cannot list Pods
     points: 6
@@ -115,10 +115,9 @@ tasks:
         expect: { equals: no no }
         weight: 1
     hints:
-      - "kubectl -n ${Q2_NS} logs deployment/${Q2_APP}: 401, 403 or a missing token point at different problems."
-      - kubectl auth can-i list pods -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_APP}-sa tells you whether RBAC allows the call at all.
-      - "kubectl -n ${Q2_NS} get role,rolebinding -o yaml: check the verbs, the resource names, the roleRef and the subject's namespace."
-      - kubectl -n ${Q2_NS} get pod -l app=${Q2_APP} -o yaml | grep -i serviceaccount, and kubectl -n ${Q2_NS} get sa ${Q2_APP}-sa -o yaml.
+      - "kubectl -n ${Q2_NS} logs deployment/${Q2_APP}: a 401, a 403 and a missing token point at different problems. A 403 names the account the API saw."
+      - kubectl auth can-i list pods -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:<account> answers for any account, without the Pod.
+      - "Follow the chain from the Pod to the permission: which ServiceAccount the Pod runs as, which RoleBinding names that exact account, which Role the binding points at, and what that Role allows."
   - id: q3
     title: CronJob ${Q3_APP} never succeeds
     points: 6
@@ -136,11 +135,18 @@ tasks:
         weight: 3
         retrySeconds: 150
       - id: q3-spec
-        description: ${Q3_APP} matches the spec
+        description: ${Q3_APP} runs every minute, is not suspended and keeps image busybox:1.36
         type: kubectl
-        run: kubectl -n ${Q3_NS} get cronjob ${Q3_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.backoffLimit}|{.spec.jobTemplate.spec.activeDeadlineSeconds}|{.spec.jobTemplate.spec.template.spec.containers[0].image}|{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}'
-        expect: { equals: "* * * * *|false|2||busybox:1.36|date; sleep 8; echo report done" }
-        weight: 2
+        run: kubectl -n ${Q3_NS} get cronjob ${Q3_APP} -o jsonpath='{.spec.schedule}|{.spec.suspend}|{.spec.jobTemplate.spec.template.spec.containers[0].image}'
+        expect: { matches: ^(\* \* \* \* \*|\*/1 \* \* \* \*)\|false\|busybox:1\.36$ }
+        weight: 1
+      - id: q3-output
+        description: the newest successful Job of ${Q3_APP} printed "report done"
+        type: kubectl
+        run: j=$(kubectl -n ${Q3_NS} get jobs -o jsonpath='{range .items[?(@.status.succeeded==1)]}{.metadata.creationTimestamp} {.metadata.name}{"\n"}{end}' | sort | tail -1 | cut -d' ' -f2); [ -n "$j" ] && kubectl -n ${Q3_NS} logs "job/$j" 2>/dev/null || echo none
+        expect: { contains: report done }
+        weight: 1
+        retrySeconds: 150
       - id: q3-same-cronjob
         description: ${Q3_APP} was not deleted or recreated
         type: kubectl
@@ -149,7 +155,7 @@ tasks:
         weight: 1
     hints:
       - "kubectl -n ${Q3_NS} get cronjob ${Q3_APP}: look at SUSPEND, SCHEDULE and LAST SCHEDULE. Has it created any Job at all?"
-      - "kubectl -n ${Q3_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q3_NS} describe job <job> shows the reason (BackoffLimitExceeded, DeadlineExceeded, ...)."
+      - "kubectl -n ${Q3_NS} get jobs,pods: why did the Jobs fail? kubectl -n ${Q3_NS} describe job <job> shows the reason."
       - kubectl -n ${Q3_NS} logs <pod> and kubectl -n ${Q3_NS} describe pod <pod> show what the container did, or why it never started.
       - "To test a fix without waiting for the next minute: kubectl -n ${Q3_NS} create job test-run --from=cronjob/${Q3_APP}"
   - id: q4
@@ -187,10 +193,10 @@ tasks:
         expect: { equals: frontend 80 }
         weight: 1
     hints:
-      - "kubectl -n ${Q4_NS} get networkpolicy, then kubectl -n ${Q4_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?"
-      - "Separate DNS from the connection: kubectl -n ${Q4_NS} exec client -- nslookup ${Q4_APP}, then wget the Service IP or a Pod IP directly."
-      - "Compare every selector with the real labels: kubectl -n ${Q4_NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns."
-      - A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.
+      - "kubectl -n ${Q4_NS} get networkpolicy, then kubectl -n ${Q4_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it let in or out?"
+      - "Separate name resolution from the connection: kubectl -n ${Q4_NS} exec client -- nslookup ${Q4_APP}, then wget the Service IP and a Pod IP directly."
+      - A connection needs egress allowed at the client and ingress allowed at the server, on the port the Pod listens on. Check both ends.
+      - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."
   - id: q5
     title: Worker after a configuration change
     points: 7
@@ -235,9 +241,9 @@ tasks:
         weight: 2
         retrySeconds: 90
     hints:
-      - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
-      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
-      - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
+      - "kubectl get nodes, then kubectl describe node <node>: which node is unhealthy, which condition, and since when?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job?"
+      - systemctl cat kubelet shows the unit and drop-ins, and so every file and flag the kubelet starts with. Check each path and value against what exists on the node and against a healthy worker.
       - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
   - id: q6
     title: kubectl stopped working

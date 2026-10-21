@@ -1,0 +1,68 @@
+id: zz-verify-layered-cp
+title: zz-verify-layered-cp
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 17
+points: 8
+tags: [ troubleshooting, control-plane, static-pod, etcd, kubelet, layered ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ scheduler-command, controller-manager-kubeconfig, scheduler-kubeconfig-path, scheduler-image-tag, controller-manager-sa-key, scheduler-manifest-removed, scheduler-manifest-yaml, controller-manager-command, scheduler-leader-elect ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ apiserver-etcd-port, apiserver-etcd-certfile, apiserver-etcd-flags, etcd-cert-path, apiserver-admission-plugin, apiserver-etcd-keyfile, apiserver-tls-key-path, apiserver-manifest-removed, etcd-key-path, etcd-trusted-ca-path, etcd-client-urls, etcd-data-dir, etcd-image-tag, apiserver-advertise-address, apiserver-service-account-key, etcd-peer-urls, kubelet-static-pod-path ], hidden: true }
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+tasks:
+  - id: q1
+    title: Control plane after maintenance
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 800
+    checks:
+      - id: q1-api-ready
+        description: the API server reports ready
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-components
+        description: node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        type: kubectl
+        run: "{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}{end}' | sort; } | xargs"
+        expect: { equals: controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-nodes-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 90
+      - id: q1-web-ready
+        description: web runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n ops get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 2/2 }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-manifests
+        description: /etc/kubernetes/manifests holds only the four control plane manifests
+        type: ssh
+        node: controlplane
+        run: ls /etc/kubernetes/manifests | sort | xargs
+        expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
+        weight: 1
+    hints:
+      - "Start with the symptom: does kubectl answer at all? If it does, kubectl get nodes and kubectl -n kube-system get pods show which component is unhealthy; Pending or missing Pods point at the scheduler or the controller manager."
+      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static Pod keeps exiting. journalctl -u kubelet shows Pods the kubelet cannot even start."
+      - Static Pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Check every flag, path and image against what exists (ls /etc/kubernetes/pki, crictl images).
+      - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."

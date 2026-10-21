@@ -9,7 +9,7 @@ import { LessonPane } from '../components/LessonPane';
 import { ReferencePanel } from '../components/ReferencePanel';
 import { SPLIT_MIN_PX, SplitHandle, useSplit } from '../components/SplitHandle';
 import { Button, buttonClass, Card, ErrorBanner, Markdown, StateBadge } from '../components/ui';
-import { formatDuration, sessionKey, useNow, useSession } from '../hooks';
+import { formatDuration, sessionKey, useBlindGrading, useNow, useSession } from '../hooks';
 import { SECTIONS, useSection } from '../section';
 
 const TerminalPanel = lazy(() => import('../components/Terminal').then((m) => ({ default: m.TerminalPanel })));
@@ -170,6 +170,7 @@ function TaskPane(props: {
   canSubmit: boolean;
   onSubmit: () => void;
   error: unknown;
+  blind: boolean;
 }) {
   const { session } = props;
   const task = session.tasks[props.active];
@@ -219,7 +220,7 @@ function TaskPane(props: {
         {!exam && session.lastGrade && (
           <div>
             <h2 className="mb-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">Result</h2>
-            <GradeResultView result={session.lastGrade} />
+            <GradeResultView result={session.lastGrade} blind={props.blind} />
           </div>
         )}
       </div>
@@ -294,6 +295,7 @@ export function SessionPage() {
   const section = useSection();
   const { data: session, isLoading } = useSession();
   const [ended, setEnded] = useState<SessionView | null>(null);
+  const [blindSetting] = useBlindGrading();
   const playground = session?.mode === 'playground';
   const learn = session?.mode === 'learn';
   const scenario = useQuery({
@@ -428,6 +430,8 @@ export function SessionPage() {
   }
 
   const lastGrade = session.lastGrade;
+  // Blind practice grading: check names stay hidden until the solution is shown.
+  const blind = blindSetting && session.mode === 'practice' && !session.solutionViewed;
 
   return (
     <div className="space-y-4">
@@ -528,6 +532,7 @@ export function SessionPage() {
                   onHint={() => hint.mutate(task?.id)}
                   canSubmit={canSubmit}
                   onSubmit={doSubmit}
+                  blind={blind}
                   error={error}
                 />
               )}
@@ -573,7 +578,7 @@ export function SessionPage() {
 
           {lastGrade && !exam && (
             <Card title="Result">
-              <GradeResultView result={lastGrade} />
+              <GradeResultView result={lastGrade} blind={blind} />
             </Card>
           )}
 

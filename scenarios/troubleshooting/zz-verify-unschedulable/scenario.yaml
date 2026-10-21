@@ -1,0 +1,69 @@
+id: zz-verify-unschedulable
+title: zz-verify-unschedulable
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ troubleshooting, scheduling, node, taints, kubelet ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ cordoned, taint-noschedule, taint-noexecute, label-removed, max-pods ], hidden: true }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+solution:
+  - node: worker-1
+    script: setup/q1-solution.sh
+  - node: worker-2
+    script: setup/q1-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+tasks:
+  - id: q1
+    title: One worker takes no Pods
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+      - node: worker-1
+        script: setup/q1-2.sh
+      - node: worker-2
+        script: setup/q1-3.sh
+      - node: controlplane
+        script: setup/q1-4.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-spread
+        description: spread runs 2 ready replicas on two different workers
+        type: kubectl
+        run: echo "$(kubectl -n spread get deployment spread -o jsonpath='{.status.readyReplicas}') $(kubectl -n spread get pods -l app=spread --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | grep -c worker)"
+        expect: { equals: 2 2 }
+        weight: 3
+        retrySeconds: 90
+      - id: q1-schedulable
+        description: no worker is cordoned or carries a NoSchedule or NoExecute taint
+        type: kubectl
+        run: kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.spec.unschedulable} {range .spec.taints[*]}{.effect} {end}{"\n"}{end}' | grep -cE 'true|NoSchedule|NoExecute' || true
+        expect: { equals: "0" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-capacity
+        description: every worker accepts at least 100 Pods
+        type: kubectl
+        run: kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.status.allocatable.pods}{"\n"}{end}' | sort -n | head -1
+        expect: { gte: 100 }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-unchanged
+        description: Deployment spread was not changed or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n spread get deployment spread -o jsonpath='{.metadata.uid} {.spec.template.spec}')\" = \"$(cat /var/tmp/cka-q1.deploy)\" ] && echo unchanged || echo changed"
+        expect: { equals: unchanged }
+        weight: 1
+    hints:
+      - "kubectl -n spread describe pod <pending-pod>: the scheduler's message counts the nodes and gives the reason it rejected each of them."
+      - "kubectl describe node <node> for both workers: Taints, Unschedulable, Labels and Allocatable (including pods) are what the scheduler looks at. Compare the two."
+      - kubectl -n spread get deployment spread -o yaml shows what the Pods require from a node.
+      - "Some of what a node offers is set by its kubelet: systemctl cat kubelet shows which configuration file it reads."

@@ -33,16 +33,24 @@ export const netpolCategory: FaultCategory = {
   ],
   shell: ({ NS, APP }) => ({
     title: `Frontend cannot reach ${APP}`,
-    text: `Namespace \`${NS}\` denies all traffic by default (NetworkPolicy \`default-deny\`), and a few NetworkPolicies open what is needed. Since the last change, Pod \`client\` cannot reach Service \`${APP}\`: \`kubectl -n ${NS} exec client -- wget -qO- -T 3 http://${APP}\` fails.
+    text: `Namespace \`${NS}\` denies all traffic by default (NetworkPolicy \`default-deny\`), and other NetworkPolicies open only what is needed. Since the last change, Pod \`client\` cannot reach Service \`${APP}\`:
+
+\`\`\`bash
+kubectl -n ${NS} exec client -- wget -qO- -T 3 http://${APP}
+\`\`\`
 
 Fix the NetworkPolicies so that:
 
-- every Pod in \`${NS}\` can resolve names through the cluster DNS (\`kube-dns\` in \`kube-system\`, port \`53\` UDP and TCP)
-- Pods labelled \`role=frontend\`, like \`client\`, can connect to the \`${APP}\` Pods on port \`80\`
-- \`${APP}\` accepts connections on port \`80\` only from Pods labelled \`role=frontend\`; Pod \`stranger\` stays blocked
-- \`default-deny\` keeps denying all other ingress and egress
+- Pods in \`${NS}\` can resolve names through the cluster DNS
+- Pods labelled \`role=frontend\`, like \`client\`, can reach \`${APP}\` on port \`80\`
+- \`${APP}\` accepts connections only from Pods labelled \`role=frontend\`; Pod \`stranger\` stays blocked
+- \`default-deny\` keeps denying everything else
 
 Do not change the Pods, the Deployment or the Service.`,
+    spec: `- \`default-deny\` selects every Pod for ingress and egress
+- \`allow-dns\` lets every Pod reach the \`kube-dns\` Pods in \`kube-system\` on port \`53\`, UDP and TCP
+- \`frontend-egress\` lets \`role=frontend\` Pods reach the \`app=${APP}\` Pods on TCP \`80\`
+- \`${APP}-ingress\` selects the \`app=${APP}\` Pods and admits \`role=frontend\` Pods of the same namespace on TCP \`80\``,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -203,12 +211,20 @@ exit 1`,
       },
     ],
     hints: [
-      `kubectl -n ${NS} get networkpolicy, then kubectl -n ${NS} describe networkpolicy <name> for each: which Pods does it select, and what does it allow?`,
-      `Separate DNS from the connection: kubectl -n ${NS} exec client -- nslookup ${APP}, then wget the Service IP or a Pod IP directly.`,
-      `Compare every selector with the real labels: kubectl -n ${NS} get pods --show-labels and kubectl get ns kube-system --show-labels; kubectl -n kube-system get pods -l k8s-app=kube-dns.`,
-      'A connection needs egress allowed at the client and ingress allowed at the server. Check both sides, including the ports.',
+      `kubectl -n ${NS} get networkpolicy, then kubectl -n ${NS} describe networkpolicy <name> for each: which Pods does it select, and what does it let in or out?`,
+      `Separate name resolution from the connection: kubectl -n ${NS} exec client -- nslookup ${APP}, then wget the Service IP and a Pod IP directly.`,
+      'A connection needs egress allowed at the client and ingress allowed at the server, on the port the Pod listens on. Check both ends.',
+      `Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels.`,
     ],
   }),
+  layers: [
+    { name: 'DNS egress', faults: ['dns-egress-port', 'dns-namespace-selector', 'dns-policy-deleted', 'dns-udp-only', 'dns-pod-selector'] },
+    {
+      name: 'the frontend egress',
+      faults: ['egress-to-label', 'egress-port', 'frontend-egress-deleted', 'frontend-egress-selector', 'netpol-egress-ipblock-except'],
+    },
+    { name: 'the API ingress', faults: ['ingress-port', 'ingress-from-label', 'ingress-namespace-and', 'ingress-pod-selector', 'ingress-ports-cleared'] },
+  ],
   faults: ({ NS, APP }) => [
     {
       id: 'dns-egress-port',

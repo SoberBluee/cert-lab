@@ -92,10 +92,10 @@ tasks:
         expect: { equals: same }
         weight: 1
     hints:
-      - "kubectl -n ${Q2_NS} get deployment,replicaset,pods -o wide: are there fewer Pods than replicas, or Pods stuck in Pending?"
-      - "Missing Pods: kubectl -n ${Q2_NS} describe replicaset -l app=${Q2_APP} shows why creating them failed (FailedCreate events)."
-      - "Pending Pods: kubectl -n ${Q2_NS} describe pod <pod> shows the scheduler's reason under Events."
-      - "kubectl -n ${Q2_NS} get resourcequota,limitrange: what does the namespace enforce?"
+      - "kubectl -n ${Q2_NS} get deployment,replicaset,pods -o wide: are Pods missing altogether, or do they exist and stay Pending?"
+      - "Missing Pods were refused when the ReplicaSet tried to create them: kubectl -n ${Q2_NS} describe replicaset -l app=${Q2_APP} shows the FailedCreate reason."
+      - "Pending Pods were never placed: kubectl -n ${Q2_NS} describe pod <pod> shows the scheduler's reason under Events."
+      - What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${Q2_NS} get all,resourcequota,limitrange and kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml.
   - id: q3
     title: Deployment ${Q3_APP} does not serve its page
     points: 6
@@ -127,16 +127,16 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q3-spec-volumes
-        description: the volumes still come from the ConfigMap and the Secret
+        description: the volumes still come from a ConfigMap and the Secret
         type: kubectl
-        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[*].configMap.name} {.spec.template.spec.volumes[*].secret.secretName}'
-        expect: { equals: "nginx:1.27-alpine ${Q3_APP}-content ${Q3_APP}-secret" }
+        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.volumes[?(@.configMap)].configMap.name} {.spec.template.spec.volumes[?(@.secret)].secret.secretName}'
+        expect: { matches: "^nginx:1.27-alpine \\S+ ${Q3_APP}-secret$" }
         weight: 1
     hints:
       - "kubectl -n ${Q3_NS} get pods -l app=${Q3_APP}: are the Pods Pending, ContainerCreating, crashing, or running but not ready?"
-      - "kubectl -n ${Q3_NS} describe pod <pod>: the Events name mount failures and container config errors."
-      - kubectl -n ${Q3_NS} logs <pod> (or --previous) shows why nginx exits or what it cannot find.
-      - Compare the volumes, volumeMounts and securityContext in kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o yaml with the spec and with the ConfigMap and Secret keys.
+      - "kubectl -n ${Q3_NS} describe pod <pod>: the Events name mount and container start errors."
+      - kubectl -n ${Q3_NS} logs <pod> (or --previous) shows why nginx exits; kubectl -n ${Q3_NS} exec deploy/${Q3_APP} -- ls -l /usr/share/nginx/html /etc/${Q3_APP} shows what a running container really sees.
+      - Compare the volumes and volumeMounts of the Deployment with the ConfigMaps and Secrets that exist and the keys they hold; check the ConfigMap content too, not only its name.
   - id: q4
     title: PersistentVolumeClaim ${Q4_NAME}
     points: 4
@@ -210,8 +210,7 @@ tasks:
         expect: { equals: kube-dns }
         weight: 1
     hints:
-      - Is it DNS? kubectl -n ${Q5_NS} exec client -- nslookup web.${Q5_NS}.svc.cluster.local, then the same against a CoreDNS Pod IP with nslookup <name> <pod-ip>.
-      - "kubectl -n kube-system get deployment,pods,svc,endpointslices -l k8s-app=kube-dns: does CoreDNS run, and does kube-dns have endpoints?"
-      - kubectl -n kube-system get configmap coredns -o yaml shows the Corefile; kubectl -n kube-system logs -l k8s-app=kube-dns shows why CoreDNS will not start.
-      - "kubectl -n ${Q5_NS} exec client -- cat /etc/resolv.conf: does the Pod use the cluster DNS (10.96.0.10) and the cluster search domains?"
-      - Pods stuck or unready? kubectl -n kube-system describe pod -l k8s-app=kube-dns shows mount and probe errors; kubectl auth can-i list endpointslices --as=system:serviceaccount:kube-system:coredns checks its RBAC.
+      - "Is it DNS at all? From client, compare nslookup web with nslookup web.${Q5_NS}.svc.cluster.local, and both with a lookup sent straight to a CoreDNS Pod IP: nslookup <name> <pod-ip>."
+      - "Work outwards from the client: kubectl -n ${Q5_NS} exec client -- cat /etc/resolv.conf, then kubectl -n kube-system get svc,endpointslices -l k8s-app=kube-dns, then the CoreDNS Pods."
+      - "CoreDNS Pods that are missing, crashing or never ready say why: kubectl -n kube-system get deploy,pods -l k8s-app=kube-dns, then describe and logs."
+      - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
