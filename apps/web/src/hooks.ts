@@ -96,3 +96,32 @@ export function useExamMode(): [boolean, (on: boolean) => void] {
 
 export const isActive = (s?: SessionView | null) =>
   !!s && (s.state === 'provisioning' || s.state === 'running' || s.state === 'grading');
+
+const HIDDEN_TOPICS_KEY = 'cka.hiddenTopics.v1';
+const HIDDEN_TOPICS_EVENT = 'cka-hidden-topics-change';
+const subscribeHiddenTopics = (cb: () => void) => {
+  window.addEventListener(HIDDEN_TOPICS_EVENT, cb);
+  window.addEventListener('storage', cb);
+  return () => {
+    window.removeEventListener(HIDDEN_TOPICS_EVENT, cb);
+    window.removeEventListener('storage', cb);
+  };
+};
+
+/** Topic ids hidden from the Scenarios tab on the Focus page; shared by every component and browser tab. */
+export function useHiddenTopics(): [string[], (ids: string[]) => void] {
+  const ids = useSyncExternalStore(subscribeHiddenTopics, () => localStorage.getItem(HIDDEN_TOPICS_KEY) ?? '[]');
+  const hidden = (() => {
+    try {
+      const raw = JSON.parse(ids) as unknown;
+      return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  })();
+  const set = (next: string[]) => {
+    localStorage.setItem(HIDDEN_TOPICS_KEY, JSON.stringify([...new Set(next)]));
+    window.dispatchEvent(new Event(HIDDEN_TOPICS_EVENT));
+  };
+  return [hidden, set];
+}

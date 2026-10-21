@@ -1,0 +1,58 @@
+id: service-network-policy
+title: Service (Network Policy)
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ troubleshooting, service, endpoints, networkpolicy ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  Q1_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q1_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q1_FAULT: { oneOf: [ network-policy ], hidden: true }
+tasks:
+  - id: q1
+    title: Service ${Q1_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-reachable
+        description: client gets the nginx page from http://${Q1_APP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://${Q1_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-endpoints
+        description: Service ${Q1_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get endpointslices -l kubernetes.io/service-name=${Q1_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-spec-service
+        description: Service ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP ${Q1_APP} 80 http" }
+        weight: 1
+      - id: q1-spec-deployment
+        description: Deployment ${Q1_APP} matches the spec
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
+        expect: { equals: "2 ${Q1_APP} http 80" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
+      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q1_NS} get pods --show-labels).
+      - Can the client reach a Pod IP directly? kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
+      - "kubectl -n ${Q1_NS} get networkpolicy: anything selecting the ${Q1_APP} Pods?"
+      - Pods Running but 0/1 Ready with RESTARTS stuck at 0? That is a failing readiness probe, not a crash — readiness failures never restart the container (only liveness does). Check kubectl -n ${Q1_NS} describe pod -l app=${Q1_APP} for Unhealthy events, then compare the Deployment's readinessProbe (scheme/port/path) with what nginx actually serves.
+      - "Everything in the namespace looks right, endpoints are ready, and a Pod IP answers but the Service IP does not? Look outside the namespace: kubectl -n kube-system get ds,pods -l k8s-app=kube-proxy. If kube-proxy is Desired/Ready 0 everywhere with no Pods and no events, inspect the DaemonSet template (nodeSelector/tolerations) — an unmatched nodeSelector silently schedules nothing."

@@ -12,6 +12,7 @@ const QuickCreatePage = lazy(() => import('./pages/QuickCreatePage').then((m) =>
 const LearnPage = lazy(() => import('./pages/LearnPage').then((m) => ({ default: m.LearnPage })));
 const QuizPage = lazy(() => import('./pages/QuizPage').then((m) => ({ default: m.QuizPage })));
 const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage').then((m) => ({ default: m.PlaygroundPage })));
+const FocusPage = lazy(() => import('./pages/FocusPage').then((m) => ({ default: m.FocusPage })));
 const StudioEditorPage = lazy(() => import('./pages/StudioEditorPage').then((m) => ({ default: m.StudioEditorPage })));
 const LinuxApp = lazy(() => import('./linux/LinuxApp').then((m) => ({ default: m.LinuxApp })));
 const SystemApp = lazy(() => import('./system/SystemApp').then((m) => ({ default: m.SystemApp })));
@@ -48,6 +49,7 @@ function ExamToggle({ session }: { session?: SessionView | null }) {
 
 const CKA_NAV: NavItem[] = [
   { to: '/', label: 'Scenarios', end: true },
+  { to: '/focus', label: 'Focus' },
   { to: '/session', label: 'Session', session: true },
   { to: '/learn', label: 'Learn' },
   { to: '/playground', label: 'Playground' },
@@ -61,6 +63,14 @@ function CkaShell() {
     <Shell section="cka" nav={CKA_NAV} actions={<ExamToggle session={session} />}>
       <Routes>
         <Route path="/" element={<BrowserPage track="cka" />} />
+        <Route
+          path="/focus"
+          element={
+            <Suspense fallback={<div className="p-5 text-sm text-zinc-500">Loading…</div>}>
+              <FocusPage />
+            </Suspense>
+          }
+        />
         <Route path="/session" element={<SessionPage />} />
         <Route path="/learn" element={<LearnPage track="cka" />} />
         <Route

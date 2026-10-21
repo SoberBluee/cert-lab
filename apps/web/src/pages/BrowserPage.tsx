@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { LabTopic, LessonTrack, ScenarioSummary } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
-import { isActive, sessionKey, useExamMode, useSession } from '../hooks';
+import { scenarioTopics } from '../focusTopics';
+import { isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
 import { RANDOM_MAX, randomLab, toRequest, type LabKind } from '../quickRandom';
 import { SECTIONS } from '../section';
 
@@ -73,6 +74,20 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
     staleTime: Infinity,
     enabled: recipesReady,
   });
+  const [hiddenTopics] = useHiddenTopics();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusTopic = searchParams.get('topic');
+  const focusLabel = focusTopic ? catalog.data?.topics.find((t) => t.id === focusTopic)?.label : undefined;
+
+  // Focus page preferences: a practised topic shows only its scenarios; otherwise hidden topics are dropped.
+  const visibleScenarios = useMemo(() => {
+    const list = filtered.data?.scenarios ?? [];
+    if (!catalog.data) return list;
+    if (focusTopic) return list.filter((s) => scenarioTopics(s, catalog.data).includes(focusTopic));
+    if (!hiddenTopics.length) return list;
+    const hidden = new Set(hiddenTopics);
+    return list.filter((s) => !scenarioTopics(s, catalog.data).some((id) => hidden.has(id)));
+  }, [filtered.data, catalog.data, focusTopic, hiddenTopics]);
   const [labKind, setLabKind] = useState<LabKind>('random');
   const [labTopic, setLabTopic] = useState('any');
   const [labCount, setLabCount] = useState('1');
@@ -191,8 +206,38 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
             Clear
           </Button>
         )}
-        <span className="ml-auto text-sm text-zinc-500">{filtered.data?.scenarios.length ?? 0} scenarios</span>
+        <span className="ml-auto text-sm text-zinc-500">{visibleScenarios.length} scenarios</span>
       </div>
+
+      {recipesReady && focusTopic ? (
+        <div className="flex items-center justify-between rounded-xl border border-sky-800/60 bg-sky-950/30 px-4 py-2.5 text-sm text-sky-200">
+          <span>
+            Practising: <span className="font-medium text-zinc-100">{focusLabel ?? focusTopic}</span>
+          </span>
+          <button
+            className="font-medium text-sky-400 hover:text-sky-300"
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete('topic');
+              setSearchParams(next);
+            }}
+          >
+            Show all scenarios
+          </button>
+        </div>
+      ) : (
+        recipesReady &&
+        hiddenTopics.length > 0 && (
+          <div className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-2.5 text-sm text-zinc-400">
+            <span>
+              {hiddenTopics.length} topic{hiddenTopics.length === 1 ? '' : 's'} hidden in Focus
+            </span>
+            <Link to="/focus" className="font-medium text-sky-400 hover:text-sky-300">
+              Manage →
+            </Link>
+          </div>
+        )
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-zinc-300">Quick lab</span>
@@ -270,7 +315,7 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
       ))}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {filtered.data?.scenarios.map((s) => (
+        {visibleScenarios.map((s) => (
           <article key={s.id} className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 transition hover:border-zinc-700">
             <div className="mb-2 flex items-center justify-between gap-2">
               <DomainBadge domain={s.domain} />
