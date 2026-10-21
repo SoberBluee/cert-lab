@@ -1,0 +1,58 @@
+id: service-3-faults
+title: Service 3 faults
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 18
+points: 6
+tags: [ troubleshooting, service, endpoints, networkpolicy, layered ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  Q1_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q1_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q1_CLIENT: { oneOf: [ client, shell, toolbox, tester, debugger, checker, caller, consumer, runner, probe ] }
+  Q1_FAULT: { oneOf: [ selector-mismatch, target-port, selector-extra-label, service-port, service-protocol, selector-cleared, target-port-typo, service-externalname ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ not-ready, readiness-https, readiness-port-number, named-port ], hidden: true }
+  Q1_FAULT_3: { oneOf: [ network-policy, egress-network-policy, kube-proxy-down, kube-proxy-config-mode ], hidden: true }
+tasks:
+  - id: q1
+    title: Service ${Q1_APP} unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+    checks:
+      - id: q1-reachable
+        description: ${Q1_CLIENT} gets the nginx page from http://${Q1_APP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec ${Q1_CLIENT} -- wget -qO- -T 3 http://${Q1_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-endpoints
+        description: Service ${Q1_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get endpointslices -l kubernetes.io/service-name=${Q1_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-spec-service
+        description: Service ${Q1_APP} is a ClusterIP Service on port 80
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get svc ${Q1_APP} -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
+        weight: 1
+      - id: q1-spec-deployment
+        description: Deployment ${Q1_APP} is the original one, with 2 replicas, its image and a readiness probe
+        type: kubectl
+        run: "[ ! -f /var/tmp/cka-q1.uid ] || [ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
+        weight: 1
+    hints:
+      - "Split the path into hops and test each one from ${Q1_CLIENT}: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n ${Q1_NS} get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n ${Q1_NS} describe svc ${Q1_APP} and kubectl -n ${Q1_NS} get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n ${Q1_NS} get pods --show-labels and kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."

@@ -9,7 +9,6 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 20
-draft: true
 variables:
   Q1_FAULT: { oneOf: [ selector-mismatch, target-port, selector-extra-label, service-port, service-protocol, selector-cleared, target-port-typo, service-externalname ], hidden: true }
   Q1_FAULT_2: { oneOf: [ not-ready, readiness-https, readiness-port-number, named-port ], hidden: true }
