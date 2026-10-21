@@ -309,6 +309,8 @@ export interface CategorySummary {
   /** May take the API server down; a lab holds at most one such question. */
   breaksApi: boolean;
   faultCount: number;
+  /** How many faults one question can stack (1 when the category has no layers). */
+  maxLayers: number;
   /** Only sent when spoilers are requested. */
   faults?: FaultSummary[];
 }
@@ -360,6 +362,11 @@ export type QuickQuestion =
       category: string;
       /** Fault ids to roll from; every fault of the category when omitted. */
       faults?: string[];
+      /**
+       * How many separate faults to stack, one from each of the category's layers (1 to 3). More
+       * than the category has is capped; 1 when omitted.
+       */
+      layers?: number;
     });
 
 export interface QuickCreateRequest {
@@ -368,6 +375,11 @@ export interface QuickCreateRequest {
   /** Defaults to the first question's topic. */
   domain?: Domain;
   questions: QuickQuestion[];
+  /**
+   * Give every question its own kubeconfig context, as the exam gives each task its own host: the
+   * task names the context to switch to. All of them reach the same lab cluster.
+   */
+  contexts?: boolean;
   /** Run a dry-run right after creating; defaults to true. */
   dryRun?: boolean;
 }

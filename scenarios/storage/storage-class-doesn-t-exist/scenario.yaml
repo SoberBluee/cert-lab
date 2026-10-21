@@ -8,6 +8,8 @@ tags: []
 base: cluster # bare | cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
+# Unfinished scaffold: kept as a draft until it has a real task, setup and checks.
+draft: true
 # Values rolled at every start. Use them as ${NS} in YAML and markdown, and as $NS in scripts.
 variables:
   NS: { oneOf: [ storage-lab ] }

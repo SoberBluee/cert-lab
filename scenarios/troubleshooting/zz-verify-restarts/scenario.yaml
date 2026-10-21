@@ -1,0 +1,61 @@
+id: zz-verify-restarts
+title: zz-verify-restarts
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 8
+points: 7
+tags: [ troubleshooting, pods, probes, crashloop, oomkilled ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ liveness-port, liveness-path, liveness-exec, liveness-early, oom-limit ], hidden: true }
+tasks:
+  - id: q1
+    title: Pods of api keep restarting
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: api has 2 up-to-date, ready replicas
+        type: kubectl
+        run: kubectl -n pay get deployment api -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 90
+      - id: q1-stable
+        description: api's Pods do not restart over 40 seconds
+        type: kubectl
+        run: r() { kubectl -n pay get pods -l app=api --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 40; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 2
+        retrySeconds: 90
+      - id: q1-liveness
+        description: api's container keeps a liveness probe
+        type: kubectl
+        run: "[ -n \"$(kubectl -n pay get deployment api -o jsonpath='{.spec.template.spec.containers[0].livenessProbe}')\" ] && echo probe || echo none"
+        expect: { equals: probe }
+        weight: 1
+      - id: q1-kept
+        description: api keeps its image, command and arguments
+        type: kubectl
+        run: c=$(kubectl -n pay get deployment api -o jsonpath='{.spec.template.spec.containers[0].command}|{.spec.template.spec.containers[0].args}'); i=$(kubectl -n pay get deployment api -o jsonpath='{.spec.template.spec.containers[0].image}'); [ "$c" = "$(cat /var/tmp/cka-q1.cmd)" ] && [ "$i" = "nginx:1.27-alpine" ] && echo kept || echo changed
+        expect: { equals: kept }
+        weight: 1
+      - id: q1-same-deployment
+        description: api was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n pay get deployment api -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n pay get pods -l app=api: the RESTARTS and STATUS columns show how often and how the containers die."
+      - "kubectl -n pay describe pod <pod>: Last State gives the exit reason and code, and the Events show kills and probe failures."
+      - kubectl -n pay logs <pod> --previous shows what the container said before it exited or was killed.
+      - "A container can be killed by the kubelet even though the app is fine: compare what each probe checks, and when, with what the app does and how long it takes to start."

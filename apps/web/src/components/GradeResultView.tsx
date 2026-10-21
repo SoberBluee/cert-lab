@@ -27,7 +27,11 @@ function CheckRow({ c }: { c: CheckResult }) {
   );
 }
 
-export function GradeResultView({ result }: { result: GradeResult }) {
+/**
+ * `blind` shows the score per question but not the checks: their descriptions name what is still
+ * wrong, which the exam never tells you.
+ */
+export function GradeResultView({ result, blind = false }: { result: GradeResult; blind?: boolean }) {
   const color = result.allPassed ? 'text-emerald-400' : result.percent >= 66 ? 'text-amber-300' : 'text-red-400';
   const byId = new Map(result.checks.map((c) => [c.id, c]));
   const groups = result.tasks && result.tasks.length > 1 ? result.tasks : undefined;
@@ -41,7 +45,21 @@ export function GradeResultView({ result }: { result: GradeResult }) {
         <div className="text-sm text-zinc-400">time {formatDuration(result.elapsedS)}</div>
         <div className="text-xs text-zinc-500">graded {new Date(result.gradedAt).toLocaleTimeString()}</div>
       </div>
-      {groups ? (
+      {blind ? (
+        <div className="space-y-1.5">
+          {groups?.map((t, i) => (
+            <div key={t.id} className="flex items-baseline gap-2 text-sm">
+              <span className="text-zinc-200">
+                Q{i + 1}. {t.title}
+              </span>
+              <span className={`ml-auto text-xs ${t.score === t.maxScore ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                {t.score}/{t.maxScore} pt
+              </span>
+            </div>
+          ))}
+          <p className="pt-1 text-xs text-zinc-500">Blind grading: the checks appear once you view the solution or end the session.</p>
+        </div>
+      ) : groups ? (
         <div className="space-y-4">
           {groups.map((t, i) => (
             <div key={t.id}>

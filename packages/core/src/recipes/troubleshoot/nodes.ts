@@ -57,17 +57,23 @@ export const nodesCategory: FaultCategory = {
   settleSeconds: 60,
   hidden: { NODE: WORKERS },
   fields: [nsField(['ops', 'infra', 'platform', 'cluster', 'nodes', 'kubelet-lab', 'workers', 'system', 'sre', 'fleet'])],
+  layers: [
+    { name: 'the container runtime or the network', faults: ['containerd-stopped', 'containerd-config-invalid', 'cni-config-removed', 'cni-conflist-typo', 'ip-forward-and-containerd'] },
+    {
+      name: 'the kubelet',
+      faults: ['kubelet-stopped', 'kubelet-binary-path', 'kubelet-config-invalid', 'kubelet-client-ca', 'kubelet-api-port', 'kubelet-extra-args', 'kubelet-conf-missing', 'kubelet-swap-on'],
+    },
+    { name: 'scheduling', faults: ['cordoned', 'stray-taint'] },
+  ],
   shell: ({ NS }) => ({
     title: 'Unhealthy worker',
-    text: `Something is wrong with one of the worker nodes. DaemonSet \`node-probe\` in namespace \`${NS}\` is meant to run a Pod on every worker.
-
-Find the node and fix it so that:
-
-- every node is \`Ready\` and accepts new Pods
-- \`node-probe\` runs a ready Pod on every worker
-- the fix survives a reboot of the node
+    text: `One of the workers is not healthy: DaemonSet \`node-probe\` in namespace \`${NS}\` should run a ready Pod on every worker, and it does not. Find the node and fix it so that every node is \`Ready\` and takes new Pods, and the fix survives a reboot of the node.
 
 Do not change the DaemonSet.`,
+    spec: `- kubelet and containerd running and enabled on every worker, with \`net.ipv4.ip_forward=1\` persisted
+- the kubelet's unit drop-in, \`${KUBELET_CONFIG}\`, \`${KUBELET_CONF}\` and \`/etc/default/kubelet\` as kubeadm wrote them; no swap
+- Calico's \`10-calico.conflist\` in \`/etc/cni/net.d\`, and a valid \`/etc/containerd/config.toml\`
+- no worker cordoned or tainted`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -122,12 +128,11 @@ kubectl -n "${NS}" rollout status daemonset/node-probe --timeout=240s`,
       },
     ],
     hints: [
-      'kubectl get nodes, then kubectl describe node <node>: look at Conditions, Taints and Unschedulable.',
+      'kubectl get nodes, then kubectl describe node <node>: Conditions, Taints and Unschedulable tell you whether the node is down or only refuses Pods.',
       `kubectl -n ${NS} get pods -o wide shows which worker is missing its probe Pod.`,
-      'On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50.',
-      'systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.',
-      `journalctl -u kubelet shows why it exits or cannot register. Its config is ${KUBELET_CONFIG}, its kubeconfig ${KUBELET_CONF}, and extra flags come from /etc/default/kubelet.`,
-      'If a node file turns out to be missing or corrupt, you rarely have to write it from scratch: every worker is built the same, so compare with the healthy worker (ls /etc/cni/net.d, diff the kubelet and containerd configs) and copy the good version across. Also look around the broken node (ls /root, and the directory the file lives in) for a backup copy.',
+      'On a NotReady node: systemctl status kubelet containerd, then journalctl -u kubelet -n 50 (and -u containerd). Fix one error, restart, and read the log again.',
+      'systemctl cat kubelet shows the unit, its drop-ins and the files the kubelet reads. Compare paths and settings with what exists on the node and with a healthy worker.',
+      'systemctl is-enabled tells you whether a service comes back after a reboot.',
     ],
   }),
   faults: ({ NS, NODE }, state) => [
@@ -245,16 +250,16 @@ systemctl restart kubelet`,
     {
       id: 'cni-config-removed',
       label: 'CNI configuration removed from the node',
-      nodeBreak: `mkdir -p /root/cni-backup
-mv /etc/cni/net.d/*.conflist /root/cni-backup/
+      nodeBreak: `mkdir -p "${state}.cni"
+mv /etc/cni/net.d/*.conflist "${state}.cni/"
 ! ls /etc/cni/net.d/*.conflist >/dev/null 2>&1 || { echo "could not move the CNI config" >&2; exit 1; }`,
       settle: waitNotReady(NODE),
-      nodeFix: `mv /root/cni-backup/*.conflist /etc/cni/net.d/
+      nodeFix: `mv "${state}.cni/"*.conflist /etc/cni/net.d/
 systemctl restart containerd
 systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain:
-        'The Calico network config (`10-calico.conflist`) is gone from `/etc/cni/net.d`. containerd reports the network as not ready, so the node turns `NotReady` with "container runtime network not ready ... cni plugin not initialized" (`kubectl describe node`, `journalctl -u kubelet`). `ls /etc/cni/net.d` is empty. You do not have to recreate the file: every worker carries the same conflist, so copy it from the healthy worker — and looking around the broken node (`ls /root`) turns up a copy in `/root/cni-backup`. Put it back, then restart containerd and the kubelet.',
+        'The Calico network config (`10-calico.conflist`) is gone from `/etc/cni/net.d`. containerd reports the network as not ready, so the node turns `NotReady` with "container runtime network not ready ... cni plugin not initialized" (`kubectl describe node`, `journalctl -u kubelet`). `ls /etc/cni/net.d` is empty. Calico writes that file itself: delete the `calico-node` Pod on that worker (`kubectl -n kube-system delete pod -l k8s-app=calico-node --field-selector spec.nodeName=<node>`) and its `install-cni` init container writes it again. Copying it from the healthy worker also works if you change its `nodename`. Then restart containerd and the kubelet.',
     },
     {
       id: 'containerd-config-invalid',
@@ -274,14 +279,14 @@ systemctl restart kubelet`,
     {
       id: 'kubelet-conf-missing',
       label: 'kubelet kubeconfig file is missing',
-      nodeBreak: `mv ${KUBELET_CONF} ${KUBELET_CONF}.cka-bak
+      nodeBreak: `mv ${KUBELET_CONF} "${state}.kubelet-conf"
 [[ ! -f ${KUBELET_CONF} ]]
 systemctl restart kubelet || true`,
       settle: waitNotReady(NODE),
-      nodeFix: `mv ${KUBELET_CONF}.cka-bak ${KUBELET_CONF}
+      nodeFix: `mv "${state}.kubelet-conf" ${KUBELET_CONF}
 systemctl restart kubelet`,
       wait: waitReady(NODE),
-      explain: `\`${KUBELET_CONF}\` was renamed, so the kubelet cannot authenticate to the API server and the node turns \`NotReady\`. \`journalctl -u kubelet\` mentions the missing kubeconfig; a backup sits at \`${KUBELET_CONF}.cka-bak\`. Move it back and restart the kubelet.`,
+      explain: `\`${KUBELET_CONF}\` is gone, so the kubelet cannot authenticate to the API server and the node turns \`NotReady\`. \`journalctl -u kubelet\` mentions the missing kubeconfig. A worker's kubelet.conf only names the API server, the cluster CA and the path of the node's own client certificate (\`/var/lib/kubelet/pki/kubelet-client-current.pem\`), so the healthy worker's copy works unchanged: copy it across through controlplane, then restart the kubelet.`,
     },
     {
       id: 'kubelet-swap-on',
@@ -309,20 +314,20 @@ systemctl restart kubelet`,
       label: 'CNI conflist is present but invalid JSON',
       nodeBreak: `f=$(ls /etc/cni/net.d/*.conflist 2>/dev/null | head -1)
 [[ -n "$f" ]] || { echo "no CNI conflist" >&2; exit 1; }
-cp -a "$f" /root/cni-conflist.cka-bak
+cp -a "$f" "${state}.cni-conflist"
 printf '{ "cniVersion": "0.3.1", "name": "broken", "plugins": [ { "type": "not-a-real-cni-plugin" } ]\\n' > "$f"
 ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" 2>/dev/null
 systemctl restart containerd || true
 systemctl restart kubelet || true`,
       settle: waitNotReady(NODE),
       nodeFix: `f=$(ls /etc/cni/net.d/*.conflist 2>/dev/null | head -1)
-[[ -f /root/cni-conflist.cka-bak ]] || { echo "missing CNI backup" >&2; exit 1; }
-if [[ -n "$f" ]]; then cp -a /root/cni-conflist.cka-bak "$f"; else cp -a /root/cni-conflist.cka-bak /etc/cni/net.d/10-calico.conflist; fi
+[[ -f "${state}.cni-conflist" ]] || { echo "missing CNI backup" >&2; exit 1; }
+if [[ -n "$f" ]]; then cp -a "${state}.cni-conflist" "$f"; else cp -a "${state}.cni-conflist" /etc/cni/net.d/10-calico.conflist; fi
 systemctl restart containerd
 systemctl restart kubelet`,
       wait: waitReady(NODE),
       explain:
-        'A file still sits in `/etc/cni/net.d`, but it is truncated / invalid JSON (and names a bogus plugin): `python3 -m json.tool <file>` fails to parse it, and the runtime network never becomes ready, so the node turns `NotReady`. You do not have to write a conflist from scratch: every worker carries the same one, so copy it from the healthy worker — and looking around the broken node (`ls /root`) turns up a backup at `/root/cni-conflist.cka-bak`. Restore the conflist, then restart containerd and the kubelet.',
+        'A file still sits in `/etc/cni/net.d`, but it is not valid JSON (and names a bogus plugin): `python3 -m json.tool <file>` fails to parse it, and the runtime network never becomes ready, so the node turns `NotReady`. Calico writes that file itself: delete the broken file and the `calico-node` Pod on that worker, and its `install-cni` init container writes a good one. Then restart containerd and the kubelet.',
     },
   ],
 };

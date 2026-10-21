@@ -1,0 +1,55 @@
+id: zz-verify-layered-rbac
+title: zz-verify-layered-rbac
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 18
+points: 6
+tags: [ troubleshooting, rbac, serviceaccount, role, rolebinding, layered ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ role-verb, role-resource ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ binding-subject-ns, binding-role-ref ], hidden: true }
+  Q1_FAULT_3: { oneOf: [ wrong-sa, automount-off ], hidden: true }
+tasks:
+  - id: q1
+    title: inventory cannot list Pods
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+        lane: q1
+    checks:
+      - id: q1-can-list
+        description: inventory-sa may list Pods in monitoring
+        type: kubectl
+        run: kubectl auth can-i list pods -n monitoring --as=system:serviceaccount:monitoring:inventory-sa
+        expect: { equals: yes }
+        weight: 2
+      - id: q1-logs-200
+        description: inventory's latest call returned 200
+        type: kubectl
+        run: kubectl -n monitoring logs deployment/inventory --tail=1
+        expect: { equals: "200" }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-spec
+        description: inventory runs as inventory-sa, and RoleBinding inventory-reader grants Role inventory-reader to it
+        type: kubectl
+        run: echo "$(kubectl -n monitoring get deployment inventory -o jsonpath='{.spec.template.spec.serviceAccountName}') $(kubectl -n monitoring get rolebinding inventory-reader -o jsonpath='{.roleRef.kind}/{.roleRef.name} {.subjects[*].namespace}/{.subjects[*].name}')"
+        expect: { equals: inventory-sa Role/inventory-reader monitoring/inventory-sa }
+        weight: 1
+      - id: q1-least-privilege
+        description: inventory-sa cannot delete Pods or read Secrets
+        type: kubectl
+        run: echo "$(kubectl auth can-i delete pods -n monitoring --as=system:serviceaccount:monitoring:inventory-sa) $(kubectl auth can-i get secrets -n monitoring --as=system:serviceaccount:monitoring:inventory-sa)"
+        expect: { equals: no no }
+        weight: 1
+    hints:
+      - "kubectl -n monitoring logs deployment/inventory: a 401, a 403 and a missing token point at different problems. A 403 names the account the API saw."
+      - kubectl auth can-i list pods -n monitoring --as=system:serviceaccount:monitoring:<account> answers for any account, without the Pod.
+      - "Follow the chain from the Pod to the permission: which ServiceAccount the Pod runs as, which RoleBinding names that exact account, which Role the binding points at, and what that Role allows."

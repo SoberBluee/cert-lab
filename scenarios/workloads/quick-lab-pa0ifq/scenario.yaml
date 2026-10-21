@@ -91,10 +91,10 @@ tasks:
         weight: 1
         retrySeconds: 60
       - id: q1-spec
-        description: image and requests match the spec
+        description: ${Q1_APP} keeps its image and has a CPU request
         type: kubectl
-        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory}'
-        expect: { equals: nginx:1.27-alpine 50m 32Mi }
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu}'
+        expect: { matches: ^nginx:1\.27-alpine \S+$ }
         weight: 1
       - id: q1-same-deployment
         description: ${Q1_APP} was not deleted or recreated
@@ -103,9 +103,9 @@ tasks:
         expect: { equals: same }
         weight: 1
     hints:
-      - "kubectl -n ${Q1_NS} get hpa ${Q1_APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics."
-      - "kubectl -n ${Q1_NS} describe hpa ${Q1_APP}: the Conditions and Events say why (FailedGetScale, FailedGetResourceMetric, ...)."
-      - "kubectl top pods -n ${Q1_NS}: if this fails, the problem is the metrics pipeline, not the autoscaler. Check kubectl get apiservice v1beta1.metrics.k8s.io and kubectl -n kube-system get deploy,svc metrics-server."
+      - "kubectl -n ${Q1_NS} get hpa ${Q1_APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics; MINPODS and MAXPODS show its range."
+      - "kubectl -n ${Q1_NS} describe hpa ${Q1_APP}: the Conditions and Events say why it cannot scale."
+      - "kubectl top pods -n ${Q1_NS}: when this fails, the problem is the metrics pipeline (kubectl get apiservice, then the Deployment and Service behind it), not the autoscaler."
   - id: q2
     title: Deployment ${Q2_NAME}
     points: 39

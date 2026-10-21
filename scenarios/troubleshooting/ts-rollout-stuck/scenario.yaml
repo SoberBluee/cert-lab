@@ -43,6 +43,6 @@ checks:
     expect: { equals: "nginx:1.27-alpine" }
     weight: 1
 hints:
-  - "kubectl -n ${NS} rollout status deployment/${APP} — does it hang?"
-  - "kubectl -n ${NS} get deploy ${APP} -o yaml — is spec.paused true? What is maxSurge?"
-  - "Unpause the Deployment, restore a normal surge (for example 25%), and let the rollout finish."
+  - "kubectl -n ${NS} rollout status deployment/${APP}: does it hang? kubectl -n ${NS} get rs shows the old and the new ReplicaSet side by side."
+  - "kubectl -n ${NS} describe deployment ${APP}: read the conditions, the events and the strategy."
+  - "A rollout needs room to replace Pods, and a Deployment can be told to stop rolling out altogether."

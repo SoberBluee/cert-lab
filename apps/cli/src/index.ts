@@ -71,12 +71,14 @@ function printConnection(conn?: ConnectionInfo) {
   if (conn.exportLine) console.log(`\n  ${c.cyan(conn.exportLine)}`);
 }
 
-function printGrade(r: GradeResult) {
+/** `blind` prints scores only: check descriptions name what is still wrong. */
+function printGrade(r: GradeResult, blind = false) {
   console.log(c.bold('\nResults'));
   const byId = new Map(r.checks.map((ch) => [ch.id, ch]));
   const groups = r.tasks && r.tasks.length > 1 ? r.tasks : [{ title: '', checkIds: r.checks.map((ch) => ch.id), score: 0, maxScore: 0 }];
   for (const g of groups) {
     if (g.title) console.log(`  ${c.bold(g.title)} ${c.dim(`${g.score}/${g.maxScore}`)}`);
+    if (blind) continue;
     for (const ch of g.checkIds.map((id) => byId.get(id)!)) {
       const mark = ch.passed ? c.green('PASS') : c.red('FAIL');
       console.log(`  ${mark} ${ch.description} ${c.dim(`(${ch.weight} pt)`)}`);
@@ -85,6 +87,7 @@ function printGrade(r: GradeResult) {
   }
   const total = `${r.score}/${r.maxScore} (${r.percent}%)`;
   console.log(`\n  Score ${r.allPassed ? c.green(total) : c.yellow(total)}  ${c.dim(`time ${formatDuration(r.elapsedS)}`)}`);
+  if (blind) console.log(c.dim('  Blind grading: run "cka grade" without --blind, or view the solution, to see the checks.'));
 }
 
 function formatDuration(s: number) {
@@ -194,10 +197,11 @@ program
 program
   .command('grade')
   .description('run the checks against the lab')
+  .option('--blind', 'print the score only, not which checks failed (the exam gives no feedback)')
   .action(
-    action(async () => {
+    action(async (opts: { blind?: boolean }) => {
       console.log(c.dim('Grading...'));
-      printGrade(await o().sessions.grade());
+      printGrade(await o().sessions.grade(), opts.blind);
     }),
   );
 

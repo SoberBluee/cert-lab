@@ -48,8 +48,14 @@ done
 [[ "$(${podReady(component)})" != True ]] || { echo "${component} is still Ready" >&2; exit 1; }
 sleep 5`;
 
+/**
+ * Runs web before the API breaks. In a layered question the scheduler or controller manager may
+ * already be down, and then nothing would ever roll out: scale only.
+ */
 export const scaleUp = (ns: string) => `kubectl -n "${ns}" scale deployment/web --replicas=2
-kubectl -n "${ns}" rollout status deployment/web --timeout=240s`;
+if [[ "$(${podReady('kube-scheduler')})" == True && "$(${podReady('kube-controller-manager')})" == True ]]; then
+  kubectl -n "${ns}" rollout status deployment/web --timeout=240s
+fi`;
 
 /** `sed -E` over a file, then proof that it changed. */
 export const edit = (file: string, expr: string, proof: string) => `sed -i -E '${expr}' ${file}
@@ -74,16 +80,11 @@ export const controlPlaneCategory: FaultCategory = {
   fields: [nsField(['ops', 'core', 'platform', 'controlplane', 'etcd-lab', 'apiserver', 'scheduler', 'controller', 'cluster', 'mgmt'])],
   shell: ({ NS }) => ({
     title: 'Control plane after maintenance',
-    text: `After a maintenance window on the control plane, the cluster misbehaves. Deployment \`web\` in namespace \`${NS}\` should run \`2\` ready replicas.
+    text: `After a maintenance window on the control plane, the cluster misbehaves. Fix it so that the API server answers, the control plane components on \`controlplane\` all run \`Ready\`, every node is \`Ready\`, and Deployment \`web\` in namespace \`${NS}\` runs \`2\` ready replicas.
 
-Find the problem and fix it so that:
-
-- the API server answers, and \`etcd\`, \`kube-apiserver\`, \`kube-controller-manager\` and \`kube-scheduler\` run Ready on \`controlplane\`
-- every node is \`Ready\`
-- \`web\` runs \`2\` ready replicas
-- \`/etc/kubernetes/manifests\` holds only the four control plane manifests
-
-Do not change the Deployment.`,
+Do not change the Deployment, and leave only the four control plane manifests in \`${M}\`.`,
+    spec: `- \`etcd\`, \`kube-apiserver\`, \`kube-controller-manager\` and \`kube-scheduler\` run as static Pods from \`${M}\`, with the flags, paths and images kubeadm wrote
+- the kubelet on \`controlplane\` uses \`${KUBELET_CONF}\` and \`staticPodPath: ${M}\``,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -153,12 +154,52 @@ EOF`,
       },
     ],
     hints: [
-      'kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down.',
-      'Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting.',
-      `Static pod manifests live in ${M}; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).`,
-      `If controlplane itself is NotReady, or no control plane container runs at all: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in ${KUBELET_CONF} and ${KUBELET_CONFIG} (staticPodPath).`,
+      'Start with the symptom: does kubectl answer at all? If it does, kubectl get nodes and kubectl -n kube-system get pods show which component is unhealthy; Pending or missing Pods point at the scheduler or the controller manager.',
+      'Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static Pod keeps exiting. journalctl -u kubelet shows Pods the kubelet cannot even start.',
+      `Static Pod manifests live in ${M}; the kubelet restarts a component when its manifest changes. Check every flag, path and image against what exists (ls /etc/kubernetes/pki, crictl images).`,
+      `If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in ${KUBELET_CONF} and ${KUBELET_CONFIG}.`,
     ],
   }),
+  // The scheduler or controller manager breaks first, while the API still answers; the API server
+  // or etcd breaks second. Both fixes are file edits, so their order does not matter.
+  layers: [
+    {
+      name: 'the scheduler or the controller manager',
+      faults: [
+        'scheduler-command',
+        'controller-manager-kubeconfig',
+        'scheduler-kubeconfig-path',
+        'scheduler-image-tag',
+        'controller-manager-sa-key',
+        'scheduler-manifest-removed',
+        'scheduler-manifest-yaml',
+        'controller-manager-command',
+        'scheduler-leader-elect',
+      ],
+    },
+    {
+      name: 'the API server or etcd',
+      faults: [
+        'apiserver-etcd-port',
+        'apiserver-etcd-certfile',
+        'apiserver-etcd-flags',
+        'etcd-cert-path',
+        'apiserver-admission-plugin',
+        'apiserver-etcd-keyfile',
+        'apiserver-tls-key-path',
+        'apiserver-manifest-removed',
+        'etcd-key-path',
+        'etcd-trusted-ca-path',
+        'etcd-client-urls',
+        'etcd-data-dir',
+        'etcd-image-tag',
+        'apiserver-advertise-address',
+        'apiserver-service-account-key',
+        'etcd-peer-urls',
+        'kubelet-static-pod-path',
+      ],
+    },
+  ],
   faults: ({ NS }, state) => [
     {
       id: 'apiserver-etcd-port',

@@ -1,0 +1,56 @@
+id: zz-verify-layered-services
+title: zz-verify-layered-services
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 18
+points: 6
+tags: [ troubleshooting, service, endpoints, networkpolicy, layered ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+draft: true
+variables:
+  Q1_FAULT: { oneOf: [ selector-mismatch, target-port, selector-extra-label, service-port, service-protocol, selector-cleared, target-port-typo, service-externalname ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ not-ready, readiness-https, readiness-port-number, named-port ], hidden: true }
+  Q1_FAULT_3: { oneOf: [ network-policy, egress-network-policy, kube-proxy-down, kube-proxy-config-mode ], hidden: true }
+tasks:
+  - id: q1
+    title: Service web unreachable
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+    checks:
+      - id: q1-reachable
+        description: client gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n store exec client -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-endpoints
+        description: Service web has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n store get endpointslices -l kubernetes.io/service-name=web -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-spec-service
+        description: Service web is a ClusterIP Service on port 80
+        type: kubectl
+        run: kubectl -n store get svc web -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
+        weight: 1
+      - id: q1-spec-deployment
+        description: Deployment web is the original one, with 2 replicas, its image and a readiness probe
+        type: kubectl
+        run: "[ ! -f /var/tmp/cka-q1.uid ] || [ \"$(kubectl -n store get deployment web -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n store get deployment web -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n store get deployment web -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
+        weight: 1
+    hints:
+      - "Split the path into hops and test each one from client: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n store get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n store describe svc web and kubectl -n store get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n store get pods --show-labels and kubectl -n store get deployment web -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."

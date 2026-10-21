@@ -31,12 +31,12 @@ checks:
     expect: { equals: "ClusterIP" }
     weight: 2
   - id: selector
-    description: Service selects app=${APP} on port 80 → http
+    description: Service selects app=${APP} on port 80, forwarding to the container port
     type: kubectl
     run: kubectl -n ${NS} get svc ${APP} -o jsonpath='{.spec.selector.app}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
-    expect: { equals: "${APP}/80/http" }
+    expect: { matches: "^${APP}/80/(http|80)$" }
     weight: 1
 hints:
-  - "kubectl -n ${NS} get svc ${APP} -o yaml — what is type? Is there a ClusterIP?"
-  - "ExternalName Services have no selector or ClusterIP; recreate as ClusterIP selecting app=${APP}."
-  - "kubectl -n ${NS} exec client -- wget -qO- -T 3 http://${APP}"
+  - "Split the path into hops and test each one from client: does the name resolve, does the Service IP answer, does a Pod IP answer?"
+  - "kubectl -n ${NS} get svc ${APP} -o yaml: compare every field with what a Service in front of a Deployment needs."
+  - "Some Service fields cannot be changed in place: delete and recreate the Service if you must."

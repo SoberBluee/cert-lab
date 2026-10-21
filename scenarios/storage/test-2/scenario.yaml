@@ -143,22 +143,22 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q3-spec-service
-        description: Service ${Q3_APP} matches the spec
+        description: Service ${Q3_APP} is a ClusterIP Service on port 80
         type: kubectl
-        run: kubectl -n ${Q3_NS} get svc ${Q3_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
-        expect: { equals: "ClusterIP ${Q3_APP} 80 http" }
+        run: kubectl -n ${Q3_NS} get svc ${Q3_APP} -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
         weight: 1
       - id: q3-spec-deployment
-        description: Deployment ${Q3_APP} matches the spec
+        description: Deployment ${Q3_APP} is the original one, with 2 replicas, its image and a readiness probe
         type: kubectl
-        run: kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
-        expect: { equals: "2 ${Q3_APP} http 80" }
+        run: "[ ! -f /var/tmp/cka-q3.uid ] || [ \"$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q3.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
         weight: 1
     hints:
-      - "kubectl -n ${Q3_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
-      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q3_NS} get pods --show-labels).
-      - Can the client reach a Pod IP directly? kubectl -n ${Q3_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
-      - "kubectl -n ${Q3_NS} get networkpolicy: anything selecting the ${Q3_APP} Pods?"
+      - "Split the path into hops and test each one from client: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n ${Q3_NS} get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n ${Q3_NS} describe svc ${Q3_APP} and kubectl -n ${Q3_NS} get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n ${Q3_NS} get pods --show-labels and kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q4
     title: Unhealthy worker
     points: 6
@@ -199,10 +199,11 @@ tasks:
         weight: 1
         retrySeconds: 90
     hints:
-      - "kubectl get nodes, then kubectl describe node <node>: look at Conditions, Taints and Unschedulable."
+      - "kubectl get nodes, then kubectl describe node <node>: Conditions, Taints and Unschedulable tell you whether the node is down or only refuses Pods."
       - kubectl -n ${Q4_NS} get pods -o wide shows which worker is missing its probe Pod.
-      - "On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50."
-      - systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.
+      - "On a NotReady node: systemctl status kubelet containerd, then journalctl -u kubelet -n 50 (and -u containerd). Fix one error, restart, and read the log again."
+      - systemctl cat kubelet shows the unit, its drop-ins and the files the kubelet reads. Compare paths and settings with what exists on the node and with a healthy worker.
+      - systemctl is-enabled tells you whether a service comes back after a reboot.
   - id: q5
     title: Unhealthy Deployment ${Q5_APP}
     points: 8
@@ -228,23 +229,24 @@ tasks:
         expect: { contains: nginx }
         weight: 1
       - id: q5-spec-resources
-        description: image, requests and limits match the spec
+        description: ${Q5_APP} keeps its image, and requests and limits for CPU and memory
         type: kubectl
         run: kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
-        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        expect: { matches: ^nginx:1\.27-alpine \S+ \S+ \S+ \S+$ }
         weight: 1
       - id: q5-spec-probes
-        description: probes match the spec
+        description: ${Q5_APP} keeps a readiness and a liveness probe
         type: kubectl
-        run: kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
-        expect: { equals: / 80 80 }
+        run: c='{.spec.template.spec.containers[0]'; r=$(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath="$c.readinessProbe}"); l=$(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath="$c.livenessProbe}"); echo "$([ -n "$r" ] && echo readiness) $([ -n "$l" ] && echo liveness)"
+        expect: { equals: readiness liveness }
         weight: 1
       - id: q5-spec-config
-        description: APP_MODE comes from key mode of ${Q5_APP}-config, set to production
+        description: the running Pods read APP_MODE=production from ConfigMap ${Q5_APP}-config
         type: kubectl
-        run: echo "$(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q5_NS} get configmap ${Q5_APP}-config -o jsonpath='{.data.mode}')"
-        expect: { equals: "${Q5_APP}-config mode production" }
+        run: echo "$(kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name}') $(kubectl -n ${Q5_NS} exec deployment/${Q5_APP} -- printenv APP_MODE 2>/dev/null)"
+        expect: { equals: "${Q5_APP}-config production" }
         weight: 1
+        retrySeconds: 30
       - id: q5-same-deployment
         description: ${Q5_APP} was not deleted or recreated
         type: kubectl
@@ -252,7 +254,7 @@ tasks:
         expect: { equals: same }
         weight: 1
     hints:
-      - "kubectl -n ${Q5_NS} get pods -l app=${Q5_APP} -o wide: what state are the Pods in, and do they restart?"
-      - "kubectl -n ${Q5_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
-      - kubectl -n ${Q5_NS} logs <pod> --previous shows why a crashed container exited.
-      - Compare kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o yaml (and the ConfigMap) against the spec, line by line.
+      - "kubectl -n ${Q5_NS} get deployment,replicaset,pods -l app=${Q5_APP} -o wide: are Pods missing, Pending, crashing, running but not ready, or is an old and a new ReplicaSet stuck side by side?"
+      - "kubectl -n ${Q5_NS} describe pod <pod>: the container state, the last termination reason and the Events usually name the problem."
+      - kubectl -n ${Q5_NS} logs <pod> --previous shows why a crashed container exited; kubectl -n ${Q5_NS} rollout status deployment/${Q5_APP} shows whether a rollout is progressing.
+      - "kubectl -n ${Q5_NS} get deployment ${Q5_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."

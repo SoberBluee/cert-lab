@@ -36,15 +36,12 @@ export const nodeConfigCategory: FaultCategory = {
   fields: [nsField(['fleet', 'edge', 'infra', 'nodes', 'config', 'workers', 'daemon', 'system', 'host-ops', 'platform'])],
   shell: ({ NS }) => ({
     title: 'Worker after a configuration change',
-    text: `During maintenance, someone tuned the kubelet configuration on one of the workers, and that node has not been healthy since. DaemonSet \`node-agent\` in namespace \`${NS}\` is meant to run a Pod on every worker.
-
-Find the node and fix it so that:
-
-- every node is \`Ready\`
-- \`node-agent\` runs a ready Pod on every worker
-- the kubelet is running and enabled, and the fix survives a reboot of the node
+    text: `One of the workers has not been healthy since a maintenance window. DaemonSet \`node-agent\` in namespace \`${NS}\` should run a ready Pod on every worker. Find the node and fix it so that every node is \`Ready\`, \`node-agent\` runs everywhere, and the kubelet is running, enabled and survives a reboot of the node.
 
 Do not change the DaemonSet, and do not rejoin the node to the cluster.`,
+    spec: `- the kubelet unit drop-in loads \`${CONFIG}\` and \`${KUBECONFIG}\`, as kubeadm wrote them
+- \`${KUBECONFIG}\` points at the API server on port \`6443\`
+- \`${CONFIG}\` keeps the kubeadm values: the containerd socket, \`cgroupDriver: systemd\`, the cluster CA, no extra TLS files, default \`maxPods\`, eviction thresholds, \`resolvConf\` and \`hairpinMode\``,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -88,9 +85,9 @@ kubectl -n "${NS}" rollout status daemonset/node-agent --timeout=240s`,
       },
     ],
     hints: [
-      'kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?',
-      'On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?',
-      `The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file ${CONFIG} and its kubeconfig ${KUBECONFIG}. Compare every path and address in them with what exists (ls) and with a healthy worker.`,
+      'kubectl get nodes, then kubectl describe node <node>: which node is unhealthy, which condition, and since when?',
+      'On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job?',
+      'systemctl cat kubelet shows the unit and drop-ins, and so every file and flag the kubelet starts with. Check each path and value against what exists on the node and against a healthy worker.',
       'After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).',
     ],
   }),

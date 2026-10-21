@@ -69,23 +69,24 @@ tasks:
         expect: { contains: nginx }
         weight: 1
       - id: q1-spec-resources
-        description: image, requests and limits match the spec
+        description: ${Q1_APP} keeps its image, and requests and limits for CPU and memory
         type: kubectl
         run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
-        expect: { equals: nginx:1.27-alpine 50m 32Mi 250m 128Mi }
+        expect: { matches: ^nginx:1\.27-alpine \S+ \S+ \S+ \S+$ }
         weight: 1
       - id: q1-spec-probes
-        description: probes match the spec
+        description: ${Q1_APP} keeps a readiness and a liveness probe
         type: kubectl
-        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path} {.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.tcpSocket.port}'
-        expect: { equals: / 80 80 }
+        run: c='{.spec.template.spec.containers[0]'; r=$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath="$c.readinessProbe}"); l=$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath="$c.livenessProbe}"); echo "$([ -n "$r" ] && echo readiness) $([ -n "$l" ] && echo liveness)"
+        expect: { equals: readiness liveness }
         weight: 1
       - id: q1-spec-config
-        description: APP_MODE comes from key mode of ${Q1_APP}-config, set to production
+        description: the running Pods read APP_MODE=production from ConfigMap ${Q1_APP}-config
         type: kubectl
-        run: echo "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name} {.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.key}') $(kubectl -n ${Q1_NS} get configmap ${Q1_APP}-config -o jsonpath='{.data.mode}')"
-        expect: { equals: "${Q1_APP}-config mode production" }
+        run: echo "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name}') $(kubectl -n ${Q1_NS} exec deployment/${Q1_APP} -- printenv APP_MODE 2>/dev/null)"
+        expect: { equals: "${Q1_APP}-config production" }
         weight: 1
+        retrySeconds: 30
       - id: q1-same-deployment
         description: ${Q1_APP} was not deleted or recreated
         type: kubectl
@@ -93,10 +94,10 @@ tasks:
         expect: { equals: same }
         weight: 1
     hints:
-      - "kubectl -n ${Q1_NS} get pods -l app=${Q1_APP} -o wide: what state are the Pods in, and do they restart?"
-      - "kubectl -n ${Q1_NS} describe pod <pod>: read the container state, the last termination reason and the Events."
-      - kubectl -n ${Q1_NS} logs <pod> --previous shows why a crashed container exited.
-      - Compare kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml (and the ConfigMap) against the spec, line by line.
+      - "kubectl -n ${Q1_NS} get deployment,replicaset,pods -l app=${Q1_APP} -o wide: are Pods missing, Pending, crashing, running but not ready, or is an old and a new ReplicaSet stuck side by side?"
+      - "kubectl -n ${Q1_NS} describe pod <pod>: the container state, the last termination reason and the Events usually name the problem."
+      - kubectl -n ${Q1_NS} logs <pod> --previous shows why a crashed container exited; kubectl -n ${Q1_NS} rollout status deployment/${Q1_APP} shows whether a rollout is progressing.
+      - "kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."
   - id: q2
     title: Service ${Q2_APP} unreachable
     points: 6
@@ -121,22 +122,22 @@ tasks:
         weight: 1
         retrySeconds: 30
       - id: q2-spec-service
-        description: Service ${Q2_APP} matches the spec
+        description: Service ${Q2_APP} is a ClusterIP Service on port 80
         type: kubectl
-        run: kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port} {.spec.ports[0].targetPort}'
-        expect: { equals: "ClusterIP ${Q2_APP} 80 http" }
+        run: kubectl -n ${Q2_NS} get svc ${Q2_APP} -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
         weight: 1
       - id: q2-spec-deployment
-        description: Deployment ${Q2_APP} matches the spec
+        description: Deployment ${Q2_APP} is the original one, with 2 replicas, its image and a readiness probe
         type: kubectl
-        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].ports[0].name} {.spec.template.spec.containers[0].ports[0].containerPort}'
-        expect: { equals: "2 ${Q2_APP} http 80" }
+        run: "[ ! -f /var/tmp/cka-q2.uid ] || [ \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q2.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
         weight: 1
     hints:
-      - "kubectl -n ${Q2_NS} get svc,endpointslices,pods -o wide: does the Service have endpoints, and are they ready?"
-      - Compare the Service selector and targetPort with the Pods' labels and named ports (kubectl -n ${Q2_NS} get pods --show-labels).
-      - Can the client reach a Pod IP directly? kubectl -n ${Q2_NS} exec client -- wget -qO- -T 3 http://<pod-ip>
-      - "kubectl -n ${Q2_NS} get networkpolicy: anything selecting the ${Q2_APP} Pods?"
+      - "Split the path into hops and test each one from client: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n ${Q2_NS} get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n ${Q2_NS} describe svc ${Q2_APP} and kubectl -n ${Q2_NS} get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n ${Q2_NS} get pods --show-labels and kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
   - id: q3
     title: Pod ${Q3_CLAIM}-app stuck
     points: 5
@@ -153,28 +154,23 @@ tasks:
         expect: { equals: "Bound/${Q3_CLAIM}-pv" }
         weight: 2
         retrySeconds: 30
-      - id: q3-spec-claim
-        description: PVC ${Q3_CLAIM} matches the spec
-        type: kubectl
-        run: kubectl -n ${Q3_NS} get pvc ${Q3_CLAIM} -o jsonpath='{.spec.storageClassName} {.spec.accessModes[0]} {.spec.resources.requests.storage}'
-        expect: { equals: manual ReadWriteOnce 500Mi }
-        weight: 1
       - id: q3-pod-running
         description: Pod ${Q3_CLAIM}-app is Running with the claim at /data
         type: kubectl
         run: kubectl -n ${Q3_NS} get pod ${Q3_CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
         expect: { matches: "^Running ${Q3_CLAIM} .*/data" }
-        weight: 1
+        weight: 2
         retrySeconds: 60
       - id: q3-pv-kept
-        description: PV ${Q3_CLAIM}-pv is unchanged
+        description: PV ${Q3_CLAIM}-pv keeps its class, capacity and access mode
         type: kubectl
         run: kubectl get pv ${Q3_CLAIM}-pv -o jsonpath='{.spec.storageClassName} {.spec.capacity.storage} {.spec.accessModes[0]}'
         expect: { equals: manual 1Gi ReadWriteOnce }
         weight: 1
     hints:
-      - "kubectl -n ${Q3_NS} describe pod ${Q3_CLAIM}-app, then kubectl -n ${Q3_NS} describe pvc ${Q3_CLAIM}: what are the Events waiting for?"
-      - "Put kubectl get pv ${Q3_CLAIM}-pv next to kubectl -n ${Q3_NS} get pvc ${Q3_CLAIM} -o yaml: class, access mode and size must all fit."
+      - "kubectl -n ${Q3_NS} describe pod ${Q3_CLAIM}-app: is the Pod waiting for its claim to bind, or for a node it can run on? The Events say which."
+      - "kubectl -n ${Q3_NS} describe pvc ${Q3_CLAIM} and kubectl get pv ${Q3_CLAIM}-pv -o yaml: class, access modes, size and the volume's status (and any claimRef) must all fit."
+      - "A bound volume can still pin its Pod: compare the volume's node affinity with where the Pod is allowed to run (kubectl get pod ${Q3_CLAIM}-app -o yaml)."
       - "Most of a claim's spec cannot be edited: delete the Pod and the claim, then create them again."
   - id: q4
     title: ${Q4_APP} unreachable through the ingress
@@ -212,16 +208,15 @@ tasks:
         expect: { equals: "api.${Q4_NS}.lab" }
         weight: 1
       - id: q4-spec-backend
-        description: Deployment and Service ${Q4_APP} match the spec
+        description: Deployment and Service ${Q4_APP} are unchanged
         type: kubectl
         run: echo $(kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q4_NS} get svc ${Q4_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
         expect: { equals: "2 ${Q4_APP} ${Q4_APP} 80" }
         weight: 1
     hints:
       - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
-      - "kubectl -n ${Q4_NS} describe ingress ${Q4_APP}: check the class, the path and the backend Service and port against kubectl -n ${Q4_NS} get svc ${Q4_APP}."
-      - "kubectl -n ${Q4_NS} describe httproute ${Q4_APP}: the Accepted and ResolvedRefs conditions under Status say why a route is not used."
-      - kubectl get ingressclass,gatewayclass and kubectl -n traefik get gateway traefik-gateway -o yaml show the class names and listener names that exist.
+      - "kubectl -n ${Q4_NS} describe ingress ${Q4_APP} and kubectl -n ${Q4_NS} describe httproute ${Q4_APP}: read the Status conditions and the Events, then compare every name, host, path and port with what really exists."
+      - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
   - id: q5
     title: Unhealthy worker
     points: 6
@@ -273,10 +268,11 @@ tasks:
         weight: 1
         retrySeconds: 90
     hints:
-      - "kubectl get nodes, then kubectl describe node <node>: look at Conditions, Taints and Unschedulable."
+      - "kubectl get nodes, then kubectl describe node <node>: Conditions, Taints and Unschedulable tell you whether the node is down or only refuses Pods."
       - kubectl -n ${Q5_NS} get pods -o wide shows which worker is missing its probe Pod.
-      - "On the node: systemctl status kubelet containerd, and journalctl -u kubelet -n 50."
-      - systemctl cat kubelet shows the unit and its drop-ins, including the exact command line.
+      - "On a NotReady node: systemctl status kubelet containerd, then journalctl -u kubelet -n 50 (and -u containerd). Fix one error, restart, and read the log again."
+      - systemctl cat kubelet shows the unit, its drop-ins and the files the kubelet reads. Compare paths and settings with what exists on the node and with a healthy worker.
+      - systemctl is-enabled tells you whether a service comes back after a reboot.
   - id: q6
     title: Control plane after maintenance
     points: 8
@@ -322,7 +318,7 @@ tasks:
         expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
         weight: 1
     hints:
-      - "kubectl get nodes and kubectl -n kube-system get pods: which component is unhealthy? If kubectl itself fails or hangs, the API server or etcd is down."
-      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static pod keeps exiting."
-      - Static pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Compare flags and paths with the files that exist (ls /etc/kubernetes/pki).
-      - "If controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf."
+      - "Start with the symptom: does kubectl answer at all? If it does, kubectl get nodes and kubectl -n kube-system get pods show which component is unhealthy; Pending or missing Pods point at the scheduler or the controller manager."
+      - "Without the API, on controlplane: crictl ps -a, then crictl logs <container-id> shows why a static Pod keeps exiting. journalctl -u kubelet shows Pods the kubelet cannot even start."
+      - Static Pod manifests live in /etc/kubernetes/manifests; the kubelet restarts a component when its manifest changes. Check every flag, path and image against what exists (ls /etc/kubernetes/pki, crictl images).
+      - "If no control plane container runs at all, or controlplane itself is NotReady: systemctl status kubelet, journalctl -u kubelet -n 50, and the paths in /etc/kubernetes/kubelet.conf and /var/lib/kubelet/config.yaml."
