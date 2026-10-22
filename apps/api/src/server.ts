@@ -33,7 +33,7 @@ app.setErrorHandler((err: FastifyError | OrchestratorError, req, reply) => {
 await app.register(fastifyWebsocket);
 const VITE_PORT = 5173;
 const allowedOrigins = [...new Set([HOST, '127.0.0.1', 'localhost'].flatMap((h) => [`http://${h}:${PORT}`, `http://${h}:${VITE_PORT}`]))];
-registerTerminal(app, { sessions, log, driverName: orch.driver.name, allowedOrigins });
+registerTerminal(app, { sessions, log, driverName: orch.driver.name, allowedOrigins, localShell: (id) => orch.floci.localShell(id) });
 registerStudio(app, { studio: new Studio(library), library, sessions, driver: orch.driver, log, allowedOrigins });
 
 function summaries(): ScenarioSummary[] {
@@ -44,6 +44,8 @@ function summaries(): ScenarioSummary[] {
 app.get('/api/health', async () => ({ ok: true, driver: orch.driver.name }));
 
 app.get('/api/images', async () => orch.driver.listBaseImages());
+
+app.get('/api/aws/status', async () => orch.floci.status());
 
 app.get<{
   Querystring: {

@@ -1,0 +1,66 @@
+id: aws-s3-lifecycle
+title: Cut storage costs with S3 lifecycle rules
+track: aws
+domain: cost-optimized-architectures
+difficulty: 2
+estimatedMinutes: 12
+points: 8
+tags: [s3, lifecycle, storage-classes, glacier, versioning]
+base: floci
+settleSeconds: 5
+variables:
+  SUFFIX: { random: 6 }
+  IA_DAYS: { oneOf: [30, 45, 60] }
+  GLACIER_DAYS: { oneOf: [90, 120, 180] }
+  EXPIRE_DAYS: { oneOf: [365, 730] }
+setup:
+  - script: setup/bucket.sh
+tasks:
+  - id: q1
+    title: Tier and expire the logs
+    points: 5
+    checks:
+      - id: q1-rule
+        description: Rule logs-tiering is enabled for the prefix logs/
+        type: aws
+        run: |
+          aws s3api get-bucket-lifecycle-configuration --bucket logs-${SUFFIX} \
+            --query "Rules[?ID=='logs-tiering']|[0].[Status,Filter.Prefix || Prefix]" --output text 2>&1 | xargs
+        expect: { equals: "Enabled logs/" }
+      - id: q1-transitions
+        description: Logs move to Standard-IA after ${IA_DAYS} days and to Glacier Flexible Retrieval after ${GLACIER_DAYS}
+        type: aws
+        weight: 2
+        run: |
+          aws s3api get-bucket-lifecycle-configuration --bucket logs-${SUFFIX} \
+            --query "Rules[?ID=='logs-tiering']|[0].sort_by(Transitions,&Days)[].[StorageClass,Days]" --output text 2>&1 | xargs
+        expect: { equals: "STANDARD_IA ${IA_DAYS} GLACIER ${GLACIER_DAYS}" }
+      - id: q1-expiration
+        description: Logs are deleted after ${EXPIRE_DAYS} days
+        type: aws
+        weight: 2
+        run: aws s3api get-bucket-lifecycle-configuration --bucket logs-${SUFFIX} --query "Rules[?ID=='logs-tiering']|[0].Expiration.Days" --output text 2>&1
+        expect: { equals: "${EXPIRE_DAYS}" }
+    hints:
+      - "Standard-IA needs objects to be at least 30 days old; Glacier Flexible Retrieval is the storage class GLACIER."
+      - "Write the configuration as JSON and apply it with aws s3api put-bucket-lifecycle-configuration --bucket ... --lifecycle-configuration file://lifecycle.json"
+  - id: q2
+    title: Clean up what nobody sees
+    points: 3
+    checks:
+      - id: q2-noncurrent
+        description: Rule cleanup deletes noncurrent versions 30 days after they are replaced, across the whole bucket
+        type: aws
+        weight: 2
+        run: |
+          aws s3api get-bucket-lifecycle-configuration --bucket logs-${SUFFIX} \
+            --query "Rules[?ID=='cleanup']|[0].[Status,Filter.Prefix || Prefix || 'whole-bucket',NoncurrentVersionExpiration.NoncurrentDays]" --output text 2>&1 | xargs
+        expect: { equals: "Enabled whole-bucket 30" }
+      - id: q2-multipart
+        description: Rule cleanup aborts multipart uploads left incomplete for 7 days
+        type: aws
+        run: aws s3api get-bucket-lifecycle-configuration --bucket logs-${SUFFIX} --query "Rules[?ID=='cleanup']|[0].AbortIncompleteMultipartUpload.DaysAfterInitiation" --output text 2>&1
+        expect: { equals: "7" }
+    hints:
+      - "put-bucket-lifecycle-configuration replaces the whole configuration: send logs-tiering and cleanup together, or the second call deletes the first rule."
+      - "An empty filter, \"Filter\": {}, applies a rule to every object in the bucket."

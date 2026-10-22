@@ -1,0 +1,60 @@
+## Solution
+
+### Question 1: Right-size ${Q1_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: "${Q1_NAME}-vpa"
+  namespace: "${Q1_NS}"
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: "${Q1_NAME}"
+  updatePolicy:
+    updateMode: "${Q1_MODE}"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: web
+        controlledResources:
+          - cpu
+        controlledValues: RequestsOnly
+EOF
+kubectl -n "${Q1_NS}" get vpa "${Q1_NAME}-vpa" -o json \
+  | jq --arg mem "${Q1_CAP_MEM}" '.spec.resourcePolicy.containerPolicies |= ((. // []) as $p | if any($p[]; .containerName == "web") then $p | map(if .containerName == "web" then .maxAllowed.memory = $mem else . end) else $p + [{"containerName": "web", "maxAllowed": {"memory": $mem}}] end)' \
+  | kubectl replace -f -
+```
+
+### Question 2: Right-size ${Q2_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: "${Q2_NAME}-vpa"
+  namespace: "${Q2_NS}"
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: "${Q2_NAME}"
+  updatePolicy:
+    updateMode: "${Q2_MODE}"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: web
+        controlledValues: RequestsOnly
+        controlledResources:
+          - cpu
+        minAllowed:
+          cpu: "${Q2_BOUNDS_MINCPU}"
+        maxAllowed:
+          memory: "${Q2_BOUNDS_MAXMEM}"
+EOF
+new=Recreate; [[ "${Q2_MODE}" == Recreate ]] && new=Initial
+kubectl -n "${Q2_NS}" patch vpa "${Q2_NAME}-vpa" --type=merge -p "{\"spec\":{\"updatePolicy\":{\"updateMode\":\"$new\"}}}"
+```

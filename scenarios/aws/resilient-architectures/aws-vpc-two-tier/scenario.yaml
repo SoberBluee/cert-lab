@@ -1,0 +1,122 @@
+id: aws-vpc-two-tier
+title: Two-tier VPC across two Availability Zones
+track: aws
+domain: resilient-architectures
+difficulty: 2
+estimatedMinutes: 20
+points: 14
+tags: [vpc, subnets, internet-gateway, nat-gateway, route-tables, multi-az]
+base: floci
+settleSeconds: 5
+variables:
+  NET: { oneOf: ['10.10', '10.20', '10.42', '172.20'] }
+  VPC_NAME: { oneOf: [shop-vpc, orders-vpc, media-vpc] }
+tasks:
+  - id: q1
+    title: VPC and subnets
+    points: 6
+    checks:
+      - id: q1-vpc-cidr
+        description: VPC ${VPC_NAME} has the CIDR ${NET}.0.0/16
+        type: aws
+        run: aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].CidrBlock' --output text
+        expect: { equals: "${NET}.0.0/16" }
+      - id: q1-dns-hostnames
+        description: DNS hostnames are enabled in ${VPC_NAME}
+        type: aws
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          aws ec2 describe-vpc-attribute --vpc-id "$vpc" --attribute enableDnsHostnames --query EnableDnsHostnames.Value --output text 2>&1
+        expect: { equals: "True" }
+      - id: q1-public-subnets
+        description: public-a (${NET}.1.0/24) is in us-east-1a and public-b (${NET}.2.0/24) in us-east-1b
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          aws ec2 describe-subnets --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=public-a,public-b \
+            --query 'sort_by(Subnets,&AvailabilityZone)[].[Tags[?Key==`Name`]|[0].Value,AvailabilityZone,CidrBlock]' --output text | xargs
+        expect: { equals: "public-a us-east-1a ${NET}.1.0/24 public-b us-east-1b ${NET}.2.0/24" }
+      - id: q1-private-subnets
+        description: private-a (${NET}.11.0/24) is in us-east-1a and private-b (${NET}.12.0/24) in us-east-1b
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          aws ec2 describe-subnets --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=private-a,private-b \
+            --query 'sort_by(Subnets,&AvailabilityZone)[].[Tags[?Key==`Name`]|[0].Value,AvailabilityZone,CidrBlock]' --output text | xargs
+        expect: { equals: "private-a us-east-1a ${NET}.11.0/24 private-b us-east-1b ${NET}.12.0/24" }
+    hints:
+      - "aws ec2 create-vpc --cidr-block ... --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=...}]' names the VPC as it is created."
+      - "DNS hostnames is a VPC attribute: aws ec2 modify-vpc-attribute --vpc-id ... --enable-dns-hostnames '{\"Value\":true}'"
+      - "Subnets take --availability-zone us-east-1a or us-east-1b, and a Name tag the same way as the VPC."
+  - id: q2
+    title: Internet access for the public subnets
+    points: 4
+    checks:
+      - id: q2-igw
+        description: Internet gateway ${VPC_NAME}-igw is attached to ${VPC_NAME}
+        type: aws
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          aws ec2 describe-internet-gateways --filters Name=attachment.vpc-id,Values=$vpc \
+            --query 'InternetGateways[0].Tags[?Key==`Name`]|[0].Value' --output text
+        expect: { equals: "${VPC_NAME}-igw" }
+      - id: q2-public-routes
+        description: public-a and public-b send 0.0.0.0/0 to the internet gateway
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          igw=$(aws ec2 describe-internet-gateways --filters Name=attachment.vpc-id,Values=$vpc --query 'InternetGateways[0].InternetGatewayId' --output text)
+          for n in public-a public-b; do
+            s=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=$n --query 'Subnets[0].SubnetId' --output text)
+            t=$(aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=$s \
+              --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].GatewayId|[0]" --output text)
+            if [ "$igw" != None ] && [ "$t" = "$igw" ]; then echo "$n:igw"; else echo "$n:$t"; fi
+          done | xargs
+        expect: { equals: "public-a:igw public-b:igw" }
+      - id: q2-public-ips
+        description: Instances launched in public-a and public-b get a public IPv4 address
+        type: aws
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          aws ec2 describe-subnets --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=public-a,public-b \
+            --query 'sort_by(Subnets,&AvailabilityZone)[].MapPublicIpOnLaunch' --output text | xargs
+        expect: { equals: "True True" }
+    hints:
+      - "An internet gateway does nothing until it is attached: aws ec2 attach-internet-gateway."
+      - "A subnet is public because its route table sends 0.0.0.0/0 to an internet gateway: create-route-table, create-route, associate-route-table."
+      - "aws ec2 modify-subnet-attribute --subnet-id ... --map-public-ip-on-launch"
+  - id: q3
+    title: Outbound-only internet for the private subnets
+    points: 4
+    checks:
+      - id: q3-nat
+        description: A NAT gateway in ${VPC_NAME} sits in public-a
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          pa=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=public-a --query 'Subnets[0].SubnetId' --output text)
+          s=$(aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=$vpc Name=state,Values=pending,available --query 'NatGateways[0].SubnetId' --output text)
+          if [ "$s" != None ] && [ "$s" = "$pa" ]; then echo "nat in public-a"; else echo "nat in $s"; fi
+        expect: { equals: "nat in public-a" }
+      - id: q3-private-routes
+        description: private-a and private-b send 0.0.0.0/0 to the NAT gateway, not the internet gateway
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=${VPC_NAME} --query 'Vpcs[0].VpcId' --output text)
+          nat=$(aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=$vpc Name=state,Values=pending,available --query 'NatGateways[0].NatGatewayId' --output text)
+          for n in private-a private-b; do
+            s=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=$n --query 'Subnets[0].SubnetId' --output text)
+            t=$(aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=$s \
+              --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].[NatGatewayId,GatewayId]|[0]" --output text | xargs)
+            if [ "$nat" != None ] && [ "$t" = "$nat None" ]; then echo "$n:nat"; else echo "$n:${t:-no-route}"; fi
+          done | xargs
+        expect: { equals: "private-a:nat private-b:nat" }
+    hints:
+      - "A NAT gateway needs an Elastic IP (aws ec2 allocate-address --domain vpc) and must sit in a public subnet."
+      - "Give the private subnets their own route table whose default route uses --nat-gateway-id."
+      - "Describe NAT gateways with --filter (singular): aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=..."

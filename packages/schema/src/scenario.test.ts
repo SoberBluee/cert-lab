@@ -127,3 +127,26 @@ describe('ScenarioSchema variables', () => {
     assert.notDeepEqual(errors({ ...base, variables: { E: { oneOf: [] } }, checks: [check('a')] }), []);
   });
 });
+
+describe('ScenarioSchema aws track', () => {
+  const aws = { ...base, track: 'aws', domain: 'secure-architectures', base: 'floci' };
+  const awsCheck = (id: string) => ({ id, description: id, type: 'aws', run: 'aws sts get-caller-identity', expect: { exitCode: 0 } });
+
+  it('accepts aws checks and steps without a node', () => {
+    const s = ScenarioSchema.parse({ ...aws, setup: [{ run: 'aws s3 mb s3://x' }], checks: [awsCheck('a')] });
+    assert.equal(s.setup[0].node, 'controlplane');
+    assert.equal(scenarioTasks(s)[0].checks[0].type, 'aws');
+  });
+
+  it('keeps the aws track, the floci base and the SAA domains together', () => {
+    assert.match(errors({ ...aws, base: 'cluster', checks: [awsCheck('a')] }).join(), /aws scenarios use base "floci"/);
+    assert.match(errors({ ...aws, domain: 'workloads', checks: [awsCheck('a')] }).join(), /aws scenarios use one of the domains/);
+    assert.match(errors({ ...base, base: 'floci', checks: [check('a')] }).join(), /only for the aws track/);
+    assert.match(errors({ ...base, domain: 'secure-architectures', checks: [check('a')] }).join(), /only for the aws track/);
+  });
+
+  it('allows no cluster checks in aws scenarios and no aws checks elsewhere', () => {
+    assert.match(errors({ ...aws, checks: [check('k')] }).join(), /aws scenarios have no cluster/);
+    assert.match(errors({ ...base, checks: [awsCheck('a')] }).join(), /"aws" checks are only for the aws track/);
+  });
+});

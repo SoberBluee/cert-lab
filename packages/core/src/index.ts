@@ -10,6 +10,7 @@ export * from './paths';
 export * from './playground';
 export * from './quick';
 export * from './quizzes';
+export * from './routing';
 export * from './recipes';
 export * from './scaffold';
 export * from './scenarios';

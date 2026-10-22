@@ -1,11 +1,13 @@
 import { z } from 'zod';
-import { BASES, DOMAINS, LESSON_TRACKS } from './constants';
+import { AWS_DOMAINS, BASES, DOMAINS, LESSON_TRACKS } from './constants';
 import { VAR_NAME } from './vars';
 
-export { BASES, DOMAINS };
+export { AWS_DOMAINS, BASES, DOMAINS };
 
-export const DomainSchema = z.enum(DOMAINS);
+export const DomainSchema = z.enum([...DOMAINS, ...AWS_DOMAINS]);
 export type Domain = z.infer<typeof DomainSchema>;
+export type CkaDomain = (typeof DOMAINS)[number];
+export type AwsDomain = (typeof AWS_DOMAINS)[number];
 
 export const BaseSchema = z.enum(BASES);
 export type Base = z.infer<typeof BaseSchema>;
@@ -78,6 +80,14 @@ export const ScriptCheckSchema = z.strictObject({
   expect: ExpectSchema.optional(),
 });
 
+/** An AWS CLI command (or any shell) run on the host against the session's Floci account. */
+export const AwsCheckSchema = z.strictObject({
+  ...checkBase,
+  type: z.literal('aws'),
+  run: z.string().min(1),
+  expect: ExpectSchema,
+});
+
 export const FileCheckSchema = z.strictObject({
   ...checkBase,
   type: z.literal('file'),
@@ -92,13 +102,14 @@ export const FileCheckSchema = z.strictObject({
     .optional(),
 });
 
-export const CheckSchema = z.discriminatedUnion('type', [KubectlCheckSchema, SshCheckSchema, ScriptCheckSchema, FileCheckSchema]);
+export const CheckSchema = z.discriminatedUnion('type', [KubectlCheckSchema, SshCheckSchema, ScriptCheckSchema, FileCheckSchema, AwsCheckSchema]);
 export type Check = z.infer<typeof CheckSchema>;
 export type CheckType = Check['type'];
 
 export const StepSchema = z
   .strictObject({
-    node: NodeNameSchema,
+    /** aws scenarios have no nodes; their steps run on the host whatever this says. */
+    node: NodeNameSchema.default('controlplane'),
     script: z.string().min(1).optional(),
     run: z.string().min(1).optional(),
     timeoutSeconds: z.number().positive().max(1800).default(300),
@@ -234,6 +245,22 @@ export const ScenarioSchema = z
     for (const [c, path] of allChecks) {
       if (seen.has(c.id)) ctx.addIssue({ code: 'custom', message: `duplicate check id "${c.id}"`, path: [...path, 'id'] });
       seen.add(c.id);
+    }
+    const aws = s.track === 'aws';
+    if (aws !== (s.base === 'floci')) {
+      ctx.addIssue({ code: 'custom', message: aws ? 'aws scenarios use base "floci"' : 'base "floci" is only for the aws track', path: ['base'] });
+    }
+    if (aws !== (AWS_DOMAINS as readonly string[]).includes(s.domain)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: aws ? `aws scenarios use one of the domains ${AWS_DOMAINS.join(', ')}` : `domain "${s.domain}" is only for the aws track`,
+        path: ['domain'],
+      });
+    }
+    for (const [c, path] of allChecks) {
+      if (aws ? c.type === 'kubectl' || c.type === 'ssh' : c.type === 'aws') {
+        ctx.addIssue({ code: 'custom', message: aws ? `aws scenarios have no cluster; use an "aws" or "script" check` : '"aws" checks are only for the aws track', path: [...path, 'type'] });
+      }
     }
     s.tasks?.forEach((t, ti) => {
       if (!t.variant || !t.variants) return;

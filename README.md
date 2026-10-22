@@ -24,6 +24,7 @@ See [docs/setup.md](docs/setup.md) for installation and [docs/authoring.md](docs
 - [Focus](#focus)
 - [Scenario Studio](#scenario-studio)
 - [Recipe catalog](#recipe-catalog)
+- [AWS Labs](#aws-labs)
 - [Command line](#command-line)
 - [Architecture](#architecture)
 - [Development](#development)
@@ -339,6 +340,21 @@ Each category has a pool of faults, and one is injected at random on every start
 | **Controllers and scheduler** (9) | - | Symptom only: the scheduler and controller manager faults of Control plane, with the API server up |
 | **Dynamic provisioning** (5) | - | Provisioner typo, claim without a class and no default, ReadWriteOncePod claim taken, hostPath type Directory missing, claim only in another namespace |
 | **Gateway across namespaces** (3) | - | Listener `allowedRoutes: Same`, missing ReferenceGrant, listener hostname mismatch |
+
+---
+
+## AWS Labs
+
+The AWS section (switch to it from the logo menu, or open `/aws`) has scenarios for the **AWS Solutions Architect Associate (SAA-C03)** exam, grouped by its four domains. You solve them with the AWS CLI, in the browser terminal or your own, against [Floci](https://github.com/floci-io/floci), an AWS emulator running in Docker on your machine. No AWS account is involved and nothing is billed.
+
+| Domain | Scenarios |
+| --- | --- |
+| Secure architectures | Lock down security groups for three tiers; protect S3 data (Block Public Access, SSE-KMS, versioning, TLS only); a least-privilege IAM role for EC2 |
+| Resilient architectures | A two-tier VPC across two AZs with NAT; Multi-AZ RDS MySQL; SNS to SQS fan-out with a dead-letter queue |
+| High-performing architectures | An Application Load Balancer and Auto Scaling group with target tracking; a DynamoDB table and index modelled on its access patterns |
+| Cost-optimized architectures | S3 lifecycle tiering and cleanup; gateway VPC endpoints instead of NAT traffic |
+
+Every attempt runs in a fresh, empty AWS account on Floci, so a lab is ready in seconds, and checks read the resulting AWS configuration with the CLI. Practice and exam mode, hints, solutions, History and the `./cka` commands work as they do for the Kubernetes scenarios. Setup and Floci's limits are in [docs/setup.md](docs/setup.md#aws-labs-floci); writing AWS scenarios is in [docs/authoring.md](docs/authoring.md#aws-scenarios).
 
 ---
 

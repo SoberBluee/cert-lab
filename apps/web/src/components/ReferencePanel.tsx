@@ -47,27 +47,68 @@ const LINKS: [string, [string, string][]][] = [
   ],
 ];
 
-/** Links only to kubernetes.io, matching what the exam allows. */
-export function ReferencePanel() {
+const CLI = 'https://awscli.amazonaws.com/v2/documentation/api/latest/reference';
+
+const AWS_LINKS: [string, [string, string][]][] = [
+  [
+    'AWS CLI',
+    [
+      ['Command reference', `${CLI}/index.html`],
+      ['Filter output with --query', 'https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-filter.html'],
+    ],
+  ],
+  [
+    'Networking and compute',
+    [
+      ['ec2 (VPCs, subnets, security groups)', `${CLI}/ec2/index.html`],
+      ['elbv2', `${CLI}/elbv2/index.html`],
+      ['autoscaling', `${CLI}/autoscaling/index.html`],
+    ],
+  ],
+  [
+    'Data and security',
+    [
+      ['s3api', `${CLI}/s3api/index.html`],
+      ['rds', `${CLI}/rds/index.html`],
+      ['dynamodb', `${CLI}/dynamodb/index.html`],
+      ['iam', `${CLI}/iam/index.html`],
+      ['kms', `${CLI}/kms/index.html`],
+    ],
+  ],
+  [
+    'Messaging',
+    [
+      ['sns', `${CLI}/sns/index.html`],
+      ['sqs', `${CLI}/sqs/index.html`],
+    ],
+  ],
+];
+
+/** Links only to kubernetes.io, matching what the exam allows; AWS sessions get the AWS documentation. */
+export function ReferencePanel({ aws = false }: { aws?: boolean }) {
   const [q, setQ] = useState('');
+  const groups = aws ? AWS_LINKS : LINKS;
+  const search = aws
+    ? `https://docs.aws.amazon.com/search/doc-search.html?searchPath=documentation&searchQuery=`
+    : 'https://kubernetes.io/search/?q=';
   return (
     <Card title="Docs">
       <form
         className="mb-3"
         onSubmit={(e) => {
           e.preventDefault();
-          if (q.trim()) window.open(`https://kubernetes.io/search/?q=${encodeURIComponent(q.trim())}`, '_blank', 'noopener');
+          if (q.trim()) window.open(`${search}${encodeURIComponent(q.trim())}`, '_blank', 'noopener');
         }}
       >
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search kubernetes.io"
+          placeholder={aws ? 'Search docs.aws.amazon.com' : 'Search kubernetes.io'}
           className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-sm placeholder:text-zinc-600"
         />
       </form>
       <div className="space-y-3">
-        {LINKS.map(([group, links]) => (
+        {groups.map(([group, links]) => (
           <div key={group}>
             <div className="mb-1 text-xs text-zinc-500">{group}</div>
             <ul className="space-y-0.5">

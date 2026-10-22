@@ -1,0 +1,100 @@
+id: aws-s3-data-protection
+title: Protect sensitive data in S3
+track: aws
+domain: secure-architectures
+difficulty: 2
+estimatedMinutes: 15
+points: 12
+tags: [s3, block-public-access, kms, encryption, versioning, bucket-policy]
+base: floci
+settleSeconds: 5
+variables:
+  SUFFIX: { random: 6 }
+  KEY_ALIAS: { oneOf: [alias/records, alias/patient-data, alias/finance-data] }
+setup:
+  - script: setup/bucket.sh
+tasks:
+  - id: q1
+    title: Close public access
+    points: 4
+    checks:
+      - id: q1-block-public-access
+        description: All four Block Public Access settings are on for records-${SUFFIX}
+        type: aws
+        weight: 2
+        run: |
+          aws s3api get-public-access-block --bucket records-${SUFFIX} \
+            --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' --output text 2>&1 | xargs
+        expect: { equals: "True True True True" }
+      - id: q1-acl
+        description: The bucket ACL grants nothing to everyone (AllUsers)
+        type: aws
+        weight: 2
+        run: |
+          aws s3api get-bucket-acl --bucket records-${SUFFIX} \
+            --query "length(Grants[?Grantee.URI=='http://acs.amazonaws.com/groups/global/AllUsers'])" --output text 2>&1
+        expect: { equals: "0" }
+    hints:
+      - "aws s3api put-public-access-block --bucket ... --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+      - "Block Public Access stops public ACLs from taking effect, but the grant is still there; reset it with aws s3api put-bucket-acl --acl private."
+  - id: q2
+    title: Encrypt with your own KMS key
+    points: 4
+    checks:
+      - id: q2-key-rotation
+        description: The KMS key ${KEY_ALIAS} rotates automatically
+        type: aws
+        run: aws kms get-key-rotation-status --key-id ${KEY_ALIAS} --query KeyRotationEnabled --output text 2>&1
+        expect: { equals: "True" }
+      - id: q2-sse-kms
+        description: records-${SUFFIX} encrypts new objects with SSE-KMS using ${KEY_ALIAS}
+        type: aws
+        weight: 2
+        run: |
+          read -r algo key <<<"$(aws s3api get-bucket-encryption --bucket records-${SUFFIX} \
+            --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.[SSEAlgorithm,KMSMasterKeyID]' --output text 2>&1)"
+          want=$(aws kms describe-key --key-id ${KEY_ALIAS} --query KeyMetadata.KeyId --output text 2>/dev/null)
+          got=$(aws kms describe-key --key-id "$key" --query KeyMetadata.KeyId --output text 2>/dev/null)
+          if [ -n "$want" ] && [ "$got" = "$want" ]; then echo "$algo ${KEY_ALIAS}"; else echo "$algo $key"; fi
+        expect: { equals: "aws:kms ${KEY_ALIAS}" }
+      - id: q2-bucket-key
+        description: S3 Bucket Keys are enabled, to cut the number of KMS requests
+        type: aws
+        run: aws s3api get-bucket-encryption --bucket records-${SUFFIX} --query 'ServerSideEncryptionConfiguration.Rules[0].BucketKeyEnabled' --output text 2>&1
+        expect: { equals: "True" }
+    hints:
+      - "aws kms create-key returns the key id; aws kms create-alias --alias-name ${KEY_ALIAS} --target-key-id <id> names it; aws kms enable-key-rotation --key-id <id>."
+      - "aws s3api put-bucket-encryption --bucket ... --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\",\"KMSMasterKeyID\":\"...\"},\"BucketKeyEnabled\":true}]}'"
+  - id: q3
+    title: Versioning and TLS only
+    points: 4
+    checks:
+      - id: q3-versioning
+        description: Versioning is enabled on records-${SUFFIX}
+        type: aws
+        weight: 2
+        run: aws s3api get-bucket-versioning --bucket records-${SUFFIX} --query Status --output text 2>&1
+        expect: { equals: "Enabled" }
+      - id: q3-tls-only
+        description: The bucket policy denies every request to the bucket and its objects that does not use TLS
+        type: aws
+        weight: 2
+        run: |
+          aws s3api get-bucket-policy --bucket records-${SUFFIX} --query Policy --output text 2>&1 | python3 -c 'import json, sys
+          bucket = "arn:aws:s3:::" + sys.argv[1]
+          t = sys.stdin.read().strip()
+          doc = json.loads(t) if t.startswith("{") else {}
+          stmts = doc.get("Statement", [])
+          stmts = stmts if isinstance(stmts, list) else [stmts]
+          def listify(v): return v if isinstance(v, list) else [v]
+          covered = set()
+          for s in stmts:
+              if s.get("Effect") != "Deny" or s.get("Principal") not in ("*", {"AWS": "*"}): continue
+              if not set(listify(s.get("Action", []))) & {"s3:*", "*"}: continue
+              tls = [v for c in s.get("Condition", {}).values() for k, v in c.items() if k.lower() == "aws:securetransport"]
+              if any(str(v).lower() == "false" for v in tls): covered |= set(listify(s.get("Resource", [])))
+          print("tls-only" if {bucket, bucket + "/*"} <= covered else "requests without TLS are not denied for " + " and ".join(sorted({bucket, bucket + "/*"} - covered)))' records-${SUFFIX}
+        expect: { equals: "tls-only" }
+    hints:
+      - "One Deny statement with Principal \"*\", Action \"s3:*\", Resource [the bucket ARN, the bucket ARN + \"/*\"] and Condition {\"Bool\": {\"aws:SecureTransport\": \"false\"}}."
+      - "Write the policy to a file and pass --policy file://policy.json."

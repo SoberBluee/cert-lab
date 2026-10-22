@@ -1,0 +1,28 @@
+## Solution
+
+### Question 1: Right-size ${Q1_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: "${Q1_NAME}-vpa"
+  namespace: "${Q1_NS}"
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: "${Q1_NAME}"
+  updatePolicy:
+    updateMode: "${Q1_MODE}"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: web
+        controlledValues: RequestsOnly
+      - containerName: log-agent
+        mode: Off
+EOF
+new=Recreate; [[ "${Q1_MODE}" == Recreate ]] && new=Initial
+kubectl -n "${Q1_NS}" patch vpa "${Q1_NAME}-vpa" --type=merge -p "{\"spec\":{\"updatePolicy\":{\"updateMode\":\"$new\"}}}"
+```

@@ -11,6 +11,24 @@ export function ConnectionPanel({ session }: { session: SessionView }) {
       </Card>
     );
   }
+  if (conn.aws) {
+    return (
+      <Card title="Connect">
+        <div className="space-y-3">
+          <CopyField label="AWS CLI from your own terminal" value={conn.aws.exportLine} />
+          <p className="text-xs leading-relaxed text-zinc-500">
+            Every <code className="text-zinc-400">aws</code> command goes to Floci at {conn.aws.endpoint}, in account{' '}
+            <code className="text-zinc-400">{conn.aws.accountId}</code> ({conn.aws.region}). The account is new for this attempt, so
+            it holds only what the scenario set up and what you create. Reset starts another one.
+          </p>
+          <p className="text-xs leading-relaxed text-zinc-500">
+            The terminal on this page is a shell on your machine with that setup and tab completion, in{' '}
+            <code className="break-all text-zinc-400">{conn.aws.workdir}</code>. Credentials in your own ~/.aws are not used.
+          </p>
+        </div>
+      </Card>
+    );
+  }
   return (
     <Card title="Connect">
       <div className="space-y-3">

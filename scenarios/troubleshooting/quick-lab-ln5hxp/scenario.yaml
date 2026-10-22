@@ -1,0 +1,41 @@
+id: quick-lab-ln5hxp
+title: "Quick lab: Resource usage and logs"
+domain: troubleshooting
+difficulty: 1
+estimatedMinutes: 6
+points: 6
+tags: [ kubectl-top, logs, sort-by, metrics-server ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ perf, telemetry, insights, observe, usage, capacity, watchtower, signals, probe-ns, stats ] }
+tasks:
+  - id: q1
+    title: Pods of ${Q1_NS} in order
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-oldest-first
+        description: pods.txt lists every Pod, oldest first
+        run: "[ \"$(grep -oE 'zeta-api|alpha-worker|mid-cache|beta-sync|omega-report' /opt/course/sort/pods.txt 2>/dev/null | xargs)\" = \"$(kubectl -n ${Q1_NS} get pods --sort-by=.metadata.creationTimestamp --no-headers -o custom-columns=N:.metadata.name | xargs)\" ] && echo match || echo differs"
+        expect: { equals: match }
+        weight: 4
+      - type: ssh
+        node: controlplane
+        id: q1-not-running
+        description: not-running.txt lists the Pods that are not Running
+        run: "[ \"$(grep -oE 'zeta-api|alpha-worker|mid-cache|beta-sync|omega-report' /opt/course/sort/not-running.txt 2>/dev/null | sort | xargs)\" = \"$(kubectl -n ${Q1_NS} get pods --field-selector=status.phase!=Running --no-headers -o custom-columns=N:.metadata.name | sort | xargs)\" ] && echo match || echo differs"
+        expect: { equals: match }
+        weight: 2
+    hints:
+      - kubectl get pods --sort-by=<jsonpath> sorts by any field, for example .metadata.creationTimestamp.
+      - -o custom-columns=NAME:.metadata.name --no-headers prints just the names; --field-selector filters on fields such as status.phase.
+    recipe: { builder: observe, parts: [] }

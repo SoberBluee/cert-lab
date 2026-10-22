@@ -231,7 +231,7 @@ export class SessionManager extends EventEmitter {
     try {
       const lesson = this.lessonFor(s.def.id);
       this.store.updateSession(id, { tasksReady: [], preparingTask: undefined, learnProgress: lesson && initialProgress(lesson) });
-      this.progress(id, `Preparing "${s.def.title}" on the ${s.def.base} base`);
+      this.progress(id, s.def.base === 'floci' ? `Preparing "${s.def.title}" on Floci` : `Preparing "${s.def.title}" on the ${s.def.base} base`);
       await this.driver.createSession(s.def.nodes, s.def.base, {
         sessionId: id,
         onProgress: (m) => this.progress(id, m),
@@ -260,7 +260,7 @@ export class SessionManager extends EventEmitter {
   private async runSteps(id: string, s: LoadedScenario, steps: Step[], label: 'setup' | 'solution', vars: Vars) {
     await runBatched(steps, async (step, i) => {
       const what = step.script ?? short(step.run ?? '');
-      this.progress(id, `${label} ${i + 1}/${steps.length} on ${step.node}: ${what}`);
+      this.progress(id, `${label} ${i + 1}/${steps.length}${s.def.base === 'floci' ? '' : ` on ${step.node}`}: ${what}`);
       let command = step.run ?? '';
       if (step.script) {
         const remote = `/tmp/cka-${label}/${i}-${basename(step.script)}`;
