@@ -155,7 +155,7 @@ Viewing the solution marks the attempt as assisted.
 The **Quick lab** bar sits under the filters on the Scenarios tab. It generates a random lab and starts it with one click.
 
 1. Choose **Create**, **Troubleshoot** or **Random**, a category (or **Any**), and how many questions you want (1-20).
-2. Optionally choose **2 faults stacked** or **3 faults stacked**, and tick **Per-question contexts**.
+2. Optionally choose how many faults each troubleshooting question stacks (**Exam mix**, **2** or **3**), and tick **Per-question contexts**.
 3. Press **Start**. The lab is generated from the [recipe catalog](#recipe-catalog), the VMs are provisioned and you go straight to the session.
 
 A category limits every question to one topic, such as Service, Ingress, HTTPRoute / Gateway, Deployment, Nodes, Kubelet, API server, etcd, Scheduler, Kustomize or Cluster upgrade. Create topics appear for Create and Random; troubleshoot topics appear for Troubleshoot and Random. **Any** keeps the mix below. A create topic such as Ingress asks only for that add-on. A troubleshoot topic such as Kubelet or etcd rolls only the matching fault subset.
@@ -165,11 +165,15 @@ How each kind is built:
 - **Troubleshoot** labs pick random fault categories with every fault in the category's pool, so the injected fault is a surprise on every start.
 - **Random** labs mix both kinds. Each lab has at most one question that can take down the API server.
 
-**Stacked faults.** Categories with layers (Services, DNS, NetworkPolicy, Nodes, Control plane, RBAC, Storage and others; see the [table](#troubleshooting-categories)) can break two or three separate things in one question, one from each layer, for example the Service, the backend Pods and a NetworkPolicy. The faults are injected and fixed in dependency order, the task says there may be more than one problem, and the solution walks through each. Categories without layers stay single.
+Without a category, the questions are drawn by curriculum weight, as the full mock is: troubleshooting comes up about two and a half times as often as storage. Within that, items you have not seen lately come first.
+
+**Stacked faults.** Categories with layers (Services, DNS, NetworkPolicy, Nodes, Control plane, RBAC, Storage and others; see the [table](#troubleshooting-categories)) can break two or three separate things in one question, one from each layer, for example the Service, the backend Pods and a NetworkPolicy. The faults are injected and fixed in dependency order, the task says there may be more than one problem, and the solution walks through each. Categories without layers stay single. **Exam mix** stacks a second fault in about 40% of the questions and leaves the rest single, the way exam tasks usually have one root cause and sometimes two; keep 3 for killer.sh-style drills.
+
+**Rolled variants.** A few faults roll which flag breaks: the control plane's missing-file faults (one each for the API server, etcd, the scheduler and the controller manager) and API access's certificate fault pick the flag through a hidden variable, so one lesson is drilled with varying evidence. The solution names the flag that was rolled.
 
 **Per-question contexts.** Every question names its own kubeconfig context to switch to, as the exam names a host per task. All of them reach the same lab cluster; the point is the habit of switching before every question.
 
-**Full mock.** The **Full mock** button builds an exam sitting: 17 questions weighted like the CKA curriculum (5 troubleshooting, 4 cluster architecture, 3 services and networking, 3 workloads, 2 storage), a fixed 120-minute timer, a context per question, and always exam mode: no hints, no grading until you submit.
+**Full mock.** The **Full mock** button builds an exam sitting: 17 questions weighted like the CKA curriculum (5 troubleshooting, 4 cluster architecture, 3 services and networking, 3 workloads, 2 storage), a fixed 120-minute timer, a context per question, the exam mix of one or two faults, and always exam mode: no hints, no grading until you submit.
 
 Generated labs are saved as hidden drafts (`quick-lab-xxxxxx`). You can find them again with "Show drafts".
 
@@ -316,30 +320,31 @@ Each category has a pool of faults, and one is injected at random on every start
 
 | Category | Layers | Faults |
 | --- | --- | --- |
-| **Pods** (11) | container, probes, scheduling | OOMKilled, image pull, bad command, `/bin/bash` on busybox, liveness before start, missing ConfigMap key, wrong liveness port, wrong readiness path, requests too large, unsatisfiable nodeSelector, paused rollout with maxSurge 0 |
+| **Pods** (9) | container, startup and readiness, scheduling | Image pull, bad command, `/bin/bash` on an image without it, missing ConfigMap key; init container waiting on a Service in the wrong namespace, wrong readiness path; memory request just above allocatable, unsatisfiable nodeSelector; paused rollout (maxSurge 0 is a red herring) |
 | **Pod configuration** (6) | volumes, security context | Missing ConfigMap volume, wrong Secret item key, wrong mount path, runAsNonRoot conflict, read-only root filesystem, immutable ConfigMap |
-| **Scheduling** (6) | namespace policy, Pod template | Pod quota, limits quota, LimitRange max, node affinity, missing PriorityClass, zone topology spread |
-| **Horizontal Pod Autoscaling** (6) | - | No CPU request, wrong target name, wrong target kind, max of one, metrics-server down, metrics APIService broken |
+| **Scheduling** (5) | other workloads, Pod template | Memory hogs on every worker, required anti-affinity against a node agent; node affinity, missing PriorityClass, zone topology spread |
+| **Horizontal Pod Autoscaling** (7) | autoscaler, metrics pipeline | No CPU request, wrong target name, wrong target kind, max of one; metrics-server down, metrics APIService broken, kubelet TLS flag removed |
 | **Vertical Pod Autoscaling** (6) | - | Recommender down, admission controller down, wrong target, mode Off, container Off, recommender RBAC |
-| **Jobs and CronJobs** (5) | - | Suspended, schedule never fires, deadline exceeded, backoff zero with failing command, bad image registry |
-| **RBAC and ServiceAccounts** (6) | Role, RoleBinding, workload | Missing verb, wrong resource, binding subject in wrong namespace, wrong roleRef, wrong ServiceAccount, token automount off |
-| **Services** (18) | Service, backend Pods, network path | Selector mismatch, targetPort, named port, blocking NetworkPolicy, Pod not ready, extra selector label, wrong Service port, wrong protocol, kube-proxy down, no selector, targetPort typo, Pod label drift, HTTPS readiness probe, readiness port, egress deny, ExternalName, kube-proxy mode, headless |
-| **NetworkPolicy** (15) | DNS egress, frontend egress, API ingress | DNS egress port, namespace selector, Pod selector, UDP only, policy deleted; frontend egress label, port, selector, policy deleted, ipBlock except; ingress port, label, namespace AND Pod selector, Pod selector, ports cleared |
+| **Jobs and CronJobs** (5) | - | Suspended, deadline exceeded, backoff zero with failing command, bad image registry, hung Job under `concurrencyPolicy: Forbid` |
+| **RBAC and ServiceAccounts** (9) | Role, RoleBinding, workload | Missing verb, wrong resource, wrong API group; subject in wrong namespace, wrong roleRef, User instead of ServiceAccount; wrong ServiceAccount, automount off on the account, automount off on the Pod |
+| **Services** (15) | Service, backend Pods, network path | Selector mismatch, extra selector label, no selector, targetPort, wrong Service port, wrong protocol, ExternalName; Pod not ready, HTTPS readiness probe, readiness port, named port; blocking NetworkPolicy, egress deny, kube-proxy kubeconfig, kube-proxy mode |
+| **NetworkPolicy** (15) | DNS egress, frontend egress, API ingress | DNS egress port, namespace selector, Pod selector, UDP only, policy deleted; frontend egress label, port, selector, policy deleted, ipBlock except; ingress port, label, namespace AND Pod selector, Pod selector, port 443 |
 | **DNS** (14) | Corefile, CoreDNS Deployment, kube-dns Service or client | Corefile typo, forwarding loop, cluster domain, hosts plugin, Corefile key; scaled to zero, image, config volume, memory limit, readiness port, RBAC; kube-dns selector and targetPort, client dnsPolicy |
-| **Ingress and HTTPRoute** (17) | Ingress, HTTPRoute | Backend name and port, IngressClass, path, path prefix, host typo, TLS Secret; parentRef, parent namespace, parent group, sectionName, backend name and port, hostname typo, path prefix, weight zero, redirect filter |
-| **Nodes** (15) | runtime or network, kubelet, scheduling | containerd stopped, invalid containerd config, CNI config removed, invalid conflist, IP forwarding; kubelet stopped, binary path, invalid config, client CA, API port, extra args, kubelet.conf missing, swap; cordoned, stray taint |
-| **Storage** (5) | claim, volume, Pod | StorageClass mismatch, access mode mismatch, claim too large, Released PV with a stale claimRef, Pod pinned away from the node that holds the volume |
-| **Worker node configuration** (11) | - | kubelet kubeconfig server, client CA, runtime endpoint, `--config` flag, `--kubeconfig` flag, serving cert, maxPods, evictionHard, cgroupDriver, resolvConf, hairpinMode |
-| **Control plane** (28) | scheduler or controller manager, API server or etcd | apiserver→etcd port/certfile/keyfile/flags, apiserver TLS key, manifest removed, admission plugin, advertise address, SA key; etcd cert/key/CA/client and peer URLs/data-dir/image; scheduler command/kubeconfig/image/manifest/YAML/config; controller-manager kubeconfig/SA key/command; controlplane kubelet client cert, staticPodPath, API port |
-| **API access** (11) | user kubeconfigs, API server | kubeconfig server port/host, wrong CA, current-context, client key, permissions; apiserver client CA, secure port, bind address, broken manifest, TLS cert path |
-| **Admission webhooks** (1) | - | Orphan validating webhook that fails closed |
-| **Node drain** (1) | - | PDB blocks the drain while Pods are pinned |
-| **Restarting Pods** (5) | - | Symptom only: liveness port, liveness path, exec probe, liveness before a slow start, OOMKilled |
-| **Rejected Pods** (6) | - | Symptom only: Pod quota, limits quota, LimitRange max, LimitRange min, Pod Security `restricted`, webhook with a missing Service |
+| **Ingress and HTTPRoute** (17) | Ingress, HTTPRoute, controller | Backend name and port, IngressClass, path, path prefix, host typo; parentRef, parent namespace, sectionName, backend name and port, path prefix, weight zero, redirect filter; Traefik scaled to zero, NodePort moved, IngressClass naming another controller |
+| **Nodes** (14) | runtime or network, kubelet, scheduling | containerd stopped, invalid containerd config, CNI config removed, invalid conflist, IP forwarding; kubelet stopped, binary path, invalid config, API port, extra args, kubelet.conf missing, swap; cordoned, stray taint |
+| **Storage** (7) | claim, volume, Pod | StorageClass mismatch, access mode mismatch, claim too large; Released PV with a stale claimRef, node lost the label the volume requires; Pod pinned away from the volume, wrong claim name |
+| **Worker node configuration** (7) | - | client CA, runtime endpoint, `--config` flag, `--kubeconfig` flag, serving cert, evictionHard, containerd SystemdCgroup |
+| **Control plane** (23) | scheduler or controller manager, API server or etcd | scheduler command/missing file*/image/manifest removed/bad YAML, controller-manager missing file*/command; apiserver→etcd port and flags, apiserver missing file*, admission plugin, authorization mode, liveness and startup probe port, manifest removed, second manifest copy, advertise address; etcd missing file*, client URLs, image, half-finished restore; kubelet staticPodPath; alone: controlplane kubelet client cert and API port |
+| **API access** (9) | user kubeconfigs, API server | kubeconfig server port, stale host, wrong CA, current-context, client key, ubuntu's copy owned by root; apiserver certificate file*, secure port, broken manifest |
+| **Node drain** (6) | PDB, where replicas may run, Pods drain skips | minAvailable = replicas, maxUnavailable 0; replicas pinned to the worker, one-per-node anti-affinity; bare Pod (`--force`), emptyDir (`--delete-emptydir-data`) |
+| **Restarting Pods** (6) | - | Symptom only: liveness port, liveness path, exec probe, liveness before a slow start, nginx config error, OOMKilled |
+| **Rejected Pods** (8) | quotas and limits, admission policy | Symptom only: Pod quota, limits quota, LimitRange max, LimitRange min; Pod Security `restricted`, validating webhook, mutating webhook, webhook selecting Pods by label |
 | **Unschedulable node** (5) | - | Symptom only: cordon, NoSchedule taint, NoExecute taint, lost node label, maxPods 2 |
-| **Controllers and scheduler** (9) | - | Symptom only: the scheduler and controller manager faults of Control plane, with the API server up |
-| **Dynamic provisioning** (5) | - | Provisioner typo, claim without a class and no default, ReadWriteOncePod claim taken, hostPath type Directory missing, claim only in another namespace |
-| **Gateway across namespaces** (3) | - | Listener `allowedRoutes: Same`, missing ReferenceGrant, listener hostname mismatch |
+| **Controllers and scheduler** (7) | - | Symptom only: the scheduler and controller manager faults of Control plane, with the API server up |
+| **Dynamic provisioning** (7) | class and provisioner, claim, Pod | Provisioner typo, provisioner scaled to zero; claim without a class and no default, ReadWriteOncePod claim taken, claim only in another namespace; hostPath type Directory missing, WaitForFirstConsumer claim behind an unschedulable Pod |
+| **Gateway across namespaces** (9) | Gateway, HTTPRoute, ReferenceGrant | `allowedRoutes: Same`, listener hostname, listener port Traefik does not serve, HTTPS listener without its Secret, missing GatewayClass; parentRef without namespace, backendRef without namespace; ReferenceGrant missing, grant for the wrong namespace |
+
+\* rolls which flag points at a missing file.
 
 ---
 

@@ -12,9 +12,11 @@ const scJson = (sc: string, provisioner: string) =>
 const claimJson = (ns: string, name: string, extra: string, mode = 'ReadWriteOnce') =>
   `'{"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"'"${name}"'","namespace":"'"${ns}"'"},"spec":{${extra}"accessModes":["${mode}"],"resources":{"requests":{"storage":"500Mi"}}}}'`;
 
-/** A Pod that mounts claim `claim` at /data, plus any extra volume JSON (starting with a comma). */
-const podJson = (ns: string, name: string, claim: string, extraVolume = '', extraMount = '') =>
-  `'{"apiVersion":"v1","kind":"Pod","metadata":{"name":"'"${name}"'","namespace":"'"${ns}"'"},"spec":{"containers":[{"name":"app","image":"busybox:1.36","command":["sleep","1d"],"volumeMounts":[{"name":"data","mountPath":"${MOUNT}"}${extraMount}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"'"${claim}"'"}}${extraVolume}]}}'`;
+/** A Pod that mounts claim `claim` at /data, plus any extra volume JSON and Pod spec JSON (each starting with a comma). */
+const podJson = (ns: string, name: string, claim: string, extraVolume = '', extraMount = '', extraSpec = '') =>
+  `'{"apiVersion":"v1","kind":"Pod","metadata":{"name":"'"${name}"'","namespace":"'"${ns}"'"},"spec":{"containers":[{"name":"app","image":"busybox:1.36","command":["sleep","1d"],"volumeMounts":[{"name":"data","mountPath":"${MOUNT}"}${extraMount}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"'"${claim}"'"}}${extraVolume}]${extraSpec}}}'`;
+
+const PROVISIONER_DEPLOY = '-n local-path-storage deployment/local-path-provisioner';
 
 const waitRunning = (ns: string, pod: string) => `kubectl -n "${ns}" wait --for=condition=Ready "pod/${pod}" --timeout=180s`;
 
@@ -32,6 +34,11 @@ export const provisioningCategory: FaultCategory = {
   points: 5,
   tags: ['troubleshooting', 'storageclass', 'dynamic-provisioning', 'pvc', 'local-path'],
   settleSeconds: 30,
+  layers: [
+    { name: 'the StorageClass and its provisioner', faults: ['provisioner-typo', 'provisioner-down'] },
+    { name: 'the claim', faults: ['no-class', 'rwop-taken', 'claim-elsewhere'] },
+    { name: 'the Pod', faults: ['hostpath-missing', 'pod-unschedulable'] },
+  ],
   fields: [
     nsField(['assets', 'thumbnails', 'exports', 'imports', 'archive-ns', 'renders', 'logs-ns', 'mail', 'images', 'staging-data']),
     nameField('CLAIM', 'Claim name', ['assets', 'renders', 'exports', 'store', 'blobs', 'cache', 'spool', 'drafts', 'outbox', 'vault'], 'The Pod is <claim>-app and the StorageClass <claim>-local.'),
@@ -52,7 +59,7 @@ kubectl delete storageclass "${CLAIM}-local" --ignore-not-found >/dev/null
 # Faults append assignments here (provisioner=..., class=...), read back after the break: a file,
 # because a layered question runs each fault in its own subshell.
 : > "${state}.prov"`,
-    after: `provisioner=${PROVISIONER} class=yes mode=ReadWriteOnce hostdir= skipclaim=
+    after: `provisioner=${PROVISIONER} class=yes mode=ReadWriteOnce hostdir= skipclaim= nodesel=
 . "${state}.prov"
 kubectl apply -f - <<< ${scJson(`${CLAIM}-local`, `'"$provisioner"'`)} >/dev/null
 extra=''
@@ -63,7 +70,9 @@ if [[ -n "$hostdir" ]]; then
   vol=',{"name":"logs","hostPath":{"path":"'"$hostdir"'","type":"Directory"}}'
   mnt=',{"name":"logs","mountPath":"/logs"}'
 fi
-kubectl apply -f - <<< ${podJson(NS, `${CLAIM}-app`, CLAIM, `'"$vol"'`, `'"$mnt"'`)} >/dev/null
+spec=''
+[[ -z "$nodesel" ]] || spec=',"nodeSelector":{"disktype":"'"$nodesel"'"}'
+kubectl apply -f - <<< ${podJson(NS, `${CLAIM}-app`, CLAIM, `'"$vol"'`, `'"$mnt"'`, `'"$spec"'`)} >/dev/null
 sleep 20
 [[ "$(kubectl -n "${NS}" get pod "${CLAIM}-app" -o jsonpath='{.status.phase}')" != Running ]] || { echo "${CLAIM}-app runs" >&2; exit 1; }`,
     checks: [
@@ -107,7 +116,8 @@ sleep 20
       id: 'provisioner-typo',
       label: 'StorageClass names a provisioner that does not exist',
       break: `echo 'provisioner=rancher.io/localpath' >> "${state}.prov"`,
-      fix: `kubectl -n "${NS}" delete pod "${CLAIM}-app" --wait=true
+      // Every Pod that uses the claim: a claim in use is never deleted.
+      fix: `kubectl -n "${NS}" delete pod --all --wait=true
 kubectl -n "${NS}" delete pvc "${CLAIM}" --wait=true
 kubectl delete storageclass "${CLAIM}-local"
 kubectl apply -f - <<< ${scJson(`${CLAIM}-local`, PROVISIONER)}
@@ -115,6 +125,18 @@ kubectl apply -f - <<< ${claimJson(NS, CLAIM, `"storageClassName":"'"${CLAIM}"'-
 kubectl apply -f - <<< ${podJson(NS, `${CLAIM}-app`, CLAIM)}`,
       wait: waitRunning(NS, `${CLAIM}-app`),
       explain: `StorageClass \`${CLAIM}-local\` names provisioner \`rancher.io/localpath\`. Nothing serves that name, so the claim stays \`Pending\` with "waiting for a volume to be created either by the external provisioner 'rancher.io/localpath'". The provisioner field cannot be changed: re-create the class with \`${PROVISIONER}\` (the name the running provisioner and the built-in \`local-path\` class use), then re-create the claim and the Pod.`,
+    },
+    {
+      id: 'provisioner-down',
+      label: 'The local-path provisioner is scaled to zero',
+      // Every claim of the cluster's local-path classes waits: stage it after other questions.
+      disruptive: true,
+      break: `kubectl scale ${PROVISIONER_DEPLOY} --replicas=0
+kubectl -n local-path-storage wait --for=delete pod -l app=local-path-provisioner --timeout=90s >/dev/null 2>&1 || true`,
+      fix: `kubectl scale ${PROVISIONER_DEPLOY} --replicas=1`,
+      wait: `kubectl rollout status ${PROVISIONER_DEPLOY} --timeout=180s
+${waitRunning(NS, `${CLAIM}-app`)}`,
+      explain: `The class, the claim and the Pod are all right, but Deployment \`local-path-provisioner\` in \`local-path-storage\` has \`0\` replicas, so nobody creates the volume: the claim stays \`Pending\` with "waiting for a volume to be created either by the external provisioner '${PROVISIONER}'", and nothing more happens. The class names who provisions; check that it runs: \`kubectl -n local-path-storage get deploy,pods\`. Scale it back to \`1\`.`,
     },
     {
       id: 'no-class',
@@ -130,12 +152,15 @@ kubectl apply -f - <<< ${podJson(NS, `${CLAIM}-app`, CLAIM)}`,
     {
       id: 'rwop-taken',
       label: 'ReadWriteOncePod claim already used by another Pod',
+      // Another layer may already have broken provisioning: then the backup Pod waits too, which is fine.
       break: `echo 'mode=ReadWriteOncePod' >> "${state}.prov"
+provisioner=${PROVISIONER}
+. "${state}.prov"
 kubectl apply -f - <<< ${claimJson(NS, CLAIM, `"storageClassName":"'"${CLAIM}"'-local",`, 'ReadWriteOncePod')} >/dev/null 2>&1 || true
-kubectl apply -f - <<< ${scJson(`${CLAIM}-local`, PROVISIONER)} >/dev/null
+kubectl apply -f - <<< ${scJson(`${CLAIM}-local`, `'"$provisioner"'`)} >/dev/null
 kubectl apply -f - <<< ${podJson(NS, `${CLAIM}-backup`, CLAIM)}
-${waitRunning(NS, `${CLAIM}-backup`)}`,
-      fix: `kubectl -n "${NS}" delete pod "${CLAIM}-backup" --wait=true`,
+kubectl -n "${NS}" wait --for=condition=Ready "pod/${CLAIM}-backup" --timeout=90s >/dev/null 2>&1 || true`,
+      fix: `kubectl -n "${NS}" delete pod "${CLAIM}-backup" --ignore-not-found --wait=true`,
       wait: waitRunning(NS, `${CLAIM}-app`),
       explain: `The claim's access mode is \`ReadWriteOncePod\`: only one Pod in the whole cluster may use it, and Pod \`${CLAIM}-backup\` already does. \`${CLAIM}-app\` stays \`Pending\`; the scheduler says "node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode". Remove \`${CLAIM}-backup\` (a leftover), or re-create the claim with \`ReadWriteOnce\` if both Pods must share it on one node.`,
     },
@@ -159,6 +184,15 @@ kubectl apply -f - <<< ${claimJson(NS, CLAIM, `"storageClassName":"'"${CLAIM}"'-
 kubectl apply -f - <<< ${podJson(NS, `${CLAIM}-app`, CLAIM)}`,
       wait: waitRunning(NS, `${CLAIM}-app`),
       explain: `Claim \`${CLAIM}\` was created in namespace \`${NS}-shared\`, not \`${NS}\`. A Pod can only use claims of its own namespace, so \`${CLAIM}-app\` stays \`Pending\` with "persistentvolumeclaim \\"${CLAIM}\\" not found". A claim cannot be moved: create \`${CLAIM}\` in \`${NS}\` (the volume behind the other claim stays there), then re-create the Pod.`,
+    },
+    {
+      id: 'pod-unschedulable',
+      label: 'WaitForFirstConsumer claim waits for a Pod that cannot be scheduled',
+      break: `echo 'nodesel=ssd' >> "${state}.prov"`,
+      fix: `kubectl -n "${NS}" delete pod "${CLAIM}-app" --wait=true
+kubectl apply -f - <<< ${podJson(NS, `${CLAIM}-app`, CLAIM)}`,
+      wait: waitRunning(NS, `${CLAIM}-app`),
+      explain: `The claim looks like the problem: it stays \`Pending\` with "waiting for first consumer to be created before binding". But that is \`WaitForFirstConsumer\` working as designed: the volume is created on the node where its first Pod is scheduled, and the Pod is never scheduled, because its \`nodeSelector: disktype=ssd\` matches no node ("didn't match Pod's node affinity/selector" in \`kubectl -n ${NS} describe pod ${CLAIM}-app\`). Re-create the Pod without the nodeSelector; the claim then binds.`,
     },
   ],
 };

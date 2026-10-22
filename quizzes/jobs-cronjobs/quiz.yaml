@@ -1,0 +1,393 @@
+id: jobs-cronjobs
+title: "Jobs and CronJobs: pick what does exactly that"
+summary: A situation and five options. Choose the field, schedule or command that does exactly what is asked, the way exam tasks are worded. Covers restart policies, completions and parallelism, retries and deadlines, clean-up, schedules, time zones and concurrency.
+track: cka
+topic: quiz-jobs
+estimatedMinutes: 25
+questions:
+  # Jobs: how Pods run and retry
+  - id: retry-same-pod
+    prompt: |
+      A Job's command sometimes fails, and you want the failed container restarted **inside the same Pod**, rather than a new Pod created for every failure. What do you set?
+    choices:
+      - "`restartPolicy: OnFailure` in the Pod template"
+      - "`backoffLimit: 0` on the Job"
+      - "`restartPolicy: Always` in the Pod template"
+      - "`completions: 1` on the Job"
+      - "`restartPolicy: Never` in the Pod template"
+    answer: 0
+    explain: |
+      With `OnFailure` the kubelet restarts the failed container in the same Pod. With `Never`, the Job controller creates a new Pod for every failure. Both count against `backoffLimit`. `Always` is rejected for Jobs, and `backoffLimit: 0` gives up at the first failure.
+
+  - id: keep-failed-logs
+    prompt: |
+      A Job's container fails now and then, and afterwards you need the logs of **every** failed attempt. Which `restartPolicy` keeps them?
+    choices:
+      - "`Always`"
+      - "`OnFailure`"
+      - "Either: the logs are stored on the Job object"
+      - "`Never`"
+      - "None: the Job controller deletes failed Pods at once"
+    answer: 3
+    explain: |
+      With `Never` every failure is a new Pod, and the failed Pods stay (until the Job is deleted, or its TTL runs out) with their logs. With `OnFailure` the container restarts in place, so only the previous attempt is readable (`kubectl logs --previous`), and when `backoffLimit` is reached the Pod is terminated. Logs live with Pods, never on the Job.
+
+  - id: ten-files
+    prompt: |
+      Ten files must be processed, one per Pod, with at most three Pods running at the same time. Which Job spec does that?
+    choices:
+      - "`completions: 3`, `parallelism: 10`"
+      - "`completions: 10`, `parallelism: 3`"
+      - "`parallelism: 3`, `backoffLimit: 10`"
+      - "`completions: 10`, `backoffLimit: 3`"
+      - "`replicas: 10`, `maxSurge: 3`"
+    answer: 1
+    explain: |
+      `completions` is how many Pods must succeed; `parallelism` is how many may run at once. `backoffLimit` only counts failures, and `replicas` and `maxSurge` belong to Deployments.
+
+  - id: indexed
+    prompt: |
+      Ten Pods must each process a different shard, numbered 0 to 9, and each Pod has to know which shard is its own. What gives every Pod its number?
+    choices:
+      - "`parallelism: 10`: the Pods are numbered in the order they start"
+      - "Nothing in a Job: you need a StatefulSet's ordinals"
+      - "The suffix of the Pod name, which is the shard number"
+      - "`completions: 10` with `completionMode: Indexed`: each Pod gets `JOB_COMPLETION_INDEX`"
+      - "`backoffLimitPerIndex: 10`"
+    answer: 3
+    explain: |
+      An Indexed Job gives each Pod an index from 0 to `completions - 1`, in the environment variable `JOB_COMPLETION_INDEX` (and the annotation `batch.kubernetes.io/job-completion-index`); the Job is done when every index has succeeded once. Plain Pod names carry random suffixes, and `backoffLimitPerIndex` only sets retries per index.
+
+  - id: work-queue
+    prompt: |
+      Three Pods take items from a queue until it is empty. Each Pod exits `0` once it finds the queue empty. You set `parallelism: 3`. What do you set for `completions`?
+    choices:
+      - "`completions: 3`"
+      - "`completions: 0`"
+      - "Nothing: with `completions` unset, the Job is complete once a Pod succeeds and all of its Pods have finished"
+      - "The number of items in the queue"
+      - "`completions: -1`, for unlimited"
+    answer: 2
+    explain: |
+      That is the work-queue pattern: leave `completions` unset and set `parallelism`. The Pods coordinate through the queue, and the Job completes when one Pod has succeeded and the rest have terminated. Setting `completions` to the item count would need one Pod per item, which is the fixed-count pattern.
+
+  - id: backoff-limit
+    prompt: |
+      A Job should give up after **2** failed Pods instead of the default. Which field do you set, and what is its default?
+    choices:
+      - "`activeDeadlineSeconds: 2` (default 600)"
+      - "`failedJobsHistoryLimit: 2` (default 1)"
+      - "`completions: 2` (default 1)"
+      - "`restartPolicy: OnFailure` (default Never)"
+      - "`backoffLimit: 2` (default 6)"
+    answer: 4
+    explain: |
+      `backoffLimit` is how many retries a Job tolerates before it is marked `Failed` with reason `BackoffLimitExceeded`; the default is `6`. Retries wait 10 s, 20 s, 40 s and so on, up to 6 minutes. `failedJobsHistoryLimit` is a CronJob field about how many failed Jobs to keep.
+
+  - id: active-deadline
+    prompt: |
+      However many retries are left, a Job must never run longer than **5 minutes** in total. What do you set?
+    choices:
+      - "`ttlSecondsAfterFinished: 300`"
+      - "`activeDeadlineSeconds: 300`"
+      - "`startingDeadlineSeconds: 300`"
+      - "`backoffLimit: 5`"
+      - "`terminationGracePeriodSeconds: 300`"
+    answer: 1
+    explain: |
+      `activeDeadlineSeconds` caps the Job's whole run, counted from its start: when it passes, the Job's Pods are terminated and the Job fails with reason `DeadlineExceeded`. It takes precedence over `backoffLimit`. `ttlSecondsAfterFinished` deletes a Job after it has finished, `startingDeadlineSeconds` is a CronJob field, and `terminationGracePeriodSeconds` is about stopping one Pod.
+
+  - id: ttl
+    prompt: |
+      Finished Jobs pile up in a namespace. New Jobs should delete themselves, with their Pods, one hour after they finish. What do you add to the Job's spec?
+    choices:
+      - "`ttlSecondsAfterFinished: 3600`"
+      - "`activeDeadlineSeconds: 3600`"
+      - "`successfulJobsHistoryLimit: 0`"
+      - "`backoffLimit: 3600`"
+      - "`restartPolicy: Never`"
+    answer: 0
+    explain: |
+      The TTL controller deletes a finished Job (successful or failed) `ttlSecondsAfterFinished` seconds after it finishes, and its Pods go with it. `successfulJobsHistoryLimit` exists only on CronJobs, which prune the Jobs they own.
+
+  - id: suspend-job
+    prompt: |
+      A long Job is overloading a database. You want to **pause** it without deleting it, and resume it later. What do you do?
+    choices:
+      - "`kubectl scale job/import --replicas=0`"
+      - "Delete its Pods; the Job waits until you create new ones"
+      - "Set `backoffLimit: 0`"
+      - "Set `spec.suspend: true` on the Job, and back to `false` to resume"
+      - "Cordon the nodes its Pods run on"
+    answer: 3
+    explain: |
+      A suspended Job terminates its active Pods and creates no new ones until `suspend` is `false` again; work that was in progress starts over. Deleted Pods are simply recreated by the Job controller, Jobs have no `replicas`, and cordoning only stops new Pods from being scheduled. (Setting `parallelism: 0` also pauses a Job.)
+
+  - id: more-parallel
+    prompt: |
+      A running Job has `completions: 50` and `parallelism: 2`, and it is too slow. You want 5 Pods at a time **without losing the work already done**. What do you do?
+    choices:
+      - "Delete the Job and create it again with `parallelism: 5`"
+      - "Raise `completions` to 125"
+      - "Patch the running Job: `spec.parallelism` can be changed, unlike its Pod template"
+      - "Lower `backoffLimit` so failed Pods give way faster"
+      - "Add `replicas: 5` to the Job"
+    answer: 2
+    explain: |
+      `parallelism` is one of the few Job fields you can change on a running Job (`kubectl patch job import -p '{"spec":{"parallelism":5}}'`), and the controller starts more Pods at once while the completed ones still count. Recreating the Job would start from zero.
+
+  # Jobs: commands and errors
+  - id: generate-yaml
+    prompt: |
+      In the exam you want a Job manifest to edit, without typing it from scratch. Which command writes one?
+    choices:
+      - "`kubectl run calc --image=busybox:1.36 --restart=OnFailure -o yaml -- sh -c 'echo 42'`"
+      - "`kubectl create job calc --image=busybox:1.36 --dry-run=client -o yaml -- sh -c 'echo 42' > calc.yaml`"
+      - "`kubectl get job calc -o yaml > calc.yaml`"
+      - "`kubectl explain job --recursive > calc.yaml`"
+      - "`kubectl create deployment calc --image=busybox:1.36 --dry-run=client -o yaml > calc.yaml`"
+    answer: 1
+    explain: |
+      `--dry-run=client -o yaml` prints the object instead of creating it, and everything after `--` becomes the container's command. The `kubectl run` line creates a Pod (not a Job) on the spot, `get` needs a Job that already exists, and `explain` prints documentation, not a manifest.
+
+  - id: select-pods
+    prompt: |
+      You need the Pods of Job `report`, whatever their generated names. Which selector picks them?
+    choices:
+      - "`-l app=report`"
+      - "`--field-selector metadata.name=report`"
+      - "`-l controller=report`"
+      - "`-l batch=report`"
+      - "`-l job-name=report`"
+    answer: 4
+    explain: |
+      The Job controller labels its Pods `job-name=<job>` (and `batch.kubernetes.io/job-name`). `kubectl -n <ns> logs job/report` picks one of them for you, and `kubectl describe pod -l job-name=report` shows their Events.
+
+  - id: restart-always
+    prompt: |
+      Creating a new Job fails with:
+
+      ```
+      spec.template.spec.restartPolicy: Unsupported value: "Always": supported values: "OnFailure", "Never"
+      ```
+
+      Why?
+    choices:
+      - "A Job's Pods must be able to finish, so only `Never` and `OnFailure` are allowed"
+      - "`Always` needs a livenessProbe, which the template lacks"
+      - "Only CronJobs may use `Always`"
+      - "`backoffLimit` must be set before `restartPolicy`"
+      - "The image does not support restarts"
+    answer: 0
+    explain: |
+      A Pod with `restartPolicy: Always` never completes, so a Job could never succeed. `kubectl run` and Pod templates elsewhere default to `Always`; in a Job manifest set `Never` (a new Pod per failure) or `OnFailure` (restart in place).
+
+  - id: backoff-exceeded
+    prompt: |
+      Job `import` shows `BackoffLimitExceeded`. Its Pods are `Error`, and `kubectl logs` prints `sh: impot: not found`. What do you fix?
+    choices:
+      - "Raise `backoffLimit`, so it retries until it works"
+      - "The node's container runtime"
+      - "`activeDeadlineSeconds`"
+      - "The command in the Job's Pod template, then run the Job again"
+      - "The ServiceAccount's RBAC"
+    answer: 3
+    explain: |
+      `not found` with exit code `127` is the shell failing to find a command: a typo in the template. More retries repeat the same failure. The Job's template cannot be edited, so delete and recreate the Job (or fix the CronJob it came from).
+
+  - id: deadline-exceeded
+    prompt: |
+      `kubectl describe job export` shows the condition `Failed` with reason `DeadlineExceeded`. The Pod's logs stop half-way through the work, with no error. What is the most likely cause?
+    choices:
+      - "The image could not be pulled"
+      - "`backoffLimit` was `0`"
+      - "`activeDeadlineSeconds` is shorter than the work takes"
+      - "The node ran out of memory"
+      - "The Job has no `ttlSecondsAfterFinished`"
+    answer: 2
+    explain: |
+      `DeadlineExceeded` means `activeDeadlineSeconds` ran out and the Job controller stopped the Pods. A failing command gives `BackoffLimitExceeded` instead, an out-of-memory kill shows `OOMKilled` on the container, and a pull error never starts the container at all.
+
+  - id: template-immutable
+    prompt: |
+      You fix the command in `job.yaml` and run `kubectl apply -f job.yaml` against the existing Job. It fails with `spec.template: Invalid value: ... field is immutable`. What now?
+    choices:
+      - "`kubectl edit` the Job instead"
+      - "Delete the Job and create it again, for example `kubectl replace --force -f job.yaml`"
+      - "Patch the running Pod's command"
+      - "Restart the API server so it accepts the change"
+      - "Add `--overwrite` to `kubectl apply`"
+    answer: 1
+    explain: |
+      A Job's Pod template cannot change after creation (`kubectl edit` hits the same wall), and a Pod's command cannot change either. Delete and recreate it: `kubectl replace --force` does both in one step. `parallelism` and `suspend` are among the few fields you can still change.
+
+  - id: pod-failure-policy
+    prompt: |
+      Exit code `42` means a configuration error that retrying cannot fix: the Job should fail **at once**. Any other failure should still be retried. What do you use?
+    choices:
+      - "`backoffLimit: 0`"
+      - "`activeDeadlineSeconds: 42`"
+      - "`restartPolicy: OnFailure`"
+      - "A livenessProbe that looks for exit code 42"
+      - "A `podFailurePolicy` rule with `action: FailJob` on exit code 42 (with `restartPolicy: Never`)"
+    answer: 4
+    explain: |
+      `podFailurePolicy` matches failures by exit code or Pod condition and decides what happens: `FailJob`, `Ignore` (do not count it), `Count` (the default behaviour) or `FailIndex`. It needs `restartPolicy: Never`. `backoffLimit: 0` would stop retrying every failure, not just this one.
+
+  # CronJobs: schedules
+  - id: every-15
+    prompt: |
+      Which schedule runs every 15 minutes?
+    choices:
+      - "`15 * * * *`"
+      - "`* */15 * * *`"
+      - "`*/15 * * * *`"
+      - "`0/15 * * * * *`"
+      - "`15m`"
+    answer: 2
+    explain: |
+      The five fields are minute, hour, day of the month, month and day of the week. `*/15` in the minute field is every 15th minute. `15 * * * *` runs once an hour at minute 15, `* */15 * * *` every minute of every 15th hour, and a six-field (seconds) schedule is not valid for a CronJob.
+
+  - id: weekdays
+    prompt: |
+      Which schedule runs at **02:30 on weekdays** only?
+    choices:
+      - "`2 30 * * 1-5`"
+      - "`30 2 1-5 * *`"
+      - "`30 2 * * 0-4`"
+      - "`30 14 * * 1-5`"
+      - "`30 2 * * 1-5`"
+    answer: 4
+    explain: |
+      Minute `30`, hour `2`, any day of the month, any month, days of the week `1-5` (Monday to Friday; `0` is Sunday). `30 2 1-5 * *` runs on the 1st to 5th of each month, `0-4` is Sunday to Thursday, and `30 14` is 14:30.
+
+  - id: daily-macro
+    prompt: |
+      A colleague wrote `schedule: "@daily"`. When does that CronJob run?
+    choices:
+      - "Every day at 00:00, in the CronJob's time zone"
+      - "Every 24 hours after it was created"
+      - "Never: macros are not supported, the schedule needs five fields"
+      - "Once a day at a random time chosen by the controller"
+      - "Every day at 02:00"
+    answer: 0
+    explain: |
+      CronJobs accept the usual macros: `@yearly`, `@monthly`, `@weekly`, `@daily` (or `@midnight`) and `@hourly`. `@daily` is `0 0 * * *`. Without `spec.timeZone`, that is midnight in the time zone of the kube-controller-manager.
+
+  - id: time-zone
+    prompt: |
+      CronJob `report` must run at **09:00 London time** all year round, while the cluster runs on UTC. How?
+    choices:
+      - "`schedule: CRON_TZ=Europe/London 0 9 * * *`"
+      - "`schedule: 0 8 * * *`, since London is UTC+1"
+      - "Set `TZ=Europe/London` in the container's environment"
+      - "`spec.timeZone: Europe/London` with `schedule: 0 9 * * *`"
+      - "Set the nodes' clocks to London time"
+    answer: 3
+    explain: |
+      `spec.timeZone` takes a time zone name from the tz database and handles daylight saving. `TZ` or `CRON_TZ` inside the schedule is not supported, a fixed offset is wrong for half the year, and the container's `TZ` only changes what the program prints, not when the controller starts it.
+
+  - id: imperative-cronjob
+    prompt: |
+      Which command creates a CronJob that runs `date` every 5 minutes?
+    choices:
+      - "`kubectl run clock --image=busybox:1.36 --schedule='*/5 * * * *' -- date`"
+      - "`kubectl create cronjob clock --image=busybox:1.36 --schedule='*/5 * * * *' -- date`"
+      - "`kubectl create job clock --image=busybox:1.36 --schedule='*/5 * * * *' -- date`"
+      - "`kubectl create cronjob clock --image=busybox:1.36 --every=5m -- date`"
+      - "`kubectl create cronjob clock --image=busybox:1.36 --schedule=*/5 * * * * -- date`"
+    answer: 1
+    explain: |
+      `kubectl create cronjob` with `--schedule`, quoted so the shell neither splits it nor expands the stars into file names. `kubectl run` and `kubectl create job` have no `--schedule` flag, and there is no `--every`.
+
+  # CronJobs: behaviour
+  - id: test-now
+    prompt: |
+      CronJob `backup` runs at 02:00 every night. You changed it, and you want to test it **now**, without touching its schedule. What do you run?
+    choices:
+      - "`kubectl rollout restart cronjob/backup`"
+      - "Change the schedule to `* * * * *` and wait a minute"
+      - "`kubectl create job backup-test --from=cronjob/backup`"
+      - "`kubectl trigger cronjob backup`"
+      - "`kubectl run backup-test --image=<the same image>`"
+    answer: 2
+    explain: |
+      `--from=cronjob/<name>` creates a Job from the CronJob's `jobTemplate` right away, even while the CronJob is suspended. CronJobs cannot be rolled out, editing the schedule changes what you were asked to keep, and a hand-made Pod does not use the template.
+
+  - id: replace-policy
+    prompt: |
+      A run of CronJob `sync` can take longer than its 5-minute interval. When the next time comes, the old run should be **stopped** and a new one started. Which `concurrencyPolicy`?
+    choices:
+      - "`Allow`"
+      - "`Forbid`"
+      - "`Skip`"
+      - "`Replace`"
+      - "`Serial`"
+    answer: 3
+    explain: |
+      `Replace` deletes the running Job and starts the new one. `Allow` (the default) runs them side by side, and `Forbid` skips the new run while the old one is active. `Skip` and `Serial` do not exist.
+
+  - id: forbid-stuck
+    prompt: |
+      `kubectl get cronjob report` shows `ACTIVE 1` for two days, and `LAST SCHEDULE` is two days old although it should run hourly. Its `concurrencyPolicy` is `Forbid`. What is the most likely cause?
+    choices:
+      - "One Job has hung for two days, and `Forbid` skips every run while it is active"
+      - "The CronJob is suspended"
+      - "The schedule is invalid"
+      - "`successfulJobsHistoryLimit` is 0"
+      - "The CronJob's ServiceAccount lost its permissions"
+    answer: 0
+    explain: |
+      `ACTIVE 1` means a Job of this CronJob is still running. Under `Forbid` every later run is skipped while it runs, so nothing new is ever scheduled. `kubectl get jobs` shows the old Job and its age; delete it (and consider `activeDeadlineSeconds` so a run cannot hang for ever). A suspended CronJob shows `SUSPEND True` and no active Job.
+
+  - id: starting-deadline
+    prompt: |
+      The controller manager was down for an hour. When it comes back, CronJob `invoice` must **not** start runs that it missed by more than 2 minutes. What do you set?
+    choices:
+      - "`activeDeadlineSeconds: 120`"
+      - "`startingDeadlineSeconds: 120`"
+      - "`concurrencyPolicy: Forbid`"
+      - "`suspend: true`"
+      - "`ttlSecondsAfterFinished: 120`"
+    answer: 1
+    explain: |
+      `startingDeadlineSeconds` is how late a run may still start. A run that cannot start within it is skipped and counted as missed. It also limits how far back the controller looks for missed runs: without it, a CronJob that missed more than 100 schedules stops starting Jobs and reports "Too many missed start time".
+
+  - id: history-limits
+    prompt: |
+      CronJob `cleanup` should keep only its **last successful** Job and its **last 3 failed** Jobs. Where do these settings go?
+    choices:
+      - "`successfulJobsHistoryLimit: 1` and `failedJobsHistoryLimit: 3`, in `spec.jobTemplate.spec`"
+      - "`backoffLimit: 3` and `completions: 1`"
+      - "`ttlSecondsAfterFinished: 1`"
+      - "`revisionHistoryLimit: 1`"
+      - "`successfulJobsHistoryLimit: 1` and `failedJobsHistoryLimit: 3`, in the CronJob's own `spec`"
+    answer: 4
+    explain: |
+      The history limits sit on the CronJob's spec, next to `schedule` (defaults 3 and 1); the controller deletes older finished Jobs beyond them. `spec.jobTemplate.spec` is a Job spec, which has no such fields. `revisionHistoryLimit` belongs to Deployments.
+
+  - id: fix-image
+    prompt: |
+      CronJob `report`'s Jobs fail with `ImagePullBackOff`. You fix the image so that **tonight's** run works. Where?
+    choices:
+      - "In the Pod of the failed Job, with `kubectl edit pod`"
+      - "In the failed Job's template"
+      - "`spec.image` on the CronJob"
+      - "In a new CronJob with another name"
+      - "In the CronJob's `spec.jobTemplate.spec.template`, for example with `kubectl set image cronjob/report`"
+    answer: 4
+    explain: |
+      Every run is a new Job made from the CronJob's `jobTemplate`; Jobs and Pods that already exist are never updated from it. `kubectl set image cronjob/report <container>=<image>` edits the template. Delete the stuck Job too, or it stays in `ImagePullBackOff` (and blocks runs under `Forbid`).
+
+  - id: suspended
+    prompt: |
+      `kubectl get cronjob` shows `SUSPEND True`. What happens at the next scheduled time, and when you resume it?
+    choices:
+      - "A Job is created, but its Pods wait until you resume"
+      - "No Job is created; when you resume, the most recent missed run may start at once, unless `startingDeadlineSeconds` rules it out"
+      - "The CronJob deletes all its Jobs"
+      - "A Job runs, and the CronJob is suspended again afterwards"
+      - "Nothing, and missed runs are lost for good whatever its settings"
+    answer: 1
+    explain: |
+      `suspend: true` stops the CronJob from creating Jobs; Jobs already running are not touched. Runs that fall in the suspended time count as missed, so on resume the controller may start the latest one straight away. Set `startingDeadlineSeconds` if a late run is worse than no run.

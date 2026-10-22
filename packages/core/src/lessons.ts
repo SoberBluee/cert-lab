@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { formatZodError, LESSON_TOPICS, LessonSchema, type Lesson, type LessonSummary, type LessonView } from '@cka/schema';
+import { formatZodError, LESSON_TOPICS, LessonSchema, type LearnProgress, type Lesson, type LessonSummary, type LessonView } from '@cka/schema';
 import { hookSteps } from './learn';
 import { lessonsDir } from './paths';
 import type { LoadedScenario, LoadError } from './scenarios';
@@ -99,18 +99,24 @@ export const toLessonSummary = ({ def }: LoadedLesson): LessonSummary => ({
   stepCount: def.steps.length,
 });
 
-export const toLessonView = ({ def }: LoadedLesson): LessonView => ({
+/** A question's answer and why are only sent once its step is done, so the pane cannot give them away. */
+export const toLessonView = ({ def }: LoadedLesson, progress?: LearnProgress): LessonView => ({
   id: def.id,
   title: def.title,
   summary: def.summary,
   track: def.track,
   topic: def.topic,
-  steps: def.steps.map((s) => ({
-    id: s.id,
-    title: s.title,
-    explain: s.explain,
-    command: s.command.trimEnd(),
-    node: s.node,
-    ...(s.hint ? { hint: s.hint } : {}),
-  })),
+  steps: def.steps.map((s, i) => {
+    const q = s.question;
+    const done = !!progress?.steps[i]?.done;
+    return {
+      id: s.id,
+      title: s.title,
+      explain: s.explain,
+      ...(s.command !== undefined ? { command: s.command.trimEnd() } : {}),
+      node: s.node,
+      ...(s.hint ? { hint: s.hint } : {}),
+      ...(q ? { question: { prompt: q.prompt, choices: q.choices, ...(done ? { answer: q.answer, why: q.why } : {}) } } : {}),
+    };
+  }),
 });

@@ -6,6 +6,7 @@ import type { FaultCategory } from './types';
 
 const KUBECONFIG = '/etc/kubernetes/kubelet.conf';
 const CONFIG = '/var/lib/kubelet/config.yaml';
+const CONTAINERD = '/etc/containerd/config.toml';
 const DROPIN = `dropin=$(systemctl show kubelet -p DropInPaths --value | tr ' ' '\\n' | grep 10-kubeadm.conf)`;
 
 const restart = 'systemctl restart kubelet || true';
@@ -36,12 +37,13 @@ export const nodeConfigCategory: FaultCategory = {
   fields: [nsField(['fleet', 'edge', 'infra', 'nodes', 'config', 'workers', 'daemon', 'system', 'host-ops', 'platform'])],
   shell: ({ NS }) => ({
     title: 'Worker after a configuration change',
-    text: `One of the workers has not been healthy since a maintenance window. DaemonSet \`node-agent\` in namespace \`${NS}\` should run a ready Pod on every worker. Find the node and fix it so that every node is \`Ready\`, \`node-agent\` runs everywhere, and the kubelet is running, enabled and survives a reboot of the node.
+    text: `One of the workers has not been healthy since a maintenance window. DaemonSet \`node-agent\` in namespace \`${NS}\` should run a ready Pod on every worker. Find the node and fix it so that every node is \`Ready\` and not under memory pressure, \`node-agent\` runs everywhere, and the kubelet is running, enabled and survives a reboot of the node.
 
 Do not change the DaemonSet, and do not rejoin the node to the cluster.`,
     spec: `- the kubelet unit drop-in loads \`${CONFIG}\` and \`${KUBECONFIG}\`, as kubeadm wrote them
 - \`${KUBECONFIG}\` points at the API server on port \`6443\`
-- \`${CONFIG}\` keeps the kubeadm values: the containerd socket, \`cgroupDriver: systemd\`, the cluster CA, no extra TLS files, default \`maxPods\`, eviction thresholds, \`resolvConf\` and \`hairpinMode\``,
+- \`${CONFIG}\` keeps the kubeadm values: the containerd socket, \`cgroupDriver: systemd\`, the cluster CA, no extra TLS files, and the default eviction thresholds
+- \`${CONTAINERD}\` sets \`SystemdCgroup = true\` for the runc runtime`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -70,7 +72,16 @@ kubectl -n "${NS}" rollout status daemonset/node-agent --timeout=240s`,
         type: 'kubectl',
         run: `kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\\n"}{end}' | sort -u | xargs`,
         expect: { equals: 'True' },
-        weight: 3,
+        weight: 2,
+        retrySeconds: 90,
+      },
+      {
+        id: 'memory-pressure',
+        description: 'no node is under MemoryPressure',
+        type: 'kubectl',
+        run: `kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="MemoryPressure")].status}{"\\n"}{end}' | sort -u | xargs`,
+        expect: { equals: 'False' },
+        weight: 2,
         retrySeconds: 90,
       },
       ...WORKERS.map(kubeletCheck),
@@ -80,27 +91,18 @@ kubectl -n "${NS}" rollout status daemonset/node-agent --timeout=240s`,
         type: 'kubectl',
         run: `kubectl -n ${NS} get daemonset node-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'`,
         expect: { equals: `${WORKERS.length}/${WORKERS.length}` },
-        weight: 2,
+        weight: 1,
         retrySeconds: 90,
       },
     ],
     hints: [
       'kubectl get nodes, then kubectl describe node <node>: which node is unhealthy, which condition, and since when?',
-      'On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job?',
+      'On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job? If it cannot reach the container runtime, check containerd the same way.',
       'systemctl cat kubelet shows the unit and drop-ins, and so every file and flag the kubelet starts with. Check each path and value against what exists on the node and against a healthy worker.',
       'After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).',
     ],
   }),
   faults: ({ NS, NODE }) => [
-    {
-      id: 'kubelet-kubeconfig-server',
-      label: 'kubelet kubeconfig points at the wrong API server port',
-      nodeBreak: `${edit(KUBECONFIG, 's#^([[:space:]]*server: https://[^[:space:]]+):6443$#\\1:6444#', 'server: https://[^[:space:]]+:6444$')}\n${restart}`,
-      settle: waitNotReady(NODE),
-      nodeFix: `${edit(KUBECONFIG, 's#^([[:space:]]*server: https://[^[:space:]]+):6444$#\\1:6443#', 'server: https://[^[:space:]]+:6443$')}\nsystemctl restart kubelet`,
-      wait: waitReady(NODE),
-      explain: `\`server:\` in \`${KUBECONFIG}\` on the worker uses port \`6444\`, where nothing listens. The kubelet keeps running but cannot post its status, so the node turns \`NotReady\`; \`journalctl -u kubelet\` is full of \`connection refused\` for \`:6444\`. Set the port back to \`6443\` and restart the kubelet.`,
-    },
     {
       id: 'kubelet-client-ca',
       label: 'kubelet client CA file path is wrong',
@@ -170,23 +172,6 @@ systemctl restart kubelet`,
       explain: `\`${CONFIG}\` sets \`tlsCertFile\` and \`tlsPrivateKeyFile\` to \`/var/lib/kubelet/pki/kubelet-server.*\`, which do not exist, so the kubelet cannot load its serving certificate and exits at start. \`journalctl -u kubelet\` names the file, and \`ls /var/lib/kubelet/pki\` shows only the self-generated \`kubelet.crt\`/\`kubelet.key\` and the client certificates. Remove both lines (the kubelet then uses its self-signed certificate) and restart it.`,
     },
     {
-      id: 'kubelet-max-pods',
-      label: 'kubelet allows only two Pods',
-      nodeBreak: `sed -i '/^maxPods:/d' ${CONFIG}
-echo 'maxPods: 2' >> ${CONFIG}
-${restart}`,
-      settle: `for _ in $(seq 1 60); do
-  [[ "$(kubectl get node "${NODE}" -o jsonpath='{.status.capacity.pods}')" == 2 ]] && break
-  sleep 2
-done
-kubectl -n "${NS}" delete pod -l app=node-agent --field-selector "spec.nodeName=${NODE}" --wait=false >/dev/null 2>&1 || true
-sleep 15`,
-      nodeFix: `sed -i '/^maxPods:/d' ${CONFIG}
-systemctl restart kubelet`,
-      wait: waitReady(NODE),
-      explain: `\`${CONFIG}\` sets \`maxPods: 2\`. calico-node and kube-proxy already fill those two slots, so the kubelet rejects the \`node-agent\` Pod with \`OutOfpods\` and the DaemonSet never gets ready there, although the node stays \`Ready\`. \`kubectl describe node\` shows \`pods: 2\` under Capacity, and \`kubectl get pods -o wide\` shows the rejected Pods. Remove \`maxPods\` (the default is 110) and restart the kubelet.`,
-    },
-    {
       id: 'kubelet-eviction-hard',
       label: 'kubelet evictionHard memory threshold is absurd',
       nodeBreak: `cp -a ${CONFIG} ${CONFIG}.cka-bak
@@ -195,12 +180,10 @@ printf '%s\\n' 'evictionHard:' '  memory.available: "99%"' >> ${CONFIG}
 grep -q 'memory.available: "99%"' ${CONFIG} || { echo "could not set evictionHard" >&2; exit 1; }
 ${restart}`,
       settle: `for _ in $(seq 1 90); do
-  press=$(kubectl get node "${NODE}" -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}' 2>/dev/null || true)
-  agents=$(kubectl -n "${NS}" get pods -l app=node-agent --field-selector "spec.nodeName=${NODE}" --no-headers 2>/dev/null | grep -c Running || true)
-  [[ "$press" == True || "$agents" == 0 ]] && exit 0
+  [[ "$(kubectl get node "${NODE}" -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}' 2>/dev/null || true)" == True ]] && exit 0
   sleep 2
 done
-echo "node-agent still running without MemoryPressure" >&2
+echo "the node never reported MemoryPressure" >&2
 exit 1`,
       nodeFix: `if [[ -f ${CONFIG}.cka-bak ]]; then cp -a ${CONFIG}.cka-bak ${CONFIG}; else
   sed -i '/^evictionHard:/,/^[^[:space:]]/{ /^evictionHard:/d; /^[[:space:]]/d; }' ${CONFIG} || true
@@ -208,7 +191,9 @@ exit 1`,
 fi
 systemctl restart kubelet`,
       wait: `for _ in $(seq 1 90); do
-  [[ "$(kubectl get node "${NODE}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" == True ]] && break
+  ready=$(kubectl get node "${NODE}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+  press=$(kubectl get node "${NODE}" -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}')
+  [[ "$ready" == True && "$press" == False ]] && break
   sleep 2
 done
 for _ in $(seq 1 60); do
@@ -221,40 +206,14 @@ done`,
     },
     {
       id: 'kubelet-cgroup-driver',
-      label: 'kubelet cgroup driver is invalid',
-      nodeBreak: `${edit(CONFIG, 's#^cgroupDriver: systemd$#cgroupDriver: invalid#', '^cgroupDriver: invalid$')}\n${restart}`,
+      label: 'containerd cgroup driver is invalid',
+      // Kubelet 1.37 (KubeletCgroupDriverFromCRI, locked on) overwrites cgroupDriver from
+      // containerd's RuntimeConfig, so a bad value in the kubelet config leaves the node Ready.
+      nodeBreak: `${edit(CONTAINERD, 's#^([[:space:]]*SystemdCgroup = )true[[:space:]]*$#\\1"invalid"#', '^[[:space:]]*SystemdCgroup = "invalid"$')}\nsystemctl restart containerd || true\n${restart}`,
       settle: waitNotReady(NODE),
-      nodeFix: `${edit(CONFIG, 's#^cgroupDriver: invalid$#cgroupDriver: systemd#', '^cgroupDriver: systemd$')}\nsystemctl restart kubelet`,
+      nodeFix: `${edit(CONTAINERD, 's#^([[:space:]]*SystemdCgroup = )"invalid"[[:space:]]*$#\\1true#', '^[[:space:]]*SystemdCgroup = true$')}\nsystemctl restart containerd\nsystemctl restart kubelet`,
       wait: waitReady(NODE),
-      explain: `\`cgroupDriver\` in \`${CONFIG}\` is \`invalid\`, so the kubelet exits at startup. \`journalctl -u kubelet\` names the bad value; containerd and a healthy worker use \`systemd\`. Set \`cgroupDriver: systemd\` and restart the kubelet.`,
-    },
-    {
-      id: 'kubelet-resolv-empty',
-      label: 'kubelet resolvConf points at a missing file',
-      nodeBreak: `sed -i '/^resolvConf:/d' ${CONFIG}
-sed -i '/^[[:space:]]*- \\/etc\\/resolv\\.conf\\.missing$/d' ${CONFIG} || true
-printf '%s\\n' 'resolvConf:' '  - /etc/resolv.conf.missing' >> ${CONFIG}
-grep -q '/etc/resolv.conf.missing' ${CONFIG}
-${restart}`,
-      settle: waitNotReady(NODE),
-      nodeFix: `sed -i '/^resolvConf:/d' ${CONFIG}
-sed -i '/^[[:space:]]*- \\/etc\\/resolv\\.conf\\.missing$/d' ${CONFIG} || true
-systemctl restart kubelet`,
-      wait: waitReady(NODE),
-      explain: `\`${CONFIG}\` sets \`resolvConf\` to a YAML list whose only entry is \`/etc/resolv.conf.missing\` (that path does not exist, and \`resolvConf\` must be a string). The kubelet cannot decode its config and exits. Remove those lines (the default \`/etc/resolv.conf\` is fine) and restart the kubelet.`,
-    },
-    {
-      id: 'kubelet-hairpin-mode',
-      label: 'kubelet hairpinMode is invalid',
-      nodeBreak: `sed -i '/^hairpinMode:/d' ${CONFIG}
-echo 'hairpinMode: bogus' >> ${CONFIG}
-grep -q '^hairpinMode: bogus$' ${CONFIG}
-${restart}`,
-      settle: waitNotReady(NODE),
-      nodeFix: `sed -i '/^hairpinMode:/d' ${CONFIG}
-systemctl restart kubelet`,
-      wait: waitReady(NODE),
-      explain: `\`${CONFIG}\` sets \`hairpinMode: bogus\`, which is not a valid enum value, so the kubelet exits at startup. \`journalctl -u kubelet\` names the bad field. Remove the line (or set a valid value such as \`promiscuous-bridge\`) and restart the kubelet.`,
+      explain: `\`SystemdCgroup\` in \`${CONTAINERD}\` is the string \`"invalid"\`, so containerd cannot load its config and never starts. Kubelet 1.37 asks containerd which cgroup driver to use, and exits when the runtime does not answer, so the node turns \`NotReady\`. \`journalctl -u containerd\` names the field; a healthy worker has \`SystemdCgroup = true\`. Set that, then restart containerd and the kubelet.`,
     },
   ],
 };

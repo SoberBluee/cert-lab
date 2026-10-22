@@ -1,10 +1,10 @@
 id: node-kubelet-cgroup-driver
-title: Node (Kubelet Cgroup Driver)
+title: Node (Containerd Cgroup Driver)
 domain: troubleshooting
 difficulty: 3
 estimatedMinutes: 12
 points: 7
-tags: [ troubleshooting, node, kubelet, kubeconfig, systemd ]
+tags: [ troubleshooting, node, kubelet, containerd, systemd ]
 base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
@@ -66,6 +66,6 @@ tasks:
         retrySeconds: 90
     hints:
       - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
-      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
-      - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
-      - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).
+      - "On that node: systemctl status kubelet containerd and journalctl -u kubelet -u containerd -n 50. Is a service crash-looping, or running but unable to do its job?"
+      - Compare /etc/containerd/config.toml, the kubelet unit (systemctl cat kubelet), /var/lib/kubelet/config.yaml and /etc/kubernetes/kubelet.conf with a healthy worker.
+      - After editing a file, restart the service you changed, and restart the kubelet. Run systemctl daemon-reload if you changed the unit.

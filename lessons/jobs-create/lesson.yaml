@@ -1,0 +1,209 @@
+id: jobs-create
+title: "Jobs and CronJobs: run work to completion, and on a schedule"
+summary: Create a Job imperatively, read its Pod and logs, write a parallel Job from a generated manifest, then build a CronJob, tune its history and concurrency, and trigger it by hand. Questions along the way check what each field does.
+topic: jobs
+estimatedMinutes: 15
+setup:
+  - node: controlplane
+    run: |
+      kubectl create namespace batch-lab
+      timeout 60 bash -c "until kubectl -n batch-lab get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
+steps:
+  - id: create-job
+    title: Create a Job that runs once
+    explain: |
+      A **Job** runs Pods until a set number of them succeed (exit code `0`), then stops. `kubectl create job` is the fastest way to make one: everything after `--` becomes the container's command.
+
+      Work in namespace `batch-lab`.
+    command: kubectl -n batch-lab create job hello --image=busybox:1.36 -- sh -c 'echo "hello from $(hostname)"; sleep 5'
+    match: '^kubectl\b(?=.*\bcreate\s+job\s+hello\b)(?=.*busybox)'
+    check:
+      id: hello-done
+      description: Job hello has a succeeded Pod
+      type: kubectl
+      run: kubectl -n batch-lab get job hello -o jsonpath='{.status.succeeded}'
+      expect: { equals: '1' }
+      retrySeconds: 60
+  - id: get-job
+    title: Look at the Job and its Pod
+    explain: |
+      `COMPLETIONS 1/1` and `STATUS Complete` on the Job; `STATUS Completed` on its Pod. The Pod is named after the Job plus a random suffix, and carries the label `job-name=hello`, which is how you select a Job's Pods.
+    command: kubectl -n batch-lab get jobs,pods
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(jobs?|job\.batch)\b)'
+  - id: logs
+    title: Read what it printed
+    explain: |
+      `kubectl logs job/<name>` picks one of the Job's Pods for you, so you do not need the generated Pod name. The logs stay readable as long as the Pod exists.
+    command: kubectl -n batch-lab logs job/hello
+    match: '^kubectl\b(?=.*\blogs\b)(?=.*\b(job/hello|hello-))'
+  - id: q-finished
+    title: What happens to a finished Job?
+    question:
+      prompt: Job `hello` has finished and its Pod shows `Completed`. What happens to the Job and its Pod now?
+      choices:
+        - The Job controller deletes the Pod at once and keeps the Job
+        - Both stay until someone deletes them, unless the Job sets ttlSecondsAfterFinished
+        - The kubelet restarts the Pod, because its container exited
+        - The Job runs again a few minutes later
+      answer: 1
+      why: |
+        Finished Jobs and their Pods are kept so you can read their status and logs. Set `spec.ttlSecondsAfterFinished` and the TTL controller deletes the Job (and its Pods) that many seconds after it finishes. A Job's Pods use `restartPolicy: Never` or `OnFailure` (`Always` is not allowed), so nothing restarts a container that exited `0`. Running again on a schedule is what a CronJob adds.
+  - id: generate
+    title: Let kubectl write a Job manifest
+    explain: |
+      For anything beyond the basics, generate a manifest and edit it: `--dry-run=client -o yaml` prints the object instead of creating it. This is the fastest way to a correct skeleton in the exam.
+    command: kubectl -n batch-lab create job batch --image=busybox:1.36 --dry-run=client -o yaml -- sh -c 'echo processing; sleep 3' > batch.yaml
+    match: '^kubectl\b(?=.*\bcreate\s+job\s+batch\b)(?=.*--dry-run=client)(?=.*-o\s*yaml)'
+    check:
+      id: manifest-written
+      description: batch.yaml holds a Job
+      type: file
+      node: controlplane
+      path: /home/ubuntu/batch.yaml
+      contains: 'kind: Job'
+  - id: parallel
+    title: Make it a parallel Job with retries and a clean-up timer
+    explain: |
+      Edit `batch.yaml` (`vi batch.yaml`) and add four fields under the Job's `spec` (not the Pod template's):
+
+      - `completions: 6`: six Pods must succeed
+      - `parallelism: 2`: at most two run at a time
+      - `backoffLimit: 3`: give up after three failed Pods
+      - `ttlSecondsAfterFinished: 600`: delete the Job ten minutes after it finishes
+
+      Then `kubectl apply -f batch.yaml`. Add the fields **before** the first apply: most of a Job's spec cannot change once it exists (delete it and apply again if you need to). The command below is the finished manifest, applied in one go.
+    command: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: batch
+        namespace: batch-lab
+      spec:
+        completions: 6
+        parallelism: 2
+        backoffLimit: 3
+        ttlSecondsAfterFinished: 600
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: batch
+                image: busybox:1.36
+                command: ["sh", "-c", "echo processing; sleep 3"]
+      EOF
+    check:
+      id: batch-spec
+      description: Job batch has completions 6, parallelism 2, backoffLimit 3 and a 600 s TTL
+      type: kubectl
+      run: kubectl -n batch-lab get job batch -o jsonpath='{.spec.completions} {.spec.parallelism} {.spec.backoffLimit} {.spec.ttlSecondsAfterFinished}' 2>/dev/null || true
+      expect: { equals: 6 2 3 600 }
+  - id: watch-batch
+    title: Watch it work through the completions
+    explain: |
+      Run this a few times (or add `-w` and stop it with Ctrl-C): two Pods at a time, and `COMPLETIONS` climbs `2/6`, `4/6`, `6/6`. The step turns green once all six have succeeded.
+    command: kubectl -n batch-lab get job batch
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(jobs?|job\.batch|po|pods?)\b)'
+    check:
+      id: batch-done
+      description: Job batch has 6 succeeded Pods
+      type: kubectl
+      run: kubectl -n batch-lab get job batch -o jsonpath='{.status.succeeded}'
+      expect: { equals: '6' }
+      retrySeconds: 90
+  - id: q-parallel
+    title: How did that Job run?
+    question:
+      prompt: Job `batch` has `completions 6` and `parallelism 2`, and each Pod takes about 3 seconds. How does it run?
+      choices:
+        - Six Pods start at once
+        - Two Pods at a time, until six have succeeded
+        - Two Pods in total, each running its command three times
+        - Six Pods one after another, each retried up to three times
+      answer: 1
+      why: |
+        `completions` is how many Pods must succeed; `parallelism` is how many may run at the same time. So the work goes in waves of two, three waves in all. `backoffLimit` counts failed Pods before the whole Job is marked failed; it never makes a Pod repeat work it finished.
+  - id: create-cronjob
+    title: Create a CronJob that runs every minute
+    explain: |
+      A **CronJob** creates a Job from its `jobTemplate` on a cron schedule: minute, hour, day of the month, month, day of the week. `*/1 * * * *` (or `* * * * *`) is every minute. Quote the schedule, or the shell expands the stars.
+    command: kubectl -n batch-lab create cronjob tick --image=busybox:1.36 --schedule='*/1 * * * *' -- sh -c 'date; echo tick'
+    match: '^kubectl\b(?=.*\bcreate\s+(cronjob|cj)\s+tick\b)(?=.*--schedule)'
+    check:
+      id: tick-exists
+      description: CronJob tick runs every minute
+      type: kubectl
+      run: kubectl -n batch-lab get cronjob tick -o jsonpath='{.spec.schedule}' 2>/dev/null || true
+      expect: { matches: '^(\*/1|\*) \* \* \* \*$' }
+  - id: history
+    title: Keep less history, and never overlap runs
+    explain: |
+      Three fields of the CronJob's own `spec` (next to `schedule`, not inside `jobTemplate`) control what it keeps and how runs overlap:
+
+      - `successfulJobsHistoryLimit` and `failedJobsHistoryLimit`: how many finished Jobs it keeps (3 and 1 by default)
+      - `concurrencyPolicy`: `Allow` (the default), `Forbid` or `Replace`
+
+      `kubectl explain cronjob.spec` lists them all. Keep two successful runs and one failed, and forbid overlapping runs.
+    command: "kubectl -n batch-lab patch cronjob tick -p '{\"spec\":{\"successfulJobsHistoryLimit\":2,\"failedJobsHistoryLimit\":1,\"concurrencyPolicy\":\"Forbid\"}}'"
+    check:
+      id: tick-history
+      description: CronJob tick keeps 2 successful and 1 failed Job, and forbids overlapping runs
+      type: kubectl
+      run: kubectl -n batch-lab get cronjob tick -o jsonpath='{.spec.successfulJobsHistoryLimit} {.spec.failedJobsHistoryLimit} {.spec.concurrencyPolicy}'
+      expect: { equals: 2 1 Forbid }
+  - id: q-concurrency
+    title: What does concurrencyPolicy do?
+    question:
+      prompt: "`tick` now has `concurrencyPolicy: Forbid`. A run takes longer than a minute, and the next scheduled time comes while its Job is still running. What happens?"
+      choices:
+        - The new run starts anyway, next to the old one
+        - The CronJob skips the new run, because the previous Job is still active
+        - The old Job is stopped and the new run starts
+        - The CronJob suspends itself until someone resumes it
+      answer: 1
+      why: |
+        `Forbid` skips a run while the previous Job is active. `Allow` (the default) would start it alongside, and `Replace` would stop the running Job and start the new one. A Job that hangs under `Forbid` therefore blocks every later run, a classic exam fault: look for `ACTIVE 1` and a `LAST SCHEDULE` that does not move.
+  - id: trigger
+    title: Run it now instead of waiting
+    explain: |
+      `--from=cronjob/<name>` creates a Job from the CronJob's `jobTemplate` straight away: the way to test a CronJob without waiting for its schedule, even while it is suspended.
+    command: kubectl -n batch-lab create job tick-now --from=cronjob/tick
+    match: '^kubectl\b(?=.*\bcreate\s+job\s+tick-now\b)(?=.*--from=(cronjob|cj)/tick)'
+    check:
+      id: tick-now-done
+      description: Job tick-now succeeded
+      type: kubectl
+      run: kubectl -n batch-lab get job tick-now -o jsonpath='{.status.succeeded}'
+      expect: { equals: '1' }
+      retrySeconds: 60
+  - id: scheduled
+    title: See a scheduled run
+    explain: |
+      Within a minute the CronJob creates a Job of its own, named `tick-<number>` (the number encodes the scheduled time). `LAST SCHEDULE` fills in and `ACTIVE` goes to 1 and back to 0. The step turns green once a scheduled run has succeeded: run the command again if it is not there yet.
+    command: kubectl -n batch-lab get cronjob,jobs
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(cronjobs?|cj)\b)'
+    check:
+      id: scheduled-run
+      description: CronJob tick has a successful scheduled run
+      type: kubectl
+      run: kubectl -n batch-lab get cronjob tick -o jsonpath='{.status.lastSuccessfulTime}'
+      expect: { notEmpty: true }
+      retrySeconds: 90
+  - id: q-restart
+    title: Retrying inside a Pod
+    question:
+      prompt: A Job's command sometimes fails, and you want the failed container restarted **inside the same Pod** rather than a new Pod created for every failure. What do you set?
+      choices:
+        - "restartPolicy: OnFailure in the Pod template"
+        - "backoffLimit: 0"
+        - "restartPolicy: Always in the Pod template"
+        - "completions: 1"
+      answer: 0
+      why: |
+        With `OnFailure` the kubelet restarts the failed container in the same Pod; with `Never`, the Job controller creates a new Pod for every failure (and you keep the failed Pods to read their logs). Both count against `backoffLimit`. `Always` is rejected for Jobs, and `backoffLimit: 0` gives up at the first failure.
+  - id: explain-fields
+    title: Find a field without the docs
+    explain: |
+      The last habit: when you forget where a field lives, ask the API. `kubectl explain` shows the path, type and description of any field; `--recursive` prints the whole tree. Look up where `ttlSecondsAfterFinished` sits in a CronJob.
+    command: kubectl explain cronjob.spec.jobTemplate.spec.ttlSecondsAfterFinished
+    match: '^kubectl\b(?=.*\bexplain\b)(?=.*\b(cronjobs?|cj|jobs?)\b)'

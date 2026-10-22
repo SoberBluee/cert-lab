@@ -1,4 +1,4 @@
-import { createNs, nameField, nsField } from '../types';
+import { createNs, nameField, nsField, sq } from '../types';
 import type { FaultCategory } from './types';
 import { waitUnhealthy } from './wait';
 
@@ -146,21 +146,13 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
       `kubectl -n ${NS} get deployment ${APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically.`,
     ],
   }),
+  // Probe and memory kills belong to Restarting Pods; this pool covers what keeps a Pod from starting.
   layers: [
-    { name: 'the container', faults: ['image-pull', 'bad-command', 'busybox-bash', 'configmap-key', 'oom-killed'] },
-    { name: 'the probes', faults: ['liveness-port', 'readiness-path'] },
+    { name: 'the container', faults: ['image-pull', 'bad-command', 'no-bash', 'configmap-key'] },
+    { name: 'startup and readiness', faults: ['init-container-stuck', 'readiness-path'] },
     { name: 'scheduling', faults: ['requests-too-large', 'node-selector'] },
   ],
   faults: ({ NS, APP }) => [
-    {
-      id: 'oom-killed',
-      label: 'Memory limit too low (OOMKilled)',
-      break: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=memory=4Mi --limits=memory=4Mi`,
-      fix: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=50m,memory=32Mi --limits=cpu=250m,memory=128Mi`,
-      wait: rollout(NS, APP),
-      explain:
-        'The memory limit was lowered to 4Mi, so the container is killed as soon as it starts: `describe pod` shows `OOMKilled` (or a start error) and the restart count climbs. Put the requests and limits back to the spec.',
-    },
     {
       id: 'image-pull',
       label: 'Image tag does not exist (ImagePullBackOff)',
@@ -179,26 +171,13 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
         'A `command` override starts nginx with an unknown directive, so it exits immediately and the Pods go into `CrashLoopBackOff`. `kubectl logs --previous` shows the nginx error. Remove the command so the image default runs.',
     },
     {
-      id: 'busybox-bash',
+      id: 'no-bash',
       label: 'Command uses /bin/bash on an image without it',
       break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["/bin/bash","-c","nginx -g daemon off;"]}]}}}}`),
       fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]', 'json')}`,
       wait: rollout(NS, APP),
       explain:
         'The container `command` starts with `/bin/bash`, which this alpine-based image does not ship. Events show `exec: "/bin/bash": no such file` and the Pods CrashLoop. Remove the command override (or use `/bin/sh`) so nginx starts again.',
-    },
-    {
-      id: 'probe-type-delay',
-      label: 'Liveness probe fires before the container is ready',
-      break: patch(
-        NS,
-        APP,
-        `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["/bin/sh","-c","sleep 8; exec nginx -g daemon off;"],"livenessProbe":{"tcpSocket":{"port":80},"initialDelaySeconds":1,"periodSeconds":2,"failureThreshold":1}}]}}}}`,
-      ),
-      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"},{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe","value":{"tcpSocket":{"port":80}}}]', 'json')}`,
-      wait: rollout(NS, APP),
-      explain:
-        'A startup `sleep` delays nginx, but the liveness probe uses `initialDelaySeconds: 1` and `failureThreshold: 1`, so the kubelet kills the container before it listens. Restarts climb with `Liveness probe failed`. Remove the command override and restore a normal liveness probe on port 80.',
     },
     {
       id: 'configmap-key',
@@ -208,15 +187,6 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
 kubectl -n "${NS}" rollout restart "deployment/${APP}"`,
       wait: rollout(NS, APP),
       explain: `ConfigMap \`${APP}-config\` has the key \`mod\` instead of \`mode\`, so the containers cannot be created: \`CreateContainerConfigError\`, with the missing key named in the Events. Rename the key in the ConfigMap; the Pods start on their next retry.`,
-    },
-    {
-      id: 'liveness-port',
-      label: 'Liveness probe on the wrong port',
-      break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","livenessProbe":{"tcpSocket":{"port":8080}}}]}}}}`),
-      fix: `${patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","livenessProbe":{"tcpSocket":{"port":80}}}]}}}}`)}`,
-      wait: rollout(NS, APP),
-      explain:
-        'The liveness probe checks port 8080, where nothing listens, so the kubelet keeps killing healthy containers: the restart count climbs and the Events show `Liveness probe failed`. Point the probe back at port 80.',
     },
     {
       id: 'readiness-path',
@@ -229,12 +199,20 @@ kubectl -n "${NS}" rollout restart "deployment/${APP}"`,
     },
     {
       id: 'requests-too-large',
-      label: 'CPU request larger than any node (Pending)',
-      break: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=64 --limits=cpu=64`,
+      label: 'Memory request just above what a worker can offer (Pending)',
+      // Sized from the workers at setup, so the value looks plausible and only describe node shows why it cannot fit.
+      break: `max=0
+for n in $(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o name); do
+  ki=$(kubectl get "$n" -o jsonpath='{.status.allocatable.memory}' | sed 's/Ki$//')
+  (( ki > max )) && max=$ki
+done
+(( max > 0 )) || { echo "could not read the workers' allocatable memory" >&2; exit 1; }
+mem="$(( max / 1024 + 128 ))Mi"
+kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=50m,memory="$mem" --limits=cpu=250m,memory="$mem"`,
       fix: `kubectl -n "${NS}" set resources "deployment/${APP}" --requests=cpu=50m,memory=32Mi --limits=cpu=250m,memory=128Mi`,
       wait: rollout(NS, APP),
       explain:
-        'The CPU request was raised to 64 cores, so no node can fit a Pod: they stay `Pending` with `Insufficient cpu` in the Events. Put the requests and limits back to the spec.',
+        'The memory request was raised to a value that looks ordinary but is a little more than any worker can allocate, so the new Pods stay `Pending` with `Insufficient memory`. Compare the request with `Allocatable` and `Allocated resources` in `kubectl describe node`. Put the requests and limits back to the spec.',
     },
     {
       id: 'node-selector',
@@ -244,6 +222,17 @@ kubectl -n "${NS}" rollout restart "deployment/${APP}"`,
       wait: rollout(NS, APP),
       explain:
         "A `nodeSelector` of `disktype=ssd` matches no node, so the Pods stay `Pending` with `didn't match Pod's node affinity/selector` in the Events. The spec allows any worker: remove the nodeSelector.",
+    },
+    {
+      id: 'init-container-stuck',
+      label: 'Init container waits for a Service in the wrong namespace',
+      break: `kubectl -n "${NS}" create service clusterip "${APP}-backend" --tcp=80:80 --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "${NS}" patch deployment "${APP}" -p ${sq(
+  `{"spec":{"template":{"spec":{"initContainers":[{"name":"wait-backend","image":"busybox:1.36","command":["sh","-c","until nslookup ${APP}-backend.default.svc.cluster.local; do echo waiting for ${APP}-backend; sleep 2; done"]}]}}}}`,
+)}`,
+      fix: patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/initContainers"}]', 'json'),
+      wait: rollout(NS, APP),
+      explain: `The Pods have an init container \`wait-backend\` that loops until \`${APP}-backend.default.svc.cluster.local\` resolves. Service \`${APP}-backend\` exists, but in \`${NS}\`, not \`default\`, so the name never resolves and the Pods stay \`Init:0/1\`. \`kubectl -n ${NS} logs <pod> -c wait-backend\` shows the endless "waiting" and the failed lookups. Point the init container at \`${APP}-backend\` (the short name resolves in the Pod's own namespace) or at \`${APP}-backend.${NS}.svc.cluster.local\`; the spec has no init container, so removing it is fine too.`,
     },
     {
       id: 'rollout-zero-surge',
@@ -261,7 +250,7 @@ kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.spec.paused}' | grep -
       fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=strategic -p '{"spec":{"paused":false,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"}}}}'`,
       wait: rollout(NS, APP),
       explain:
-        'The Deployment is paused (`spec.paused: true`) after a template change, and `maxSurge: 0` so no surge Pods can help the rollout. Existing Pods look fine, but `updatedReplicas` never catches up and `kubectl rollout status` hangs. Set `paused: false`, restore a normal surge/unavailable (for example `25%`), and let the rollout finish.',
+        'The Deployment is paused (`spec.paused: true`), so a template change made since never rolls out: the old Pods look fine, but `updatedReplicas` stays behind and `kubectl rollout status` waits for ever. `kubectl get deployment -o yaml` shows `paused: true`; `kubectl rollout resume` lets the rollout finish. The strategy also says `maxSurge: 0` with `maxUnavailable: 1`, which looks suspicious but is a valid strategy (one Pod at a time, no extras): it is not the cause.',
     },
   ],
 };

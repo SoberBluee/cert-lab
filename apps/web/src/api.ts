@@ -81,6 +81,7 @@ export const api = {
     request<{ lessons: LessonSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/lessons${track ? `?track=${track}` : ''}`),
   startLesson: (id: string) => request<SessionView>('POST', `/lessons/${encodeURIComponent(id)}/start`),
   skipStep: () => request<SessionView>('POST', '/sessions/current/learn/skip'),
+  answerStep: (choice: number) => request<SessionView>('POST', '/sessions/current/learn/answer', { choice }),
   quizzes: (track?: LessonTrack) =>
     request<{ quizzes: QuizSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/quizzes${track ? `?track=${track}` : ''}`),
   quiz: (id: string) => request<QuizView>('GET', `/quizzes/${encodeURIComponent(id)}?presented=1`),

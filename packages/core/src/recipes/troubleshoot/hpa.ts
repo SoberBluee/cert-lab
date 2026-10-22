@@ -29,6 +29,10 @@ export const hpaCategory: FaultCategory = {
   points: 7,
   tags: ['troubleshooting', 'hpa', 'autoscaling', 'metrics-server'],
   settleSeconds: 20,
+  layers: [
+    { name: 'the autoscaler and its target', faults: ['no-cpu-request', 'target-name', 'target-kind', 'max-one'] },
+    { name: 'the metrics pipeline', faults: ['metrics-server-down', 'metrics-apiservice', 'metrics-kubelet-tls'] },
+  ],
   fields: [
     nsField(['shop', 'storefront', 'media', 'scale', 'traffic', 'web-tier', 'frontend', 'api-tier', 'loadtest', 'elastic']),
     nameField('APP', 'Deployment and autoscaler name', ['web', 'api', 'frontend', 'gateway', 'catalog', 'search', 'checkout', 'cdn', 'proxy', 'edge']),
@@ -192,6 +196,8 @@ done`,
     {
       id: 'metrics-server-down',
       label: 'metrics-server scaled to zero',
+      // The metrics API serves the whole cluster: stage it after other questions and fix it first.
+      disruptive: true,
       break: `kubectl -n kube-system scale deployment/metrics-server --replicas=0
 kubectl -n kube-system wait --for=delete pod -l app.kubernetes.io/name=metrics-server --timeout=90s >/dev/null 2>&1 || true`,
       fix: `kubectl -n kube-system scale deployment/metrics-server --replicas=1
@@ -203,6 +209,7 @@ ${restoreMetricsServer}`,
     {
       id: 'metrics-apiservice',
       label: 'metrics-server Service points at the wrong port',
+      disruptive: true,
       break: `kubectl -n kube-system patch service metrics-server --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":8443}]'`,
       fix: `port="$(kubectl -n kube-system get deployment metrics-server -o jsonpath='{.spec.template.spec.containers[0].ports[0].name}')"
 kubectl -n kube-system patch service metrics-server --type=json -p "[{\\"op\\":\\"replace\\",\\"path\\":\\"/spec/ports/0/targetPort\\",\\"value\\":\\"$port\\"}]"
@@ -210,6 +217,23 @@ ${restoreMetricsServer}`,
       wait: waitActive(NS, APP),
       explain:
         "metrics-server itself runs, but its Service sends traffic to port `8443`, where nothing listens. The `v1beta1.metrics.k8s.io` APIService behind that Service is unavailable (`kubectl get apiservice v1beta1.metrics.k8s.io` shows FailedDiscoveryCheck), so `kubectl top` and every autoscaler fail. Set the Service's `targetPort` back to the container's port (named `https`).",
+    },
+    {
+      id: 'metrics-kubelet-tls',
+      label: 'metrics-server no longer accepts the kubelets\' self-signed certificates',
+      disruptive: true,
+      // The rollout keeps the old Pod while the new one is not ready: allow it to go, as a hasty edit would.
+      break: `idx=$(kubectl -n kube-system get deployment metrics-server -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0]["args"].index("--kubelet-insecure-tls"))')
+kubectl -n kube-system patch deployment metrics-server --type=json -p '[{"op":"remove","path":"/spec/template/spec/containers/0/args/'"$idx"'"},{"op":"add","path":"/spec/strategy/rollingUpdate/maxUnavailable","value":1}]'
+for _ in $(seq 1 60); do
+  kubectl top nodes >/dev/null 2>&1 || break
+  sleep 3
+done`,
+      fix: `kubectl -n kube-system patch deployment metrics-server --type=json -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'`,
+      wait: `${restoreMetricsServer}
+${waitActive(NS, APP)}`,
+      explain:
+        "metrics-server runs, but its new Pod never turns Ready: its logs say it cannot scrape any kubelet (`x509: cannot validate certificate for <node-ip> because it doesn't contain any IP SANs`). kubeadm kubelets serve self-signed certificates, which metrics-server only accepts with `--kubelet-insecure-tls`, and that flag was removed from its arguments. Without data, the `v1beta1.metrics.k8s.io` APIService is unavailable and `kubectl top` and every autoscaler fail. Add `--kubelet-insecure-tls` back to the container's `args` (`kubectl -n kube-system edit deploy metrics-server`).",
     },
   ],
 };

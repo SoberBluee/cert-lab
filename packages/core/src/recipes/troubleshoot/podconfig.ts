@@ -15,7 +15,7 @@ export const podConfigCategory: FaultCategory = {
   name: 'Pod configuration',
   description: 'A Deployment that serves its page from a ConfigMap and reads a Secret no longer comes up healthy.',
   domain: 'workloads',
-  difficulty: 1,
+  difficulty: 2,
   minutes: 7,
   points: 6,
   tags: ['troubleshooting', 'configmap', 'secret', 'volumes', 'security-context'],

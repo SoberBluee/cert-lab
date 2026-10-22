@@ -1,9 +1,31 @@
-import { createNs, nameField, nsField } from '../types';
+import { createNs, nameField, nsField, sq } from '../types';
 import type { FaultCategory } from './types';
 
 const IMAGE = 'nginx:1.27-alpine';
 
 const applyObject = (ns: string, json: string) => `kubectl -n "${ns}" apply -f - <<< '${json}'`;
+
+/** A webhook whose Service does not exist and that fails closed; `extra` adds selectors to the webhook entry. */
+const deadWebhook = (kind: 'Validating' | 'Mutating', name: string, hook: string, svcNs: string, svc: string, extra: object) =>
+  `kubectl apply -f - <<< ${sq(
+    JSON.stringify({
+      apiVersion: 'admissionregistration.k8s.io/v1',
+      kind: `${kind}WebhookConfiguration`,
+      metadata: { name },
+      webhooks: [
+        {
+          name: hook,
+          failurePolicy: 'Fail',
+          sideEffects: 'None',
+          timeoutSeconds: 3,
+          admissionReviewVersions: ['v1'],
+          clientConfig: { service: { name: svc, namespace: svcNs, path: kind === 'Validating' ? '/validate' : '/mutate' }, caBundle: 'LS0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0t' },
+          rules: [{ apiGroups: [''], apiVersions: ['v1'], operations: ['CREATE'], resources: ['pods'], scope: 'Namespaced' }],
+          ...extra,
+        },
+      ],
+    }),
+  )}`;
 
 const rollout = (ns: string, app: string) => `kubectl -n "${ns}" rollout restart "deployment/${app}" >/dev/null
 kubectl -n "${ns}" rollout status "deployment/${app}" --timeout=240s`;
@@ -21,6 +43,10 @@ export const admissionCategory: FaultCategory = {
   minutes: 8,
   points: 5,
   tags: ['troubleshooting', 'admission', 'resourcequota', 'limitrange', 'pod-security', 'webhook'],
+  layers: [
+    { name: 'quotas and limits in the namespace', faults: ['quota-pods', 'quota-limits', 'limitrange-max', 'limitrange-min'] },
+    { name: 'admission policy', faults: ['pod-security', 'webhook', 'mutating-webhook', 'webhook-object-selector'] },
+  ],
   settleSeconds: 30,
   fields: [
     nsField(['batch', 'tenant-a', 'tenant-b', 'sandbox', 'staging', 'analytics', 'reports', 'ingest', 'team-blue', 'team-red']),
@@ -86,6 +112,7 @@ sleep 15
       `kubectl -n ${NS} get deployment,replicaset,pods: no Pods at all, or fewer than wanted, means they were refused before they existed.`,
       `kubectl -n ${NS} describe replicaset -l app=${APP}: the FailedCreate event quotes the refusal word for word.`,
       'That message names whatever refused the Pod. Find that object, whether it lives in the namespace, on the namespace or cluster-wide, and read what it enforces.',
+      'Admission webhooks are cluster-scoped: kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration, then -o yaml to see which namespaces and objects each one selects, which Service it calls, and what happens when that call fails.',
     ],
   }),
   faults: ({ NS, APP }) => [
@@ -140,6 +167,26 @@ kubectl apply -f - <<< '{"apiVersion":"admissionregistration.k8s.io/v1","kind":"
       fix: `kubectl delete validatingwebhookconfiguration "${NS}-pod-policy"`,
       wait: rollout(NS, APP),
       explain: `ValidatingWebhookConfiguration \`${NS}-pod-policy\` sends every Pod create in \`${NS}\` to Service \`${NS}/pod-policy\`, which does not exist. With \`failurePolicy: Fail\`, every create fails ("failed calling webhook ... service \\"pod-policy\\" not found"). Delete the webhook, or set its \`failurePolicy\` to \`Ignore\` if it must stay.`,
+    },
+    {
+      id: 'mutating-webhook',
+      label: 'Mutating webhook with a missing Service fails closed',
+      break: deadWebhook('Mutating', `${NS}-pod-defaults`, 'defaults.cka.lab', NS, 'pod-defaults', {
+        namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': NS } },
+      }),
+      fix: `kubectl delete mutatingwebhookconfiguration "${NS}-pod-defaults"`,
+      wait: rollout(NS, APP),
+      explain: `MutatingWebhookConfiguration \`${NS}-pod-defaults\` was meant to fill in defaults for Pods in \`${NS}\`, but its Service \`${NS}/pod-defaults\` does not exist and it fails closed, so every Pod create in the namespace fails ("failed calling webhook \\"defaults.cka.lab\\""). Looking only at validating webhooks misses it. Delete it, or set \`failurePolicy: Ignore\` if it must stay.`,
+    },
+    {
+      id: 'webhook-object-selector',
+      label: 'Webhook selects the Pods by label, in every namespace',
+      break: deadWebhook('Validating', `${NS}-pod-guard`, 'guard.cka.lab', 'kube-system', 'pod-guard', {
+        objectSelector: { matchLabels: { app: APP } },
+      }),
+      fix: `kubectl delete validatingwebhookconfiguration "${NS}-pod-guard"`,
+      wait: rollout(NS, APP),
+      explain: `ValidatingWebhookConfiguration \`${NS}-pod-guard\` has no namespaceSelector but an \`objectSelector\` on \`app=${APP}\`: it intercepts only Pods with that label, in every namespace, and calls Service \`kube-system/pod-guard\`, which does not exist. Other Pods in \`${NS}\` are created fine, which makes the namespace look healthy; the FailedCreate event of the ReplicaSet names the webhook. Delete it, or set \`failurePolicy: Ignore\` if it must stay.`,
     },
   ],
 };

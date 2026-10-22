@@ -6,7 +6,7 @@ import { AWS_DOMAINS, DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
 import { isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
-import { fullMock, MOCK_MINUTES, MOCK_QUESTIONS, RANDOM_MAX, randomLab, toRequest, type LabKind } from '../quickRandom';
+import { fullMock, MOCK_MINUTES, MOCK_QUESTIONS, RANDOM_MAX, randomLab, toRequest, type Depth, type LabKind } from '../quickRandom';
 import { SECTIONS } from '../section';
 
 const KIND_LABELS: Record<LabKind, string> = { create: 'Create', troubleshoot: 'Troubleshoot', random: 'Random' };
@@ -100,7 +100,7 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   const chosenTopic = topicChoices.find((t) => t.id === labTopic);
   const topicIds = topicChoices.map((t) => t.id).join('\n');
   const quickStart = useMutation({
-    mutationFn: async ({ kind, n, topic, layers, contexts }: { kind: LabKind; n: number; topic?: LabTopic; layers: number; contexts: boolean }) => {
+    mutationFn: async ({ kind, n, topic, layers, contexts }: { kind: LabKind; n: number; topic?: LabTopic; layers: Depth; contexts: boolean }) => {
       setLabPhase('generating');
       const questions = await randomLab(catalog.data!, n, kind, topic, layers);
       const id = `quick-lab-${Math.random().toString(36).slice(2, 8).padEnd(6, '0')}`;
@@ -323,6 +323,7 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
             title="Troubleshooting questions can stack several separate faults, one per layer (for example the Service, the Pods and a NetworkPolicy). Categories without layers stay single."
           >
             <option value="1">1 fault each</option>
+            <option value="mix">Exam mix (1 or 2)</option>
             <option value="2">2 faults stacked</option>
             <option value="3">3 faults stacked</option>
           </select>
@@ -346,7 +347,7 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
                     : undefined
             }
             onClick={() =>
-              quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic, layers: labKind === 'create' ? 1 : Number(labLayers), contexts: labContexts })
+              quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic, layers: labKind === 'create' ? 1 : labLayers === 'mix' ? 'mix' : Number(labLayers), contexts: labContexts })
             }
           >
             {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}

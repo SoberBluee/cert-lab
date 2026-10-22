@@ -155,6 +155,10 @@ export class LearnWatcher {
 
   private async poll(): Promise<void> {
     if (!this.host.isRunning(this.sessionId)) return;
+    // A question is answered in the pane: leave the log unread meanwhile, so commands run for the
+    // steps after it still count once it is answered.
+    const p = this.host.getProgress(this.sessionId);
+    if (p && this.lesson.def.steps[p.current]?.question) return;
     const fresh: LoggedCommand[] = [];
     for (const node of this.nodes.length ? this.nodes : ['controlplane']) {
       const offset = this.offsets.get(node) ?? 0;
@@ -228,6 +232,29 @@ export class LearnWatcher {
   }
 
   /**
+   * Answers the current step's question. A right answer completes the step; a wrong one is recorded
+   * and may be followed by another try. Returns whether the answer was right.
+   */
+  answer(choice: number): Promise<boolean> {
+    let right = false;
+    return this.exclusive(async () => {
+      const p = this.host.getProgress(this.sessionId);
+      const q = p && this.lesson.def.steps[p.current]?.question;
+      if (!p || !q) return;
+      const progress = p.steps[p.current];
+      if (choice === q.answer) {
+        right = true;
+        Object.assign(progress, { done: true, doneAt: now(), attempt: undefined });
+        p.current++;
+        if (p.current >= p.steps.length) p.completedAt = now();
+      } else if (!progress.wrong?.includes(choice)) {
+        progress.wrong = [...(progress.wrong ?? []), choice];
+      }
+      if (this.host.isRunning(this.sessionId)) this.host.saveProgress(this.sessionId, p);
+    }).then(() => right);
+  }
+
+  /**
    * Runs the current step's command for the learner, so later steps find the state they expect,
    * then marks the step skipped. The run is not logged, so it cannot complete a later step.
    */
@@ -236,11 +263,14 @@ export class LearnWatcher {
       const p = this.host.getProgress(this.sessionId);
       if (!p || p.current >= p.steps.length) return;
       const step = this.lesson.def.steps[p.current];
-      try {
-        const r = await runAsLearner(this.host.driver, this.sessionId, step.node, step.command, false);
-        if (r.exitCode !== 0) this.host.log.info({ sessionId: this.sessionId, step: step.id, stderr: r.stderr.slice(-500) }, 'learn: skipped step command failed');
-      } catch (e) {
-        this.host.log.warn({ sessionId: this.sessionId, step: step.id, err: e }, 'learn: running the skipped step failed');
+      // A skipped question only reveals its answer.
+      if (step.command !== undefined) {
+        try {
+          const r = await runAsLearner(this.host.driver, this.sessionId, step.node, step.command, false);
+          if (r.exitCode !== 0) this.host.log.info({ sessionId: this.sessionId, step: step.id, stderr: r.stderr.slice(-500) }, 'learn: skipped step command failed');
+        } catch (e) {
+          this.host.log.warn({ sessionId: this.sessionId, step: step.id, err: e }, 'learn: running the skipped step failed');
+        }
       }
       Object.assign(p.steps[p.current], { done: true, skipped: true, doneAt: now(), failure: undefined, attempt: undefined });
       p.current++;

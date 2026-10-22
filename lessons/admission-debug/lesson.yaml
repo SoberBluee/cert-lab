@@ -1,0 +1,244 @@
+id: admission-debug
+title: Debug Pods refused at admission
+summary: Deployment checkout in namespace shop-api has no Pods at all. Something refuses them before they exist, and fixing one thing reveals the next. Follow the FailedCreate messages through a LimitRange, Pod Security, a leftover webhook and a quota, without changing the Deployment.
+topic: admission
+estimatedMinutes: 22
+setup:
+  - node: controlplane
+    timeoutSeconds: 300
+    run: |
+      kubectl create namespace shop-api
+      timeout 60 bash -c "until kubectl -n shop-api get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
+      kubectl label namespace shop-api policy=strict pod-security.kubernetes.io/enforce=restricted --overwrite
+      kubectl apply -f - <<EOF
+      apiVersion: v1
+      kind: ResourceQuota
+      metadata:
+        name: tenant-quota
+        namespace: shop-api
+      spec:
+        hard:
+          pods: "1"
+      ---
+      apiVersion: v1
+      kind: LimitRange
+      metadata:
+        name: container-floor
+        namespace: shop-api
+      spec:
+        limits:
+          - type: Container
+            min:
+              memory: 128Mi
+      ---
+      apiVersion: admissionregistration.k8s.io/v1
+      kind: ValidatingWebhookConfiguration
+      metadata:
+        name: shop-policy
+      webhooks:
+        - name: policy.shop.lab
+          admissionReviewVersions: ["v1"]
+          sideEffects: None
+          failurePolicy: Fail
+          timeoutSeconds: 3
+          clientConfig:
+            service:
+              name: policy-svc
+              namespace: shop-api
+              path: /validate
+          rules:
+            - apiGroups: [""]
+              apiVersions: ["v1"]
+              operations: ["CREATE"]
+              resources: ["pods"]
+          namespaceSelector:
+            matchLabels:
+              policy: strict
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: checkout
+        namespace: shop-api
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: { app: checkout }
+        template:
+          metadata:
+            labels: { app: checkout }
+          spec:
+            containers:
+              - name: web
+                image: nginx:1.27-alpine
+                resources:
+                  requests: { cpu: 100m, memory: 64Mi }
+      EOF
+steps:
+  - id: symptom
+    title: See the symptom
+    explain: |
+      Deployment `checkout` should run 2 replicas and runs none. Not `Pending`, not crashing: there are no Pods at all. The Deployment itself is right and must not change; fix whatever refuses its Pods.
+    command: kubectl -n shop-api get deploy,rs,pods
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(deploy(ments?)?|rs|replicasets?|po|pods?)\b)'
+  - id: events-1
+    title: Ask the ReplicaSet why
+    explain: |
+      The ReplicaSet creates the Pods, so its Events record every refusal: `FailedCreate ... pods "checkout-..." is forbidden: minimum memory usage per Container is 128Mi, but request is 64Mi`. (`kubectl -n shop-api get events` shows the same.)
+    command: kubectl -n shop-api describe rs -l app=checkout
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(rs|replicasets?|events?|ev)\b)'
+  - id: q-where
+    title: Where were the Pods stopped?
+    question:
+      prompt: No Pod exists, and the ReplicaSet reports `FailedCreate`. Where on the way into the cluster were the Pods stopped?
+      choices:
+        - By the scheduler, which found no node for them
+        - At admission, in the API server, before they were stored
+        - By the kubelet, which refused to run them
+        - By the container runtime, which could not pull the image
+      answer: 1
+      why: |
+        A Pod the scheduler cannot place still exists, `Pending`, with a `FailedScheduling` event; one the kubelet or runtime rejects exists too, with a container status. A Pod refused at admission is never stored, so the only trace is `FailedCreate` on whatever tried to create it: the ReplicaSet, Job or StatefulSet.
+  - id: limitrange
+    title: Read the LimitRange
+    explain: |
+      `container-floor` sets a **minimum** of `128Mi` of memory per container. The Pods request `64Mi`, and the Deployment must keep that request.
+    command: kubectl -n shop-api describe limitrange
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(limits|limitranges?)\b)'
+  - id: fix-limitrange
+    title: Remove the floor
+    explain: |
+      Delete the LimitRange (or lower its `min` to `64Mi` or less).
+    command: kubectl -n shop-api delete limitrange container-floor
+    check:
+      id: floor-gone
+      description: no LimitRange in shop-api requires 128Mi of memory
+      type: kubectl
+      run: kubectl -n shop-api get limitrange -o jsonpath='{.items[*].spec.limits[*].min.memory}'
+      expect: { notContains: 128Mi }
+  - id: retry-1
+    title: Retry, and read the next refusal
+    explain: |
+      The ReplicaSet controller retries on its own with a growing back-off; a rollout restart retries at once. Then describe the ReplicaSets again: a new reason, `violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false, unrestricted capabilities, runAsNonRoot != true, seccompProfile`.
+    command: kubectl -n shop-api rollout restart deployment checkout && kubectl -n shop-api describe rs -l app=checkout
+    match: '^kubectl\b(?=.*\brollout\s+restart\b)(?=.*\bcheckout\b)'
+  - id: ns-labels
+    title: Find where the policy is set
+    explain: |
+      Pod Security is configured on the namespace, with labels: `pod-security.kubernetes.io/enforce=restricted`. Note the other label, `policy=strict`, too: you will need it soon.
+    command: kubectl get namespace shop-api --show-labels
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(ns|namespaces?)\b)(?=.*shop-api)'
+  - id: q-pss
+    title: Which fix is right?
+    question:
+      prompt: The nginx Pods run as root and keep their default capabilities, which `restricted` forbids. The Deployment must not change. What is the right fix?
+      choices:
+        - "Set the namespace to enforce=privileged"
+        - "Set the namespace to enforce=baseline, which these Pods meet"
+        - Delete the namespace and create it again without labels
+        - Add runAsNonRoot to the Pod template
+      answer: 1
+      why: |
+        `baseline` still blocks privileged containers, host namespaces and the other real escalations, and ordinary root images like this nginx pass it. `privileged` would switch the protection off altogether, deleting the namespace destroys everything in it, and changing the Pod template is ruled out (and would make this nginx image fail to start).
+  - id: fix-pss
+    title: Relax the namespace to baseline
+    explain: |
+      `--overwrite` replaces the existing label value.
+    command: kubectl label namespace shop-api pod-security.kubernetes.io/enforce=baseline --overwrite
+    check:
+      id: not-restricted
+      description: namespace shop-api no longer enforces restricted
+      type: kubectl
+      run: kubectl get namespace shop-api -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}'
+      expect: { notContains: restricted }
+  - id: retry-2
+    title: Retry, and read the next refusal
+    explain: |
+      Refused again, by something else: `Internal error occurred: failed calling webhook "policy.shop.lab": ... service "policy-svc" not found`.
+    command: kubectl -n shop-api rollout restart deployment checkout && kubectl -n shop-api describe rs -l app=checkout
+    match: '^kubectl\b(?=.*\brollout\s+restart\b)(?=.*\bcheckout\b)'
+  - id: webhooks
+    title: Find the webhook
+    explain: |
+      Webhook configurations are cluster-scoped, so they do not show up in the namespace. `-o yaml` shows what `shop-policy` covers (Pod creates in namespaces labelled `policy=strict`), the Service it calls (`shop-api/policy-svc`, which does not exist) and `failurePolicy: Fail`.
+    command: kubectl get validatingwebhookconfigurations shop-policy -o yaml
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(validatingwebhookconfigurations?|mutatingwebhookconfigurations?)\b)'
+  - id: q-webhook
+    title: How do you get rid of it?
+    question:
+      prompt: "The webhook calls a Service that does not exist, with `failurePolicy: Fail`. Which change gets the Pods created without leaving a broken gate behind?"
+      choices:
+        - Create an empty Service named policy-svc
+        - Delete the leftover webhook (or set failurePolicy Ignore if its owners still need it)
+        - Restart the API server so it reloads its webhooks
+        - Raise the webhook's timeoutSeconds
+      answer: 1
+      why: |
+        An empty Service has no endpoints, so the call still fails; the API server reads webhook configurations live, so a restart changes nothing; a longer timeout only makes each failure slower. The webhook is a leftover: delete it. If it belonged to a running add-on, `Ignore` would be the stop-gap.
+  - id: fix-webhook
+    title: Delete the leftover webhook
+    explain: |
+      Removing the `policy=strict` label from the namespace would also stop it applying here, but it would stay behind for every other namespace that carries the label.
+    command: kubectl delete validatingwebhookconfiguration shop-policy
+    match: '^kubectl\b(?=.*\bdelete\b)(?=.*\bvalidatingwebhookconfigurations?\b)'
+    check:
+      id: webhook-gone
+      description: ValidatingWebhookConfiguration shop-policy is gone
+      type: kubectl
+      run: kubectl get validatingwebhookconfiguration shop-policy -o name 2>/dev/null || echo none
+      expect: { equals: none }
+  - id: retry-3
+    title: Retry once more
+    explain: |
+      Progress: one Pod runs. The second is refused with `exceeded quota: tenant-quota, requested: pods=1, used: pods=1, limited: pods=1`.
+    command: kubectl -n shop-api rollout restart deployment checkout && kubectl -n shop-api describe rs -l app=checkout
+    match: '^kubectl\b(?=.*\brollout\s+restart\b)(?=.*\bcheckout\b)'
+    check:
+      id: one-running
+      description: checkout runs a Pod
+      type: kubectl
+      run: kubectl -n shop-api get pods -l app=checkout --field-selector=status.phase=Running -o name | wc -l | tr -d ' '
+      expect: { gte: 1 }
+      retrySeconds: 60
+  - id: quota
+    title: Read the quota
+    explain: |
+      `tenant-quota` allows a single Pod in the namespace: `pods 1/1`.
+    command: kubectl -n shop-api describe quota
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(quota|resourcequotas?)\b)'
+  - id: fix-quota
+    title: Raise the quota
+    explain: |
+      The task wants 2 replicas, so the quota has to make room: allow 4 Pods, enough for a rolling update's extra Pod too. (`kubectl -n shop-api edit quota tenant-quota` works as well.)
+    command: "kubectl -n shop-api patch resourcequota tenant-quota -p '{\"spec\":{\"hard\":{\"pods\":\"4\"}}}'"
+    check:
+      id: quota-raised
+      description: tenant-quota allows at least 2 Pods
+      type: kubectl
+      run: kubectl -n shop-api get resourcequota tenant-quota -o jsonpath='{.spec.hard.pods}'
+      expect: { gte: 2 }
+  - id: confirm
+    title: Get both replicas running
+    explain: |
+      Retry the rollout (or wait for the ReplicaSet's next try): `checkout` reaches `2/2`.
+    command: kubectl -n shop-api rollout restart deployment checkout && kubectl -n shop-api rollout status deployment checkout
+    match: '^kubectl\b(?=.*\b(rollout|get)\b)(?=.*\b(checkout|deploy(ments?)?)\b)'
+    check:
+      id: two-ready
+      description: checkout runs 2 ready replicas
+      type: kubectl
+      run: kubectl -n shop-api get deployment checkout -o jsonpath='{.status.readyReplicas}'
+      expect: { equals: '2' }
+      retrySeconds: 120
+  - id: q-order
+    title: Why that order?
+    question:
+      prompt: The refusals came one at a time, always in the same order. Which order, and why?
+      choices:
+        - Quota, webhook, Pod Security, LimitRange, newest object first
+        - LimitRange, Pod Security, webhook, quota, the order in which the API server runs its admission checks
+        - "A random order: each retry hits whichever check answers first"
+        - Alphabetical, by the name of the object that refused
+      answer: 1
+      why: |
+        Admission plugins run in a fixed order, and the first refusal is the one returned. The built-in checks come first (LimitRanger, then PodSecurity), then the webhooks, and ResourceQuota runs last, so quota is only charged for requests every other check allowed. That is why one fault can hide another: always retry and read the message again after each fix.

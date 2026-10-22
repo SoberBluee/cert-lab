@@ -28,6 +28,16 @@ export type Question =
 
 export type LabKind = 'create' | 'troubleshoot' | 'random';
 
+/**
+ * How many faults a troubleshooting question stacks: a fixed number, or the exam's mix, where most
+ * questions have one root cause and some have two.
+ */
+export type Depth = number | 'mix';
+/** Share of exam-mix questions that stack a second fault. */
+export const EXAM_MIX_SECOND = 0.4;
+
+const rollDepth = (depth: Depth) => (depth === 'mix' ? (Math.random() < EXAM_MIX_SECOND ? 2 : 1) : depth);
+
 let nextKey = 1;
 export const newKey = () => nextKey++;
 
@@ -127,12 +137,12 @@ function pinnedParts(builder: BuilderSummary, ids: string[], plain: boolean): Pa
   });
 }
 
-function randomQuestion(item: Item, plain = false, layers = 1): Question {
+function randomQuestion(item: Item, plain = false, layers: Depth = 1): Question {
   const key = newKey();
   if (item.kind === 'troubleshoot') {
     const { category } = item;
     // A topic's fault subset may not span several layers, so it stays single.
-    const depth = item.faults ? 1 : Math.min(layers, category.maxLayers);
+    const depth = item.faults ? 1 : Math.min(rollDepth(layers), category.maxLayers);
     return {
       key,
       type: 'troubleshoot',
@@ -176,7 +186,7 @@ function topicItems(catalog: RecipeCatalog, topic: LabTopic): Item[] {
  * Every item a lab of `n` questions of `kind` can draw. `topic` limits that to one category. Asking
  * for stacked faults leaves out troubleshooting categories that cannot stack any.
  */
-function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabTopic, layers = 1): Item[] {
+function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabTopic, layers: Depth = 1): Item[] {
   const items: Item[] = topic
     ? kind === 'random' || topic.group === kind
       ? topicItems(catalog, topic)
@@ -185,14 +195,39 @@ function itemPool(catalog: RecipeCatalog, n: number, kind: LabKind, topic?: LabT
         ...(kind === 'troubleshoot' ? [] : catalog.builders.map((builder) => ({ kind: 'create' as const, builder }))),
         ...(kind === 'create' ? [] : catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category }))),
       ];
-  const layered = layers > 1 && !topic ? items.filter((i) => i.kind !== 'troubleshoot' || i.category.maxLayers > 1) : items;
+  const layered = typeof layers === 'number' && layers > 1 && !topic ? items.filter((i) => i.kind !== 'troubleshoot' || i.category.maxLayers > 1) : items;
   return layered.filter((i) => !(i.kind === 'create' && i.builder.solo && n > 1));
 }
 
 /**
+ * The items in a random order whose domains follow the curriculum: each next item comes from a domain
+ * drawn by its MOCK_PLAN weight, so troubleshooting comes up about twice as often as storage, as on
+ * the exam. Within a domain, items not in `seen` come first.
+ */
+export function byCurriculum(items: Item[], seen: ReadonlySet<string> = new Set()): Item[] {
+  const queues = new Map<string, Item[]>();
+  for (const domain of new Set(items.map((i) => info(i).domain))) {
+    const inDomain = items.filter((i) => info(i).domain === domain);
+    queues.set(domain, [...shuffle(inDomain.filter((i) => !seen.has(itemId(i)))), ...shuffle(inDomain.filter((i) => seen.has(itemId(i))))]);
+  }
+  const out: Item[] = [];
+  while (queues.size) {
+    const domains = [...queues.keys()];
+    const weights = domains.map((d) => MOCK_PLAN[d as CkaDomain] ?? 1);
+    let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+    let k = 0;
+    while (k < domains.length - 1 && r >= weights[k]) r -= weights[k++];
+    const queue = queues.get(domains[k])!;
+    out.push(queue.shift()!);
+    if (!queue.length) queues.delete(domains[k]);
+  }
+  return out;
+}
+
+/**
  * `n` items of `kind`: distinct while the catalog lasts, no solo builder unless n is 1, at most one
- * that breaks the API. Items not in `seen` come first, so successive labs work through the whole
- * catalog before repeating anything.
+ * that breaks the API. Without a topic, domains are drawn by curriculum weight. Items not in `seen`
+ * come first, so successive labs work through the whole catalog before repeating anything.
  */
 export function pickItems(
   catalog: RecipeCatalog,
@@ -200,10 +235,13 @@ export function pickItems(
   kind: LabKind = 'random',
   seen: ReadonlySet<string> = new Set(),
   topic?: LabTopic,
-  layers = 1,
+  layers: Depth = 1,
 ): Item[] {
   const items = itemPool(catalog, n, kind, topic, layers);
-  const order = () => [...shuffle(items.filter((i) => !seen.has(itemId(i)))), ...shuffle(items.filter((i) => seen.has(itemId(i))))];
+  const order = () =>
+    topic
+      ? [...shuffle(items.filter((i) => !seen.has(itemId(i)))), ...shuffle(items.filter((i) => seen.has(itemId(i))))]
+      : byCurriculum(items, seen);
   const out: Item[] = [];
   let apiTaken = false;
   for (let pass = 0; out.length < n && pass < n; pass++) {
@@ -223,7 +261,7 @@ export function pickItems(
 }
 
 /** Rolls a question until the server accepts it; after a few rejected rolls, the plain question. */
-async function validRandomQuestion(item: Item, layers: number): Promise<Question> {
+async function validRandomQuestion(item: Item, layers: Depth): Promise<Question> {
   for (let i = 0; i < RANDOM_TRIES; i++) {
     const q = randomQuestion(item, false, layers);
     const preview = await studioApi.quickPreview({ id: 'random-check', title: 'Random check', questions: [toQuestion(q)] });
@@ -249,7 +287,7 @@ export function nextSeen(seen: ReadonlySet<string>, picked: Item[], pool: Item[]
   return next;
 }
 
-export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', topic?: LabTopic, layers = 1): Promise<Question[]> {
+export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind = 'random', topic?: LabTopic, layers: Depth = 1): Promise<Question[]> {
   const seen = loadSeen();
   const items = pickItems(catalog, n, kind, seen, topic, layers);
   localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, items, itemPool(catalog, n, kind, topic, layers))]));
@@ -270,7 +308,8 @@ export const MOCK_QUESTIONS = Object.values(MOCK_PLAN).reduce((s, n) => s + n, 0
 
 /**
  * A full mock exam: questions drawn per domain by MOCK_PLAN, distinct topics, at most one that can
- * take the API server down, in random order. Like randomLab, it prefers what has not come up lately.
+ * take the API server down, in random order, with the exam's mix of one and two root causes. Like
+ * randomLab, it prefers what has not come up lately.
  */
 export async function fullMock(catalog: RecipeCatalog): Promise<Question[]> {
   const seen = loadSeen();
@@ -292,5 +331,5 @@ export async function fullMock(catalog: RecipeCatalog): Promise<Question[]> {
     }
   }
   localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, out, pool)]));
-  return Promise.all(shuffle(out).map((item) => validRandomQuestion(item, 1)));
+  return Promise.all(shuffle(out).map((item) => validRandomQuestion(item, 'mix')));
 }

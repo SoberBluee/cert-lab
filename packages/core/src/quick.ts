@@ -227,12 +227,14 @@ function buildTrouble(q: Extract<QuickQuestion, { type: 'troubleshoot' }>, n: nu
   }
   const v: Record<string, string> = { ...refs, FAULT: slots[0].ref };
   slots.forEach((s, i) => (ctx.variables[slotRef(i)] = { oneOf: s.faults, hidden: true }));
-  for (const [key, pool] of Object.entries(cat.hidden ?? {})) {
-    ctx.variables[`Q${n}_${key}`] = { oneOf: pool, hidden: true };
-    v[key] = `\${Q${n}_${key}}`;
-  }
+  const hidden = Object.entries(cat.hidden ?? {});
+  for (const [key] of hidden) v[key] = `\${Q${n}_${key}}`;
   if (ctx.errors.length) return;
-  return composeTrouble(cat, v, slots, `/var/tmp/cka-q${n}`);
+  const out = composeTrouble(cat, v, slots, `/var/tmp/cka-q${n}`);
+  // Only the hidden variables the rolled faults use: a narrowed pool may need none of them.
+  const used = JSON.stringify([out.setup, out.solution, out.solutionMd]);
+  for (const [key, pool] of hidden) if (used.includes(v[key])) ctx.variables[`Q${n}_${key}`] = { oneOf: pool, hidden: true };
+  return out;
 }
 
 /**

@@ -12,6 +12,7 @@ const QUIZ_TOPIC_META: Record<QuizTopic, { name: string; blurb: string }> = {
   'quiz-errors': { name: 'Error messages', blurb: 'kubectl / API failures → what to check next' },
   'quiz-paths': { name: 'Paths and directories', blurb: 'CNI, kubelet, manifests, etcd, certs' },
   'quiz-workloads': { name: 'Workloads', blurb: 'probes, rollouts, Jobs and scheduling' },
+  'quiz-jobs': { name: 'Jobs and CronJobs', blurb: 'a scenario, five options: pick the field, schedule or command that does exactly that' },
   'quiz-networking': { name: 'Services and networking', blurb: 'Service, DNS, NetworkPolicy, Ingress and HTTPRoute' },
   'quiz-storage-rbac': { name: 'Storage and RBAC', blurb: 'PVC binding, access modes, reclaim, Role versus ClusterRole' },
   'quiz-cluster': { name: 'Cluster architecture', blurb: 'Highly available control planes, etcd quorum, upgrades and version skew' },
@@ -26,6 +27,8 @@ const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
       certificates: { name: 'Certificates', blurb: 'openssl, kubeadm certs and CertificateSigningRequests' },
       etcd: { name: 'etcd', blurb: 'etcdctl and etcdutl: back up and restore the cluster state' },
       cluster: { name: 'Cluster', blurb: 'kubeadm and control plane chores' },
+      jobs: { name: 'Jobs and CronJobs', blurb: 'run work to completion and on a schedule, then find out why it did not' },
+      admission: { name: 'Admission control', blurb: 'quotas, LimitRanges, Pod Security and webhooks: what refuses a Pod, and how to tell' },
       troubleshooting: {
         name: 'Debugging, step by step',
         blurb: 'several faults at once: work through the checks in order until every layer is fixed',

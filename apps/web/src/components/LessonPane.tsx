@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LearnStepProgress, LessonStepView, SessionView } from '@cka/schema';
 import { formatDuration } from '../hooks';
-import { Button, ErrorBanner, Markdown } from './ui';
+import { Button, ErrorBanner, InlineMarkdown, Markdown } from './ui';
 
 const DRILL_KEY = 'cka.learn.drill';
 
@@ -48,7 +48,90 @@ function StepMarker({ n, progress, current }: { n: number; progress?: LearnStepP
   );
 }
 
-function Step({ step, n, progress, current, drill }: { step: LessonStepView; n: number; progress?: LearnStepProgress; current: boolean; drill: boolean }) {
+/** A question step: pick a choice; a wrong one is marked and you try again. Once done, the answer and why stay as notes. */
+function Question({
+  step,
+  progress,
+  current,
+  onAnswer,
+  answering,
+}: {
+  step: LessonStepView;
+  progress?: LearnStepProgress;
+  current: boolean;
+  onAnswer: (choice: number) => void;
+  answering: boolean;
+}) {
+  const q = step.question!;
+  const wrong = progress?.wrong ?? [];
+  if (progress?.done && q.answer !== undefined) {
+    return (
+      <div className="space-y-1.5">
+        <p className="text-xs text-zinc-400">
+          {progress.skipped ? 'Answer: ' : '✓ '}
+          <span className="text-emerald-200/80">
+            <InlineMarkdown>{q.choices[q.answer]}</InlineMarkdown>
+          </span>
+        </p>
+        {q.why && (
+          <div className="text-xs text-zinc-400">
+            <Markdown>{q.why}</Markdown>
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (!current) return null;
+  return (
+    <div className="space-y-2">
+      {step.explain && <Markdown>{step.explain}</Markdown>}
+      <div className="rounded-md border border-amber-800/50 bg-amber-950/20 px-3 py-2">
+        <Markdown>{q.prompt}</Markdown>
+      </div>
+      <ol className="space-y-1.5">
+        {q.choices.map((choice, i) => {
+          const tried = wrong.includes(i);
+          return (
+            <li key={i}>
+              <button
+                type="button"
+                disabled={tried || answering}
+                onClick={() => onAnswer(i)}
+                className={`w-full rounded-md border px-3 py-1.5 text-left text-sm transition ${
+                  tried
+                    ? 'cursor-not-allowed border-red-900/60 bg-red-950/20 text-red-300/70 line-through'
+                    : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-600 hover:bg-sky-950/30'
+                }`}
+              >
+                <span className="mr-2 font-mono text-xs text-zinc-500">{String.fromCharCode(65 + i)}</span>
+                <InlineMarkdown>{choice}</InlineMarkdown>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      {wrong.length > 0 && <p className="text-xs text-amber-200">Not quite. Think about what the output showed, and try another answer.</p>}
+    </div>
+  );
+}
+
+function Step({
+  step,
+  n,
+  progress,
+  current,
+  drill,
+  onAnswer,
+  answering,
+}: {
+  step: LessonStepView;
+  n: number;
+  progress?: LearnStepProgress;
+  current: boolean;
+  drill: boolean;
+  onAnswer: (choice: number) => void;
+  answering: boolean;
+}) {
   const [shown, setShown] = useState(false);
   const [hint, setHint] = useState(false);
   const ref = useRef<HTMLLIElement>(null);
@@ -72,9 +155,11 @@ function Step({ step, n, progress, current, drill }: { step: LessonStepView; n: 
             >
               {step.title}
             </h3>
-            {step.node !== 'controlplane' && <span className="font-mono text-xs text-zinc-500">on {step.node}</span>}
+            {step.question && <span className="text-xs font-medium text-amber-400/90">question</span>}
+            {!step.question && step.node !== 'controlplane' && <span className="font-mono text-xs text-zinc-500">on {step.node}</span>}
           </div>
-          {current && (
+          {step.question && <Question step={step} progress={progress} current={current} onAnswer={onAnswer} answering={answering} />}
+          {!step.question && current && (
             <>
               {step.explain && <Markdown>{step.explain}</Markdown>}
               {drill && !shown ? (
@@ -89,7 +174,7 @@ function Step({ step, n, progress, current, drill }: { step: LessonStepView; n: 
                   )}
                 </div>
               ) : (
-                <Command command={step.command} />
+                <Command command={step.command ?? ''} />
               )}
               {hint && step.hint && <p className="text-xs text-zinc-400">{step.hint}</p>}
               {progress?.failure && (
@@ -123,6 +208,8 @@ export function LessonPane({
   session,
   onSkip,
   skipping,
+  onAnswer,
+  answering,
   onReset,
   onEnd,
   error,
@@ -130,6 +217,8 @@ export function LessonPane({
   session: SessionView;
   onSkip: () => void;
   skipping: boolean;
+  onAnswer: (choice: number) => void;
+  answering: boolean;
   onReset: () => void;
   onEnd: () => void;
   error: unknown;
@@ -165,7 +254,7 @@ export function LessonPane({
           <div className="h-full bg-emerald-500 transition-all" style={{ width: `${(doneCount / lesson.steps.length) * 100}%` }} />
         </div>
         <div className="text-xs text-zinc-500">
-          {doneCount}/{lesson.steps.length} steps · run the commands in the terminal; each step turns green when it is done
+          {doneCount}/{lesson.steps.length} steps · run the commands in the terminal and answer the questions here; each step turns green when it is done
         </div>
       </header>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
@@ -177,7 +266,16 @@ export function LessonPane({
         )}
         <ol className="space-y-2">
           {lesson.steps.map((s, i) => (
-            <Step key={s.id} step={s} n={i + 1} progress={learn.steps[i]} current={i === learn.current && session.state === 'running'} drill={drill} />
+            <Step
+              key={s.id}
+              step={s}
+              n={i + 1}
+              progress={learn.steps[i]}
+              current={i === learn.current && session.state === 'running'}
+              drill={drill}
+              onAnswer={onAnswer}
+              answering={answering}
+            />
           ))}
         </ol>
       </div>
@@ -185,7 +283,7 @@ export function LessonPane({
         <Button
           disabled={complete || skipping || session.state !== 'running'}
           onClick={onSkip}
-          title="Runs this step's command for you, so the next steps still work, and moves on"
+          title="Runs this step's command for you (or shows a question's answer), so the next steps still work, and moves on"
         >
           {skipping ? 'Running it for you…' : 'Skip step'}
         </Button>

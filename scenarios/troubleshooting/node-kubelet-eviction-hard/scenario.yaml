@@ -41,7 +41,14 @@ tasks:
         type: kubectl
         run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
         expect: { equals: "True" }
-        weight: 3
+        weight: 2
+        retrySeconds: 90
+      - id: q1-memory-pressure
+        description: no node is under MemoryPressure
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="MemoryPressure")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "False" }
+        weight: 2
         retrySeconds: 90
       - id: q1-kubelet-worker-1
         description: the kubelet is running and enabled on worker-1
@@ -62,10 +69,10 @@ tasks:
         type: kubectl
         run: kubectl -n ${Q1_NS} get daemonset node-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
         expect: { equals: 2/2 }
-        weight: 2
+        weight: 1
         retrySeconds: 90
     hints:
-      - "kubectl get nodes, then kubectl describe node <node>: which node is NotReady, and since when?"
-      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to reach the API server?"
+      - "kubectl get nodes, then kubectl describe node <node>: which condition is set, and what do the Events say?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Then compare /var/lib/kubelet/config.yaml with a healthy worker, especially evictionHard."
       - The kubelet reads its unit drop-in (systemctl cat kubelet), its configuration file /var/lib/kubelet/config.yaml and its kubeconfig /etc/kubernetes/kubelet.conf. Compare every path and address in them with what exists (ls) and with a healthy worker.
       - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).

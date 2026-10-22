@@ -1,0 +1,69 @@
+id: quick-lab-e8ykqf
+title: "Quick lab: Cluster upgrade"
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 20
+points: 8
+tags: [ kubeadm, upgrade, drain ]
+base: bare
+nodes: { controlPlane: 1, workers: 2 }
+settleSeconds: 60
+draft: true
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+tasks:
+  - id: q1
+    title: Upgrade the control plane
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+    checks:
+      - id: q1-apiserver
+        description: the API server runs 1.37.1
+        type: kubectl
+        run: kubectl version -o json | jq -r .serverVersion.gitVersion
+        expect: { equals: v1.37.1 }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-kubelet
+        description: the kubelet on controlplane runs 1.37.1
+        type: kubectl
+        run: kubectl get node controlplane -o jsonpath='{.status.nodeInfo.kubeletVersion}'
+        expect: { equals: v1.37.1 }
+        weight: 2
+        retrySeconds: 120
+      - type: ssh
+        node: controlplane
+        id: q1-tools
+        description: kubeadm and kubectl on controlplane are 1.37.1
+        run: echo "$(kubeadm version -o short) $(kubectl version --client -o json | jq -r .clientVersion.gitVersion)"
+        expect: { equals: v1.37.1 v1.37.1 }
+        weight: 1
+      - id: q1-schedulable
+        description: controlplane is not cordoned
+        type: kubectl
+        run: kubectl get node controlplane -o jsonpath='{.spec.unschedulable}'
+        expect: { notContains: "true" }
+        weight: 1
+      - id: q1-workers-kept
+        description: both workers still run 1.36
+        type: kubectl
+        run: echo "$(kubectl get node worker-1 -o jsonpath='{.status.nodeInfo.kubeletVersion}') $(kubectl get node worker-2 -o jsonpath='{.status.nodeInfo.kubeletVersion}')"
+        expect: { matches: ^v1\.36\.\d+ v1\.36\.\d+$ }
+        weight: 1
+      - id: q1-nodes-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 180
+    hints:
+      - "The kubeadm upgrade guide on kubernetes.io lists the steps in order: upgrade kubeadm, kubeadm upgrade plan, kubeadm upgrade apply, then the kubelet and kubectl."
+      - "apt-cache madison kubeadm lists the versions apt can install. The packages are held: apt-mark unhold them first."
+      - "After installing the new kubelet: systemctl daemon-reload && systemctl restart kubelet, then kubectl uncordon."
+    recipe: { builder: upgrade, parts: [] }

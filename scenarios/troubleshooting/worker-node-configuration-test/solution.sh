@@ -48,7 +48,9 @@ case "${Q1_FAULT}" in
     ;;
   kubelet-eviction-hard)
     for _ in $(seq 1 90); do
-      [[ "$(kubectl get node "${Q1_NODE}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" == True ]] && break
+      ready=$(kubectl get node "${Q1_NODE}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+      press=$(kubectl get node "${Q1_NODE}" -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}')
+      [[ "$ready" == True && "$press" == False ]] && break
       sleep 2
     done
     for _ in $(seq 1 60); do

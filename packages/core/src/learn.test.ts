@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import pino from 'pino';
 import { FakeDriver } from '@cka/driver-fake';
-import type { ExecOptions, ExecResult, LearnProgress } from '@cka/schema';
+import { LessonStepSchema, type ExecOptions, type ExecResult, type LearnProgress } from '@cka/schema';
 import { COMMAND_LOG, commandMatches, initialProgress, LearnWatcher, normalizeCommand, parseCommandLog, type LoggedCommand } from './learn';
-import { LessonLibrary, type LoadedLesson } from './lessons';
+import { LessonLibrary, toLessonView, type LoadedLesson } from './lessons';
 import { lintLessons } from './lint';
 import { ScenarioLibrary } from './scenarios';
 import { SessionManager } from './session';
@@ -58,7 +58,7 @@ describe('shipped lessons', () => {
   it('match their own reference commands, as typed with sudo or the k alias', () => {
     for (const l of library.list()) {
       for (const s of l.def.steps) {
-        if (!s.match) continue;
+        if (!s.match || s.command === undefined) continue;
         const first = s.command.trim().split('\n')[0];
         assert.ok(commandMatches(s, first), `${l.def.id}/${s.id}: /${s.match}/ does not match "${first}"`);
         if (first.startsWith('kubectl ')) assert.ok(commandMatches(s, first.replace(/^kubectl/, 'k')), `${l.def.id}/${s.id}: k alias`);
@@ -259,5 +259,99 @@ describe('learn sessions', () => {
     const { sessions } = setup();
     assert.throws(() => sessions.startLesson('nope'), /Unknown lesson "nope"/);
     await assert.rejects(sessions.start('learn:demo', 'practice'), /learn mode/);
+  });
+});
+
+describe('question steps', () => {
+  function questionLesson(extra = ''): LoadedLesson | string[] {
+    const root = mkdtempSync(join(tmpdir(), 'cka-lessons-'));
+    mkdirSync(join(root, 'quizzed'));
+    writeFileSync(
+      join(root, 'quizzed', 'lesson.yaml'),
+      `id: quizzed
+title: Quizzed
+summary: A command, a question, a command
+topic: jobs
+estimatedMinutes: 2
+steps:
+  - id: a
+    title: Run a
+    command: echo a
+    match: '^echo a$'
+  - id: q
+    title: Think
+    question:
+      prompt: Which one?
+      choices: [first, second, third]
+      answer: 2
+      why: Because.${extra}
+  - id: b
+    title: Run b
+    command: echo b
+    match: '^echo b$'
+`,
+    );
+    const lib = new LessonLibrary(root);
+    return lib.errors.length ? lib.errors.flatMap((e) => e.messages) : lib.get('quizzed')!;
+  }
+
+  function fixture() {
+    const lesson = questionLesson() as LoadedLesson;
+    const driver = new CheckDriver();
+    let progress: LearnProgress = initialProgress(lesson);
+    const watcher = new LearnWatcher(
+      {
+        driver,
+        log: quiet,
+        isRunning: () => true,
+        getProgress: () => structuredClone(progress),
+        saveProgress: (_id, p) => (progress = p),
+      },
+      's1',
+      lesson,
+    );
+    const cmd = (command: string): LoggedCommand => ({ node: 'controlplane', at: Date.now(), exitCode: 0, command });
+    return { lesson, driver, watcher, cmd, progress: () => progress };
+  }
+
+  it('wait for an answer: commands do not pass them, a wrong answer is recorded, the right one moves on', async () => {
+    const f = fixture();
+    await f.watcher.consume([f.cmd('echo a'), f.cmd('echo b')]);
+    assert.equal(f.progress().current, 1);
+    assert.equal(await f.watcher.answer(0), false);
+    assert.equal(await f.watcher.answer(0), false);
+    assert.deepEqual(f.progress().steps[1].wrong, [0]);
+    assert.equal(f.progress().current, 1);
+    assert.equal(await f.watcher.answer(2), true);
+    assert.equal(f.progress().current, 2);
+    await f.watcher.consume([f.cmd('echo b')]);
+    assert.ok(f.progress().completedAt);
+  });
+
+  it('leave the command log unread while a question is open, and skip without running anything', async () => {
+    const f = fixture();
+    await f.watcher.consume([f.cmd('echo a')]);
+    await f.watcher.tick();
+    assert.ok(!f.driver.runs.some((r) => r.script.includes(COMMAND_LOG)));
+    await f.watcher.skip();
+    assert.equal(f.progress().steps[1].skipped, true);
+    assert.ok(!f.driver.runs.some((r) => r.env?.CKA_LEARN_CMD));
+  });
+
+  it('only reveal the answer in the view once the step is done', () => {
+    const f = fixture();
+    const before = toLessonView(f.lesson, f.progress()).steps[1];
+    assert.deepEqual(before.question, { prompt: 'Which one?', choices: ['first', 'second', 'third'] });
+    assert.equal(before.command, undefined);
+    const done = { ...f.progress(), steps: f.progress().steps.map((s, i) => (i === 1 ? { ...s, done: true } : s)) };
+    assert.equal(toLessonView(f.lesson, done).steps[1].question?.answer, 2);
+  });
+
+  it('reject a question step with a command, or an answer that is not a choice', () => {
+    assert.ok((questionLesson('\n    command: echo nope') as string[]).some((m) => /no command, match or check/.test(m)));
+    const step = (answer: number) =>
+      LessonStepSchema.safeParse({ id: 'q', title: 'Q', question: { prompt: 'p', choices: ['a', 'b'], answer, why: 'w' } }).success;
+    assert.equal(step(1), true);
+    assert.equal(step(2), false);
   });
 });

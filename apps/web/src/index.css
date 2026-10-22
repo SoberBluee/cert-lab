@@ -66,3 +66,10 @@ kbd {
 .markdown strong {
   @apply text-zinc-100;
 }
+/* One line of Markdown inside other text (quiz choices): code and emphasis only, the surrounding size and colour. */
+.md-inline code {
+  @apply rounded bg-zinc-800 px-1 py-0.5 font-mono text-[0.9em] text-sky-300;
+}
+.md-inline strong {
+  @apply text-zinc-100;
+}

@@ -1,17 +1,15 @@
-import { controlPlaneCategory, M } from './controlplane';
+import { controlPlaneCategory, FILE_PICKS, M } from './controlplane';
 import type { FaultCategory } from './types';
 
 /** The control plane faults that leave the API server answering: new workloads simply never start. */
 const FAULTS = [
   'scheduler-command',
-  'controller-manager-kubeconfig',
-  'scheduler-kubeconfig-path',
+  'scheduler-missing-file',
   'scheduler-image-tag',
-  'controller-manager-sa-key',
   'scheduler-manifest-removed',
   'scheduler-manifest-yaml',
+  'controller-manager-missing-file',
   'controller-manager-command',
-  'scheduler-leader-elect',
 ];
 
 /**
@@ -30,6 +28,7 @@ export const controllersCategory: FaultCategory = {
   tags: ['troubleshooting', 'control-plane', 'static-pod', 'kube-scheduler', 'kube-controller-manager'],
   disruptive: true,
   settleSeconds: 60,
+  hidden: { SCHEDULER_FILE: FILE_PICKS.SCHEDULER_FILE, CM_FILE: FILE_PICKS.CM_FILE },
   fields: controlPlaneCategory.fields,
   shell: (v, state) => ({
     ...controlPlaneCategory.shell(v, state),

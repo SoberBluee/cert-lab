@@ -194,19 +194,29 @@ metadata:
 spec:
   replicas: 2
 EOF
+# Two of four mistakes, rolled here: every pair holds at least one that stops the build.
+api=kustomize.config.k8s.io/v1beta1 res=config-map.yaml ppath=replicas.yaml target=${APP}
+for e in $(shuf -e resource-file patch-file api-version patch-target -n 2); do
+  case "$e" in
+    resource-file) res=configmap.yaml ;;
+    patch-file) ppath=replica-count.yaml ;;
+    api-version) api=kustomize.config.k8s.io/v1 ;;
+    patch-target) target=${APP}-server ;;
+  esac
+done
 cat > ${app}/kustomization.yaml <<EOF
-apiVersion: kustomize.config.k8s.io/v1beta1
+apiVersion: \$api
 kind: Kustomization
 namespace: ${ns}
 resources:
   - namespace.yaml
   - deployment.yaml
-  - configmap.yaml
+  - \$res
 patches:
-  - path: replicas.yaml
+  - path: \$ppath
     target:
       kind: Deployment
-      name: ${APP}-server
+      name: \$target
 EOF
 chown -R ubuntu:ubuntu /opt/course
 ${pin([`${app}/namespace.yaml`, `${app}/deployment.yaml`, `${app}/config-map.yaml`, `${app}/replicas.yaml`], `/root/.cka-kustomize-${APP}-app.sums`)}
@@ -247,14 +257,28 @@ kubectl delete namespace "${ns}" --ignore-not-found --wait=true >/dev/null
             }),
           ],
           solution: [
-            `sed -i -e 's/^  - configmap.yaml$/  - config-map.yaml/' -e "s/^      name: ${APP}-server\\$/      name: ${APP}/" ${app}/kustomization.yaml
+            `cat > ${app}/kustomization.yaml <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${ns}
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - config-map.yaml
+patches:
+  - path: replicas.yaml
+    target:
+      kind: Deployment
+      name: ${APP}
+EOF
 kubectl apply -k ${app}
 kubectl -n ${ns} rollout status deployment/${APP} --timeout=180s`,
           ],
           hints: [
             `kubectl kustomize ${app} prints the first error. Fix it and run it again: there may be more than one.`,
             'Every path under resources: and patches: is relative to the kustomization file and must exist exactly as written (ls helps).',
-            'A patch target selects objects by kind and name as they are in the resources, before any namePrefix.',
+            'A patch target selects objects by kind and name as they are in the resources, before any namePrefix; a target that matches nothing is not an error, the patch simply does nothing.',
+            'The kustomization file has its own apiVersion and kind, like any manifest: kubectl explain does not know it, but kubectl kustomize complains when it is wrong.',
           ],
         };
       },

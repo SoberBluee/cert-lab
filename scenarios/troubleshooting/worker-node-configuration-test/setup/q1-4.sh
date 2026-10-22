@@ -61,12 +61,10 @@ case "${Q1_FAULT}" in
     ;;
   kubelet-eviction-hard)
     for _ in $(seq 1 90); do
-      press=$(kubectl get node "${Q1_NODE}" -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}' 2>/dev/null || true)
-      agents=$(kubectl -n "${Q1_NS}" get pods -l app=node-agent --field-selector "spec.nodeName=${Q1_NODE}" --no-headers 2>/dev/null | grep -c Running || true)
-      [[ "$press" == True || "$agents" == 0 ]] && exit 0
+      [[ "$(kubectl get node "${Q1_NODE}" -o jsonpath='{.status.conditions[?(@.type=="MemoryPressure")].status}' 2>/dev/null || true)" == True ]] && exit 0
       sleep 2
     done
-    echo "node-agent still running without MemoryPressure" >&2
+    echo "the node never reported MemoryPressure" >&2
     exit 1
     ;;
   kubelet-cgroup-driver)

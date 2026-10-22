@@ -223,7 +223,7 @@ exit 1`,
       name: 'the frontend egress',
       faults: ['egress-to-label', 'egress-port', 'frontend-egress-deleted', 'frontend-egress-selector', 'netpol-egress-ipblock-except'],
     },
-    { name: 'the API ingress', faults: ['ingress-port', 'ingress-from-label', 'ingress-namespace-and', 'ingress-pod-selector', 'ingress-ports-cleared'] },
+    { name: 'the API ingress', faults: ['ingress-port', 'ingress-from-label', 'ingress-namespace-and', 'ingress-pod-selector', 'ingress-port-443'] },
   ],
   faults: ({ NS, APP }) => [
     {
@@ -343,7 +343,7 @@ exit 1`,
       explain: `\`frontend-egress\` applies to Pods labelled \`role=front-end\`, but \`client\` is \`role=frontend\`. The allow rule protects nobody, and \`default-deny\` drops the client's egress. Set its podSelector to \`role=frontend\`.`,
     },
     {
-      id: 'ingress-ports-cleared',
+      id: 'ingress-port-443',
       label: 'Ingress allowed on HTTPS only',
       break: patch(NS, `${APP}-ingress`, '[{"op":"replace","path":"/spec/ingress/0/ports","value":[{"protocol":"TCP","port":443}]}]'),
       fix: patch(NS, `${APP}-ingress`, '[{"op":"replace","path":"/spec/ingress/0/ports","value":[{"protocol":"TCP","port":80}]}]'),
