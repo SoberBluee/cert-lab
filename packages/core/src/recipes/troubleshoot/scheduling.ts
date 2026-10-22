@@ -4,22 +4,32 @@ import { waitUnhealthy } from './wait';
 
 const IMAGE = 'nginx:1.27-alpine';
 
-/** The ReplicaSet controller backs off after rejected creates; a restart retries at once. */
-const retry = (ns: string, app: string) => `kubectl -n "${ns}" rollout restart "deployment/${app}"`;
-
 const waitReady = (ns: string, app: string) => `kubectl -n "${ns}" rollout status "deployment/${app}" --timeout=240s`;
 
-const applyObject = (ns: string, json: string) => `kubectl -n "${ns}" apply -f - <<< '${json}'`;
+/** Memory quantity in MiB, for summing the requests on a node; defines to_mi in the script. */
+const TO_MI = `to_mi() {
+  local q="$1"
+  case "$q" in
+    *Ki) echo $(( \${q%Ki} / 1024 )) ;;
+    *Mi) echo "\${q%Mi}" ;;
+    *Gi) echo $(( \${q%Gi} * 1024 )) ;;
+    *k) echo $(( \${q%k} * 1000 / 1048576 )) ;;
+    *M) echo $(( \${q%M} * 1000000 / 1048576 )) ;;
+    *G) echo $(( \${q%G} * 1000000000 / 1048576 )) ;;
+    "") echo 0 ;;
+    *) echo $(( q / 1048576 )) ;;
+  esac
+}`;
 
 export const schedulingCategory: FaultCategory = {
   id: 'scheduling',
   name: 'Scheduling',
-  description: 'A Deployment does not get its Pods: they are rejected at admission or stay Pending.',
+  description: 'A Deployment does not get its Pods: the scheduler cannot place them, or they are never created.',
   domain: 'workloads',
   difficulty: 2,
   minutes: 8,
   points: 5,
-  tags: ['troubleshooting', 'scheduling', 'resourcequota', 'limitrange', 'affinity'],
+  tags: ['troubleshooting', 'scheduling', 'affinity', 'resources', 'priorityclass'],
   settleSeconds: 20,
   fields: [
     nsField(['batch', 'reports', 'analytics', 'jobs', 'compute', 'pipeline', 'etl', 'ml', 'spark', 'queue']),
@@ -33,7 +43,7 @@ Keep the image, the replica count and the container's requests of \`100m\` CPU a
     spec: `- \`2\` replicas of image \`${IMAGE}\`, container \`web\`
 - requests \`100m\` CPU and \`64Mi\` memory, and no limits
 - no affinity, nodeSelector or topology spread constraint, and the default priority
-- no ResourceQuota or LimitRange in \`${NS}\` that rejects those Pods`,
+- nothing else in \`${NS}\` takes the capacity those Pods need or keeps them off the workers`,
     before: `${createNs(NS)}
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -93,48 +103,48 @@ ${waitUnhealthy(NS, `app=${APP}`, 15)}
       `kubectl -n ${NS} get deployment,replicaset,pods -o wide: are Pods missing altogether, or do they exist and stay Pending?`,
       `Missing Pods were refused when the ReplicaSet tried to create them: kubectl -n ${NS} describe replicaset -l app=${APP} shows the FailedCreate reason.`,
       `Pending Pods were never placed: kubectl -n ${NS} describe pod <pod> shows the scheduler's reason under Events.`,
-      `What does the namespace enforce, and what does the Pod template ask for? kubectl -n ${NS} get all,resourcequota,limitrange and kubectl -n ${NS} get deployment ${APP} -o yaml.`,
+      `What does the Pod template ask for, and what else runs in the namespace? kubectl -n ${NS} get deployment ${APP} -o yaml, kubectl -n ${NS} get all -o wide, and Allocated resources in kubectl describe node.`,
     ],
   }),
+  // Quotas and LimitRanges refuse Pods at admission: they belong to Rejected Pods. These are the scheduler's.
   layers: [
-    { name: 'what the namespace enforces', faults: ['quota-pods', 'quota-limits', 'limitrange-max'] },
+    { name: 'what else runs in the namespace', faults: ['memory-hog', 'agent-anti-affinity'] },
     { name: 'the Pod template', faults: ['node-affinity', 'priority-class', 'topology-spread-zone'] },
   ],
   faults: ({ NS, APP }) => [
     {
-      id: 'quota-pods',
-      label: 'ResourceQuota allows a single Pod',
-      break: applyObject(NS, '{"apiVersion":"v1","kind":"ResourceQuota","metadata":{"name":"pod-quota"},"spec":{"hard":{"pods":"1"}}}'),
-      fix: `kubectl -n "${NS}" delete resourcequota pod-quota
-${retry(NS, APP)}`,
+      id: 'memory-hog',
+      label: 'Other Deployments request nearly all the memory of each worker',
+      // Starves every worker: stage it after other questions and fix it first.
+      disruptive: true,
+      break: `${TO_MI}
+i=0
+for n in $(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{.items[*].metadata.name}'); do
+  i=$((i + 1))
+  alloc=$(to_mi "$(kubectl get node "$n" -o jsonpath='{.status.allocatable.memory}')")
+  used=0
+  for q in $(kubectl get pods -A --field-selector "spec.nodeName=$n,status.phase!=Succeeded,status.phase!=Failed" -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.resources.requests.memory}{" "}{end}{end}'); do
+    used=$((used + $(to_mi "$q")))
+  done
+  # Leaves 40Mi: less than one replica's 64Mi.
+  hog=$((alloc - used - 40))
+  (( hog > 64 )) || { echo "worker $n has too little memory left" >&2; exit 1; }
+  kubectl -n "${NS}" apply -f - <<< ${sq(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"warmup-'"$i"'","labels":{"role":"cache"}},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"warmup-'"$i"'"}},"template":{"metadata":{"labels":{"app":"warmup-'"$i"'","role":"cache"}},"spec":{"nodeSelector":{"kubernetes.io/hostname":"'"$n"'"},"containers":[{"name":"cache","image":"busybox:1.36","command":["sleep","infinity"],"resources":{"requests":{"cpu":"10m","memory":"'"$hog"'Mi"}}}]}}}}`)} >/dev/null
+done
+kubectl -n "${NS}" wait --for=condition=Available deployment -l role=cache --timeout=180s >/dev/null`,
+      fix: `kubectl -n "${NS}" scale deployment -l role=cache --replicas=0`,
       wait: waitReady(NS, APP),
-      explain: `ResourceQuota \`pod-quota\` caps the namespace at \`1\` Pod, so the ReplicaSet's second create is rejected with "exceeded quota" (\`kubectl -n ${NS} describe rs\`). Delete the quota or raise \`pods\` to at least \`2\`.`,
+      explain: `Deployments \`warmup-1\` and \`warmup-2\` in \`${NS}\` each pin a Pod to one worker and request almost all of the memory that worker has left, so neither worker can fit a \`${APP}\` Pod's \`64Mi\`. \`kubectl -n ${NS} describe pod <pending-pod>\` says \`Insufficient memory\`; \`kubectl describe node\` shows the memory requests near 100% under Allocated resources, and \`kubectl get pods -A -o wide\` shows whose Pods those are. The spec keeps \`${APP}\`'s requests, and the task lets you change what stands in the way: scale the \`warmup\` Deployments down (or lower their requests).`,
     },
     {
-      id: 'quota-limits',
-      label: 'ResourceQuota requires CPU limits',
-      break: applyObject(
-        NS,
-        '{"apiVersion":"v1","kind":"ResourceQuota","metadata":{"name":"compute-quota"},"spec":{"hard":{"requests.cpu":"2","limits.cpu":"4"}}}',
-      ),
-      fix: `kubectl -n "${NS}" delete resourcequota compute-quota
-${retry(NS, APP)}`,
+      id: 'agent-anti-affinity',
+      label: 'Required anti-affinity against Pods that run on every worker',
+      break: `kubectl -n "${NS}" apply -f - <<< ${sq(`{"apiVersion":"apps/v1","kind":"DaemonSet","metadata":{"name":"log-agent"},"spec":{"selector":{"matchLabels":{"app":"log-agent"}},"template":{"metadata":{"labels":{"app":"log-agent","tier":"infra"}},"spec":{"containers":[{"name":"agent","image":"busybox:1.36","command":["sleep","infinity"],"resources":{"requests":{"cpu":"10m","memory":"16Mi"}}}]}}}}`)} >/dev/null
+kubectl -n "${NS}" rollout status daemonset/log-agent --timeout=180s >/dev/null
+kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"template":{"spec":{"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchLabels":{"tier":"infra"}},"topologyKey":"kubernetes.io/hostname"}]}}}}}}'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/affinity/podAntiAffinity"}]'`,
       wait: waitReady(NS, APP),
-      explain:
-        'ResourceQuota `compute-quota` tracks `limits.cpu`, so every Pod in the namespace must set a CPU limit. The Pods have none and are rejected with "must specify limits.cpu". The spec rules out adding limits to the Deployment: delete the quota, or add a LimitRange that gives containers a default CPU limit.',
-    },
-    {
-      id: 'limitrange-max',
-      label: 'LimitRange maximum below the request',
-      break: applyObject(
-        NS,
-        '{"apiVersion":"v1","kind":"LimitRange","metadata":{"name":"container-limits"},"spec":{"limits":[{"type":"Container","max":{"cpu":"50m"}}]}}',
-      ),
-      fix: `kubectl -n "${NS}" delete limitrange container-limits
-${retry(NS, APP)}`,
-      wait: waitReady(NS, APP),
-      explain:
-        'LimitRange `container-limits` caps containers at `50m` CPU. Its max also becomes the default limit, which is below the `100m` request, so every Pod is rejected at admission. Delete the LimitRange or raise its max to at least `100m`.',
+      explain: `The Pod template says \`${APP}\` must never share a node with a Pod labelled \`tier=infra\` (required \`podAntiAffinity\`, \`topologyKey: kubernetes.io/hostname\`). DaemonSet \`log-agent\` runs a \`tier=infra\` Pod on every worker, so no node qualifies and the Pods stay \`Pending\` with "didn't match pod anti-affinity rules". The spec wants no affinity: remove \`podAntiAffinity\` from the template (the agent itself is fine).`,
     },
     {
       id: 'node-affinity',

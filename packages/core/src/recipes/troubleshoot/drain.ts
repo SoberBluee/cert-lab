@@ -3,14 +3,32 @@ import { WORKERS } from './compose';
 import type { FaultCategory } from './types';
 
 const IMAGE = 'nginx:1.27-alpine';
+const LABEL = 'maintenance=due';
+
+const patch = (ns: string, app: string, json: string, type = 'strategic') => `kubectl -n "${ns}" patch deployment "${app}" --type=${type} -p '${json}'`;
+
+/** Pods of the namespace on the node, by name. */
+const podsOn = (ns: string, node: string) => `kubectl -n "${ns}" get pods --field-selector "spec.nodeName=${node}" -o name 2>/dev/null`;
+
+const readyOf = (ns: string, app: string) => `kubectl -n "${ns}" get deployment "${app}" -o jsonpath='{.status.readyReplicas}'`;
+
+/**
+ * Every fault's last step: the drain itself, once every blocker is fixed, then a wait until the
+ * worker is empty and the app is whole again elsewhere.
+ */
+const drainAndWait = (ns: string, app: string, node: string) => `kubectl drain "${node}" --ignore-daemonsets --delete-emptydir-data --force --timeout=180s
+for _ in $(seq 1 60); do
+  [[ "$(kubectl get node "${node}" -o jsonpath='{.spec.unschedulable}')" == true && -z "$(${podsOn(ns, node)})" && "$(${readyOf(ns, app)})" == 2 ]] && break
+  sleep 3
+done`;
 
 export const drainCategory: FaultCategory = {
   id: 'drain',
   name: 'Node drain',
-  description: 'A PodDisruptionBudget blocks draining a worker that must be emptied.',
+  description: 'A worker must be drained for maintenance, and the drain fails or leaves the app short of replicas.',
   domain: 'troubleshooting',
-  difficulty: 3,
-  minutes: 12,
+  difficulty: 2,
+  minutes: 10,
   points: 8,
   tags: ['troubleshooting', 'drain', 'pdb', 'disruption'],
   disruptive: true,
@@ -22,15 +40,16 @@ export const drainCategory: FaultCategory = {
   ],
   shell: ({ NS, APP, NODE }) => ({
     title: 'Node drain is stuck',
-    text: `Maintenance requires the worker that runs the Pods of Deployment \`${APP}\` (namespace \`${NS}\`) to be drained: cordoned, with no \`${APP}\` Pods left on it. \`${APP}\` must keep \`2\` ready replicas on the remaining nodes.
+    text: `The worker labelled \`${LABEL}\` must be drained for maintenance: cordoned, with none of the Pods of namespace \`${NS}\` left on it. Deployment \`${APP}\` in \`${NS}\` must keep \`2\` ready replicas on the remaining nodes.
 
-Do not delete Deployment \`${APP}\`.`,
-    spec: `- PodDisruptionBudget \`${APP}-pdb\` leaves room for an eviction (\`minAvailable\` below the replica count)
-- the Pod template of \`${APP}\` lets replicas run on another worker (no \`drain-lab=yes\` nodeSelector)`,
+Do not delete Deployment \`${APP}\` or its PodDisruptionBudget, and do not uncordon the worker once it is drained.`,
+    spec: `- PodDisruptionBudget \`${APP}-pdb\` lets one of the \`2\` replicas be evicted at a time (\`minAvailable: 1\`)
+- the Pod template of \`${APP}\` prefers the maintenance worker but does not require it, and allows two replicas on one node
+- \`kubectl drain\` always needs \`--ignore-daemonsets\` (calico-node and kube-proxy run everywhere), \`--delete-emptydir-data\` for Pods with an \`emptyDir\` volume, and \`--force\` for Pods that no controller manages`,
     before: `${createNs(NS)}
-kubectl label node "${NODE}" drain-lab=yes --overwrite
+kubectl label node "${NODE}" ${LABEL} --overwrite
 for n in ${WORKERS.map((w) => `"${w}"`).join(' ')}; do
-  [[ "$n" == "${NODE}" ]] || kubectl label node "$n" drain-lab- --overwrite >/dev/null 2>&1 || true
+  [[ "$n" == "${NODE}" ]] || kubectl label node "$n" maintenance- >/dev/null 2>&1 || true
 done
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -39,14 +58,19 @@ metadata:
   name: ${APP}
   namespace: ${NS}
 spec:
-  replicas: 2
+  replicas: 0
   selector:
     matchLabels: { app: ${APP} }
   template:
     metadata:
       labels: { app: ${APP} }
     spec:
-      nodeSelector: { drain-lab: "yes" }
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions: [{ key: maintenance, operator: In, values: [due] }]
       containers:
         - name: web
           image: ${IMAGE}
@@ -63,20 +87,20 @@ metadata:
   name: ${APP}-pdb
   namespace: ${NS}
 spec:
-  minAvailable: 2
+  minAvailable: 1
   selector:
     matchLabels: { app: ${APP} }
-EOF
-kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
-    after: `kubectl uncordon "${NODE}" >/dev/null 2>&1 || true
-# Prove a naive drain is blocked by the PDB while pods are pinned here.
-if kubectl drain "${NODE}" --ignore-daemonsets --delete-emptydir-data --timeout=20s >/dev/null 2>&1; then
-  echo "drain succeeded unexpectedly" >&2
-  kubectl uncordon "${NODE}" >/dev/null 2>&1 || true
-  exit 1
-fi
-kubectl uncordon "${NODE}" >/dev/null 2>&1 || true
-kubectl -n "${NS}" get pdb "${APP}-pdb" >/dev/null`,
+EOF`,
+    after: `kubectl -n "${NS}" scale "deployment/${APP}" --replicas=2
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s
+[[ -n "$(${podsOn(NS, NODE)})" ]] || { echo "nothing of ${NS} runs on the maintenance worker" >&2; exit 1; }
+# The question only makes sense if the plain drain cannot finish the job: try it, then put everything back.
+kubectl drain "${NODE}" --ignore-daemonsets --timeout=20s >/dev/null 2>&1 || true
+drained=no
+[[ -z "$(${podsOn(NS, NODE)})" && "$(${readyOf(NS, APP)})" == 2 ]] && drained=yes
+kubectl uncordon "${NODE}" >/dev/null
+[[ "$drained" == no ]] || { echo "the worker drains cleanly" >&2; exit 1; }
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=180s >/dev/null`,
     checks: [
       {
         id: 'cordoned',
@@ -87,10 +111,18 @@ kubectl -n "${NS}" get pdb "${APP}-pdb" >/dev/null`,
         weight: 2,
       },
       {
-        id: 'empty',
-        description: `no ${APP} Pods remain on a cordoned worker`,
+        id: 'right-node',
+        description: `the cordoned worker is the one labelled ${LABEL}`,
         type: 'kubectl',
-        run: `kubectl -n ${NS} get pods -l app=${APP} -o jsonpath='{range .items[*]}{.spec.nodeName}{"\\n"}{end}' | sort -u | xargs -I{} kubectl get node {} -o jsonpath='{.spec.unschedulable}{"\\n"}' | grep -c '^true$' || true`,
+        run: `kubectl get nodes -l ${LABEL} -o jsonpath='{range .items[*]}{.spec.unschedulable}{end}'`,
+        expect: { equals: 'true' },
+        weight: 2,
+      },
+      {
+        id: 'empty',
+        description: `no Pod of ${NS} remains on a cordoned worker`,
+        type: 'kubectl',
+        run: `kubectl -n ${NS} get pods -o jsonpath='{range .items[*]}{.spec.nodeName}{"\\n"}{end}' | sort -u | xargs -I{} kubectl get node {} -o jsonpath='{.spec.unschedulable}{"\\n"}' | grep -c '^true$' || true`,
         expect: { equals: '0' },
         weight: 2,
         retrySeconds: 60,
@@ -104,40 +136,77 @@ kubectl -n "${NS}" get pdb "${APP}-pdb" >/dev/null`,
         weight: 2,
         retrySeconds: 120,
       },
-      {
-        id: 'right-node',
-        description: `the cordoned worker is the one that ran ${APP}`,
-        type: 'kubectl',
-        run: `kubectl get nodes -l drain-lab=yes -o jsonpath='{range .items[*]}{.spec.unschedulable}{end}'`,
-        expect: { equals: 'true' },
-        weight: 2,
-      },
     ],
     hints: [
-      `kubectl -n ${NS} get pods -o wide shows where ${APP} runs. kubectl drain <node> --ignore-daemonsets --delete-emptydir-data says what blocks it.`,
-      `Evictions respect PodDisruptionBudgets: compare kubectl -n ${NS} get pdb with the replica count.`,
-      'An evicted Pod is recreated by its Deployment: check where the Pod template lets the new one go.',
+      `kubectl get nodes -l ${LABEL} names the worker; kubectl -n ${NS} get pods -o wide shows what runs on it.`,
+      'kubectl drain <node> --ignore-daemonsets reports every Pod it will not evict, and why: read each line. Some blockers only need a flag; others need a change.',
+      `Evictions respect PodDisruptionBudgets: kubectl -n ${NS} get pdb shows ALLOWED DISRUPTIONS.`,
+      `An evicted Pod is recreated by its controller: if a replacement stays Pending, kubectl -n ${NS} describe pod says what keeps it off the other nodes.`,
     ],
   }),
+  layers: [
+    { name: 'the PodDisruptionBudget', faults: ['pdb-min-available', 'pdb-max-unavailable-0'] },
+    { name: 'where replicas may run', faults: ['pinned-node-selector', 'replica-anti-affinity'] },
+    { name: 'Pods drain will not remove by default', faults: ['bare-pod', 'emptydir-pod'] },
+  ],
   faults: ({ NS, APP, NODE }) => [
     {
-      id: 'pdb-blocks-drain',
-      label: 'PDB minAvailable equals replica count',
-      // Objects are created healthy-but-undrainable in before; break is a no-op marker.
-      break: `kubectl -n "${NS}" get pdb "${APP}-pdb" >/dev/null
-kubectl get node "${NODE}" -o jsonpath='{.metadata.labels.drain-lab}' | grep -q yes`,
-      fix: `kubectl -n "${NS}" patch pdb "${APP}-pdb" --type=merge -p '{"spec":{"minAvailable":0}}'
-kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]'
-kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s
-kubectl drain "${NODE}" --ignore-daemonsets --delete-emptydir-data --force --timeout=180s`,
-      wait: `for _ in $(seq 1 60); do
-  unsched=$(kubectl get node "${NODE}" -o jsonpath='{.spec.unschedulable}')
-  left=$(kubectl -n "${NS}" get pods -l "app=${APP}" --field-selector "spec.nodeName=${NODE}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
-  ready=$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.status.readyReplicas}')
-  [[ "$unsched" == true && "$left" == 0 && "$ready" == 2 ]] && break
-  sleep 3
-done`,
-      explain: `PodDisruptionBudget \`${APP}-pdb\` sets \`minAvailable: 2\` while the Deployment also has 2 replicas, so every eviction is denied and \`kubectl drain\` hangs. The Pods are also pinned to the maintenance worker with \`nodeSelector: drain-lab=yes\`. Lower \`minAvailable\` (or delete the PDB), remove the nodeSelector so replicas can schedule elsewhere, then drain that worker.`,
+      id: 'pdb-min-available',
+      label: 'PDB minAvailable equals the replica count',
+      break: `kubectl -n "${NS}" patch pdb "${APP}-pdb" --type=merge -p '{"spec":{"minAvailable":2}}'`,
+      fix: `kubectl -n "${NS}" patch pdb "${APP}-pdb" --type=merge -p '{"spec":{"minAvailable":1}}'`,
+      wait: drainAndWait(NS, APP, NODE),
+      explain: `PodDisruptionBudget \`${APP}-pdb\` sets \`minAvailable: 2\` while \`${APP}\` has 2 replicas, so it allows no disruption at all: \`kubectl drain\` retries "Cannot evict pod as it would violate the pod's disruption budget" until it gives up (\`kubectl -n ${NS} get pdb\` shows ALLOWED DISRUPTIONS 0). Lower \`minAvailable\` to \`1\`, then drain: \`kubectl drain <node> --ignore-daemonsets --delete-emptydir-data --force\`.`,
+    },
+    {
+      id: 'pdb-max-unavailable-0',
+      label: 'PDB maxUnavailable is zero',
+      break: `kubectl -n "${NS}" patch pdb "${APP}-pdb" --type=merge -p '{"spec":{"minAvailable":null,"maxUnavailable":0}}'`,
+      fix: `kubectl -n "${NS}" patch pdb "${APP}-pdb" --type=merge -p '{"spec":{"maxUnavailable":1}}'`,
+      wait: drainAndWait(NS, APP, NODE),
+      explain: `PodDisruptionBudget \`${APP}-pdb\` sets \`maxUnavailable: 0\`: no Pod of \`${APP}\` may ever be evicted, so the drain retries until it gives up (ALLOWED DISRUPTIONS 0). Allow one: \`maxUnavailable: 1\` (or \`minAvailable: 1\`), then drain the worker.`,
+    },
+    {
+      id: 'pinned-node-selector',
+      label: 'Replicas are pinned to the maintenance worker',
+      break: patch(NS, APP, '{"spec":{"template":{"spec":{"nodeSelector":{"maintenance":"due"}}}}}'),
+      fix: patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]', 'json'),
+      wait: drainAndWait(NS, APP, NODE),
+      explain: `The Pod template of \`${APP}\` has \`nodeSelector: maintenance=due\`, so both replicas run on the maintenance worker and every replacement can only go back there. Once the worker is cordoned, the first evicted Pod's replacement stays \`Pending\` ("didn't match Pod's node affinity/selector"), the budget then forbids evicting the second, and the drain hangs. Remove the nodeSelector (the preferred node affinity already favours that worker when it is available), then drain.`,
+    },
+    {
+      id: 'replica-anti-affinity',
+      label: 'Required anti-affinity keeps one replica per node',
+      break: patch(
+        NS,
+        APP,
+        `{"spec":{"template":{"spec":{"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchLabels":{"app":"${APP}"}},"topologyKey":"kubernetes.io/hostname"}]}}}}}}`.replace(
+          /\$\{Q\d+_\w+\}/g,
+          (ref) => `'"${ref}"'`,
+        ),
+      ),
+      fix: patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/affinity/podAntiAffinity"}]', 'json'),
+      wait: drainAndWait(NS, APP, NODE),
+      explain: `The Pod template of \`${APP}\` requires that no two replicas share a node (\`podAntiAffinity\` on \`app=${APP}\`, \`topologyKey: kubernetes.io/hostname\`). With one worker cordoned and the control plane tainted, only one node is left, so the drain itself succeeds but the evicted replica's replacement stays \`Pending\` ("didn't match pod anti-affinity rules") and \`${APP}\` is left with 1 ready replica. The spec allows two replicas on one node: remove the anti-affinity (or make it preferred), and the replacement starts on the other worker.`,
+    },
+    {
+      id: 'bare-pod',
+      label: 'A Pod without a controller runs on the worker',
+      break: `kubectl -n "${NS}" run "${APP}-debug" --image=busybox:1.36 --restart=Never --overrides='{"spec":{"nodeName":"'"${NODE}"'"}}' --command -- sleep infinity >/dev/null
+kubectl -n "${NS}" wait --for=condition=Ready "pod/${APP}-debug" --timeout=120s >/dev/null`,
+      wait: drainAndWait(NS, APP, NODE),
+      explain: `Pod \`${APP}-debug\` was started by hand with \`kubectl run\`: no ReplicaSet, Job or other controller owns it. \`kubectl drain\` refuses to remove such Pods, because nothing would recreate them ("cannot delete Pods that declare no controller (use --force to override)"). Nothing needs fixing in the cluster: drain with \`--force\`, which deletes it (or delete it yourself first).`,
+    },
+    {
+      id: 'emptydir-pod',
+      label: 'The replicas keep scratch data in an emptyDir volume',
+      break: patch(
+        NS,
+        APP,
+        '{"spec":{"template":{"spec":{"volumes":[{"name":"scratch","emptyDir":{}}],"containers":[{"name":"web","volumeMounts":[{"name":"scratch","mountPath":"/var/cache/scratch"}]}]}}}}',
+      ),
+      wait: drainAndWait(NS, APP, NODE),
+      explain: `The \`${APP}\` Pods mount an \`emptyDir\` volume, whose data is lost when a Pod leaves its node. \`kubectl drain\` will not evict them unless told that is acceptable ("cannot delete Pods with local storage (use --delete-emptydir-data to override)"). Scratch data may go: drain with \`--delete-emptydir-data\`.`,
     },
   ],
 };

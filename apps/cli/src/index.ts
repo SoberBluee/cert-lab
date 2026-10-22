@@ -327,7 +327,9 @@ learn
     action(async (id: string) => {
       const { ready } = await o().sessions.startLesson(id);
       const view = await awaitReady(ready);
-      view.lesson?.steps.forEach((s, i) => console.log(`${String(i + 1).padStart(2)}. ${s.title}\n    ${c.cyan(s.command.trim().split('\n').join('\n    '))}`));
+      view.lesson?.steps.forEach((s, i) =>
+        console.log(`${String(i + 1).padStart(2)}. ${s.title}\n    ${s.question ? c.yellow(`? ${s.question.prompt.trim()}`) : c.cyan((s.command ?? '').trim().split('\n').join('\n    '))}`),
+      );
       printConnection(view.connection);
       console.log(c.dim('\nOpen the web UI to see steps turn green as you run them.'));
     }),
@@ -346,14 +348,23 @@ learn
       const progress = () => o().store.getSession(started.id)?.learnProgress;
       let failed = 0;
       for (const [i, step] of lesson.def.steps.entries()) {
+        // Questions are answered in the pane: give the right answer and check that it counts.
+        if (step.question || step.command === undefined) {
+          if (step.question) await o().sessions.answerLearnStep(step.question.answer);
+          const ok = progress()?.steps[i]?.done;
+          if (!ok) failed++;
+          console.log(`${ok ? c.green('DONE') : c.red('FAIL')} ${String(i + 1).padStart(2)}. ${step.title} ${c.dim('(question)')}`);
+          continue;
+        }
+        const command = step.command;
         const t0 = Date.now();
         const deadline = t0 + ((step.check?.retrySeconds ?? 0) + 150) * 1000;
-        let r = await runAsLearner(o().driver, started.id, step.node, step.command);
+        let r = await runAsLearner(o().driver, started.id, step.node, command);
         let lastRun = Date.now();
         while (!progress()?.steps[i]?.done && Date.now() < deadline) {
           await new Promise((res) => setTimeout(res, 1000));
           if (Date.now() - lastRun > 15_000) {
-            r = await runAsLearner(o().driver, started.id, step.node, step.command);
+            r = await runAsLearner(o().driver, started.id, step.node, command);
             lastRun = Date.now();
           }
         }

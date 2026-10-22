@@ -756,7 +756,7 @@ tasks:
       - "kubectl -n vpa logs deploy/<component>: errors there point at what a component cannot do."
   - id: q17
     title: Pods cannot be created in ${Q17_NS}
-    recipe: { category: webhooks }
+    recipe: { category: admission }
     points: 7
     context: k8s-lab
     setup:

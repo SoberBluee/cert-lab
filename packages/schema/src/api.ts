@@ -125,9 +125,12 @@ export interface LessonStepView {
   id: string;
   title: string;
   explain: string;
-  command: string;
+  /** Absent on a question step. */
+  command?: string;
   node: string;
   hint?: string;
+  /** A question step; its answer and why only once it is done. */
+  question?: { prompt: string; choices: string[]; answer?: number; why?: string };
 }
 
 export interface LessonView {
@@ -160,6 +163,8 @@ export interface LearnStepProgress {
   failure?: string;
   /** The learner's latest command that did not count for this step, and why. */
   attempt?: { command: string; reason: string };
+  /** A question step: the choices tried that were wrong. */
+  wrong?: number[];
 }
 
 export interface LearnProgress {

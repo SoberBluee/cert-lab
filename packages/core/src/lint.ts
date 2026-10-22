@@ -227,11 +227,13 @@ export function lintLessons(root = lessonsDir): { issues: LintIssue[]; lessonCou
       if (syntax) err(`${st.script}: ${syntax}`);
     });
     for (const s of l.def.steps) {
+      if (s.command === undefined) continue;
       const syntax = bashSyntax(s.command);
       if (syntax) err(`step ${s.id} command: ${syntax}`);
       if (s.check?.type === 'script') err(`step ${s.id}: script checks are not supported in lessons; use an ssh check`);
       if (!s.explain.trim()) issues.push({ level: 'warning', where, message: `step ${s.id} has no explanation` });
     }
+    if (l.def.steps[0].question) err('the first step is a question: start with something to do in the terminal');
   }
   return { issues, lessonCount: library.list().length };
 }

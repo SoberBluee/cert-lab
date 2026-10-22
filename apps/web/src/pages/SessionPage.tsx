@@ -327,7 +327,8 @@ export function SessionPage() {
   });
   const openTask = useMutation({ mutationFn: api.openTask, onSuccess: setSession });
   const skip = useMutation({ mutationFn: api.skipStep, onSuccess: setSession });
-  const mutations = [grade, hint, solution, reset, reroll, end, submit, openTask, skip];
+  const answer = useMutation({ mutationFn: api.answerStep, onSuccess: setSession });
+  const mutations = [grade, hint, solution, reset, reroll, end, submit, openTask, skip, answer];
   const error = mutations.find((m) => m.error)?.error;
 
   const [activeTask, setActiveTask] = useState(0);
@@ -537,6 +538,8 @@ export function SessionPage() {
                   session={session}
                   onSkip={() => skip.mutate()}
                   skipping={skip.isPending}
+                  onAnswer={(choice) => answer.mutate(choice)}
+                  answering={answer.isPending}
                   onReset={doReset}
                   onEnd={doEnd}
                   error={error}

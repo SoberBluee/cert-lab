@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { QuizGradeItem, QuizGradeResult } from '@cka/schema';
 import { api } from '../api';
-import { Button, ErrorBanner, Markdown } from '../components/ui';
+import { Button, ErrorBanner, InlineMarkdown, Markdown } from '../components/ui';
 import { SECTIONS } from '../section';
 
 type Progress = {
@@ -248,7 +248,7 @@ export function QuizPage() {
                   onChange={() => setPicked(i)}
                   disabled={!!currentGraded}
                 />
-                <span>{choice}</span>
+                <InlineMarkdown>{choice}</InlineMarkdown>
               </label>
             );
           })}

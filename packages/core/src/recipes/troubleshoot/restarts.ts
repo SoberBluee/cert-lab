@@ -1,4 +1,4 @@
-import { createNs, nameField, nsField } from '../types';
+import { createNs, nameField, nsField, sq } from '../types';
 import type { FaultCategory } from './types';
 
 const IMAGE = 'nginx:1.27-alpine';
@@ -6,6 +6,22 @@ const IMAGE = 'nginx:1.27-alpine';
 const patch = (ns: string, app: string, json: string, type = 'strategic') => `kubectl -n "${ns}" patch deployment "${app}" --type=${type} -p '${json}'`;
 
 const rollout = (ns: string, app: string) => `kubectl -n "${ns}" rollout status "deployment/${app}" --timeout=240s`;
+
+/** nginx's server block for the config fault; `broken` drops a semicolon, as a hand edit does. */
+const nginxConf = (broken: boolean) => `server {
+    listen 80${broken ? '' : ';'}
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+    }
+}`;
+
+/** Writes ConfigMap <app>-nginx with default.conf. No here-document: fault snippets are indented into a case. */
+const confMap = (ns: string, app: string, file: string, broken: boolean) => `printf '%s\\n' ${nginxConf(broken)
+  .split('\n')
+  .map((l) => `'${l}'`)
+  .join(' ')} > "${file}"
+kubectl -n "${ns}" create configmap "${app}-nginx" --from-file=default.conf="${file}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null`;
 
 /** Sum of the restart counts of the Deployment's Pods. */
 const restarts = (ns: string, app: string) =>
@@ -131,7 +147,7 @@ exit 1`,
       'A container can be killed by the kubelet even though the app is fine: compare what each probe checks, and when, with what the app does and how long it takes to start.',
     ],
   }),
-  faults: ({ NS, APP }) => [
+  faults: ({ NS, APP }, state) => [
     {
       id: 'liveness-port',
       label: 'Liveness probe on a port nothing listens on',
@@ -185,6 +201,18 @@ exit 1`,
       wait: rollout(NS, APP),
       explain:
         'The container waits 20 seconds before nginx starts (its command is part of the app and must stay), but the liveness probe starts after 2 seconds and gives up after two failures, so the kubelet kills the container before it ever serves. The logs are empty; `describe pod` shows `Liveness probe failed ... connection refused` and `Killing`. Give it time to start: a `startupProbe` (for example HTTP GET `/`, `periodSeconds: 5`, `failureThreshold: 12`) holds the liveness probe back until the app answers, or raise `initialDelaySeconds` above 20.',
+    },
+    {
+      id: 'nginx-config-error',
+      label: 'nginx configuration from a ConfigMap has a syntax error',
+      break: `${confMap(NS, APP, `${state}.default.conf`, true)}
+kubectl -n "${NS}" patch deployment "${APP}" -p ${sq(
+  `{"spec":{"template":{"spec":{"volumes":[{"name":"nginx-conf","configMap":{"name":"${APP}-nginx"}}],"containers":[{"name":"web","volumeMounts":[{"name":"nginx-conf","mountPath":"/etc/nginx/conf.d"}]}]}}}}`,
+)}`,
+      fix: `${confMap(NS, APP, `${state}.default.conf`, false)}
+kubectl -n "${NS}" rollout restart "deployment/${APP}"`,
+      wait: rollout(NS, APP),
+      explain: `This time the app itself dies, not the kubelet: the container mounts ConfigMap \`${APP}-nginx\` at \`/etc/nginx/conf.d\`, and its \`default.conf\` misses the \`;\` after \`listen 80\`. nginx refuses the file and exits, so the Pods go into \`CrashLoopBackOff\` with no probe failures in the Events. \`kubectl -n ${NS} logs <pod> --previous\` shows the \`[emerg]\` line with the file and line number. Fix the ConfigMap (\`kubectl -n ${NS} edit configmap ${APP}-nginx\`) and restart the Deployment so the Pods read it at once.`,
     },
     {
       id: 'oom-limit',

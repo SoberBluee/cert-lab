@@ -536,6 +536,22 @@ describe('Hidden variables', () => {
     assert.equal(sessions.toView({ ...row, solutionViewed: true }).vars.Q1_FAULT, 'cordoned');
     assert.equal(sessions.toView({ ...row, endedAt: 'now' }).vars.Q1_NODE, 'worker-2');
   });
+
+  it('roll which flag a merged fault breaks, and are only declared when a fault uses them', () => {
+    const whole = scenarioOf(build([troubleQ('controlplane')]).build.bundle);
+    for (const key of ['APISERVER_FILE', 'ETCD_FILE', 'SCHEDULER_FILE', 'CM_FILE']) assert.equal(whole.variables[`Q1_${key}`]?.hidden, true, key);
+
+    const { build: res } = build([troubleQ('controlplane', ['etcd-missing-file'])]);
+    const def = scenarioOf(res.bundle);
+    assert.deepEqual(Object.keys(def.variables).filter((k) => k.startsWith('Q1_') && k.endsWith('_FILE')), ['Q1_ETCD_FILE']);
+    // The solution names the rolled flag once the variables are rendered, and lists every flag.
+    const md = res.bundle.files.find((f) => f.path === 'solution.md')!.content;
+    assert.match(md, /`--\$\{Q1_ETCD_FILE\}`/);
+    assert.match(md, /--trusted-ca-file/);
+
+    const narrow = scenarioOf(build([troubleQ('controlplane', ['apiserver-etcd-port'])]).build.bundle);
+    assert.ok(!Object.keys(narrow.variables).some((k) => k.endsWith('_FILE')));
+  });
 });
 
 describe('Quick Create', () => {
@@ -628,8 +644,8 @@ describe('Quick Create', () => {
       { id: 'controlplane', faults: ids('controlplane', 'apiserver-') },
       { id: 'apiaccess', faults: ids('apiaccess', 'apiserver-') },
     ]);
-    assert.ok(ids('controlplane', 'apiserver-').includes('apiserver-etcd-keyfile'));
-    assert.ok(ids('controlplane', 'etcd-').length >= 5);
+    assert.ok(ids('controlplane', 'apiserver-').includes('apiserver-missing-file'));
+    assert.ok(ids('controlplane', 'etcd-').length >= 4);
     assert.deepEqual(topics.find((t) => t.id === 'trouble-etcd')?.categories, [
       { id: 'controlplane', faults: ids('controlplane', 'etcd-') },
     ]);
@@ -670,7 +686,7 @@ describe('Quick Create', () => {
   it('catalog hides fault ids unless spoilers are asked for', () => {
     const plain = recipeCatalog();
     assert.ok(plain.categories.every((c) => c.faults === undefined && c.faultCount > 0));
-    assert.ok(!JSON.stringify(plain).includes('oom-killed'));
+    assert.ok(!JSON.stringify(plain).includes('oom-limit'));
     assert.ok(recipeCatalog(true).categories.every((c) => c.faults?.length === c.faultCount));
   });
 
@@ -740,7 +756,8 @@ describe('Layered troubleshoot questions', () => {
   }
 
   it('caps layers at what the category has, and keeps single-fault categories single', () => {
-    const { build: res } = build([{ ...troubleQ('hpa'), layers: 3 } as QuickQuestion, { ...troubleQ('ingress'), layers: 3 } as QuickQuestion]);
+    // VPA has no layers; HPA has two.
+    const { build: res } = build([{ ...troubleQ('vpa'), layers: 3 } as QuickQuestion, { ...troubleQ('hpa'), layers: 3 } as QuickQuestion]);
     const def = scenarioOf(res.bundle);
     assert.deepEqual(
       Object.keys(def.variables).filter((k) => k.includes('_FAULT')).sort(),

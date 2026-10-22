@@ -110,13 +110,6 @@ chmod 644 "${state}.uid"`,
       explain: `The CronJob has \`suspend: true\`, so it never creates a Job: \`kubectl get cronjob\` shows \`SUSPEND True\` and no \`LAST SCHEDULE\`. Set \`suspend: false\`.`,
     },
     {
-      id: 'never-schedule',
-      label: 'Schedule that never fires',
-      break: patch(NS, APP, '{"spec":{"suspend":false,"schedule":"0 0 31 2 *"}}'),
-      fix: patch(NS, APP, `{"spec":{"schedule":"${SCHEDULE}"}}`),
-      explain: `The schedule is \`0 0 31 2 *\`: midnight on February 31st, a date that never comes. It is valid cron syntax, so the API accepts it, but no Job is ever created. Set it back to \`${SCHEDULE}\`.`,
-    },
-    {
       id: 'deadline',
       label: 'Job time limit shorter than the work',
       break: `${resume(NS, APP)}
@@ -150,6 +143,26 @@ ${patch(
 ${patch(NS, APP, `[{"op":"replace","path":"${jobPath}/template/spec/containers/0/image","value":"registry.invalid/${IMAGE}"}]`, 'json')}`,
       fix: patch(NS, APP, `[{"op":"replace","path":"${jobPath}/template/spec/containers/0/image","value":"${IMAGE}"}]`, 'json'),
       explain: `The image is \`registry.invalid/${IMAGE}\`, a registry host that does not resolve. The Jobs are created, but their Pods sit in \`ErrImagePull\` / \`ImagePullBackOff\` and never finish. Set the image back to \`${IMAGE}\`; the stuck Jobs can be deleted.`,
+    },
+    {
+      id: 'concurrency-forbid-stuck',
+      label: 'A hung Job blocks every run under concurrencyPolicy Forbid',
+      // An earlier template hung; the CronJob is fine again, but it still waits for that Job.
+      break: `${patch(
+        NS,
+        APP,
+        `[{"op":"add","path":"/spec/concurrencyPolicy","value":"Forbid"},{"op":"replace","path":"${jobPath}/template/spec/containers/0/command/2","value":"date; echo waiting for the upstream export; sleep 100000"}]`,
+        'json',
+      )}
+${resume(NS, APP)}
+for _ in $(seq 1 45); do
+  [[ -n "$(kubectl -n "${NS}" get cronjob "${APP}" -o jsonpath='{.status.active}')" ]] && break
+  sleep 2
+done
+[[ -n "$(kubectl -n "${NS}" get cronjob "${APP}" -o jsonpath='{.status.active}')" ]] || { echo "the CronJob started no Job" >&2; exit 1; }
+${patch(NS, APP, `[{"op":"replace","path":"${jobPath}/template/spec/containers/0/command/2","value":"${COMMAND}"}]`, 'json')}`,
+      fix: `kubectl -n "${NS}" delete job "$(kubectl -n "${NS}" get cronjob "${APP}" -o jsonpath='{.status.active[0].name}')"`,
+      explain: `The CronJob itself looks right, but \`kubectl -n ${NS} get cronjob ${APP}\` shows \`ACTIVE 1\` and a \`LAST SCHEDULE\` that does not move: one Job, started from an earlier version of the template, runs \`sleep 100000\` and never ends (\`kubectl -n ${NS} get jobs\` and its Pod's logs show it waiting). With \`concurrencyPolicy: Forbid\`, the CronJob skips every run while a Job is still active, and it has no time limit. Delete the hung Job; the next run starts within a minute. (\`Replace\` would also do it, by killing the old Job at the next run.)`,
     },
   ],
 };

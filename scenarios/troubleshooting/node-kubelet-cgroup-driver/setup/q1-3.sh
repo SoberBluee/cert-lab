@@ -6,8 +6,9 @@ set -euo pipefail
 
 case "${Q1_FAULT}" in
   kubelet-cgroup-driver)
-    sed -i -E 's#^cgroupDriver: systemd$#cgroupDriver: invalid#' /var/lib/kubelet/config.yaml
-    grep -qE -- '^cgroupDriver: invalid$' /var/lib/kubelet/config.yaml || { echo "could not modify /var/lib/kubelet/config.yaml" >&2; exit 1; }
+    sed -i -E 's#^([[:space:]]*SystemdCgroup = )true[[:space:]]*$#\1"invalid"#' /etc/containerd/config.toml
+    grep -qE -- '^[[:space:]]*SystemdCgroup = "invalid"$' /etc/containerd/config.toml || { echo "could not modify /etc/containerd/config.toml" >&2; exit 1; }
+    systemctl restart containerd || true
     systemctl restart kubelet || true
     ;;
 esac

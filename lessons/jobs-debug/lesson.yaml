@@ -1,0 +1,215 @@
+id: jobs-debug
+title: Debug a CronJob that never succeeds
+summary: The nightly report CronJob has never produced a report. Work through it the way you would in the exam (CronJob, Job, Pod, Events, logs), testing each fix with a hand-made Job instead of waiting for the schedule. Four things are wrong.
+topic: jobs
+estimatedMinutes: 18
+setup:
+  - node: controlplane
+    run: |
+      kubectl create namespace nightly
+      timeout 60 bash -c "until kubectl -n nightly get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
+      kubectl apply -f - <<EOF
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: report
+        namespace: nightly
+      spec:
+        schedule: "0 2 * * *"
+        suspend: true
+        concurrencyPolicy: Forbid
+        jobTemplate:
+          spec:
+            backoffLimit: 0
+            activeDeadlineSeconds: 4
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: report
+                    image: busybox:1.63
+                    command: ["sh", "-c", "date; sleep 6; ech report done"]
+      EOF
+steps:
+  - id: get-cronjob
+    title: Start at the top, with the CronJob
+    explain: |
+      CronJob `report` in namespace `nightly` should print `report done` every night at 02:00, and never has. Read the columns: `SCHEDULE`, `SUSPEND`, `ACTIVE` and `LAST SCHEDULE`.
+    command: kubectl -n nightly get cronjob report
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(cronjobs?|cj)\b)'
+  - id: q-suspend
+    title: What does SUSPEND mean?
+    question:
+      prompt: "`SUSPEND` is `True`. What does that mean for this CronJob?"
+      choices:
+        - It creates Jobs on schedule but pauses their Pods
+        - It creates no new Jobs until suspend is false; Jobs already running carry on
+        - It deletes the Jobs it created
+        - It runs one more time, then stops
+      answer: 1
+      why: |
+        `spec.suspend: true` stops the CronJob from creating Jobs at its scheduled times. Jobs that already exist are not touched, and a Job you create by hand with `--from=cronjob/...` still runs. It is the first column to read when a CronJob never runs.
+  - id: resume
+    title: Resume it
+    explain: |
+      Set `suspend` to `false`: `kubectl -n nightly edit cronjob report`, or a patch.
+    command: "kubectl -n nightly patch cronjob report -p '{\"spec\":{\"suspend\":false}}'"
+    check:
+      id: resumed
+      description: CronJob report is not suspended
+      type: kubectl
+      run: kubectl -n nightly get cronjob report -o jsonpath='{.spec.suspend}'
+      expect: { equals: 'false' }
+  - id: test-1
+    title: Test it now, with a Job of your own
+    explain: |
+      The schedule is nightly, so do not wait for it: create a Job from the CronJob's template and watch that one.
+    command: kubectl -n nightly create job test-1 --from=cronjob/report
+    match: '^kubectl\b(?=.*\bcreate\s+job\s+test-1\b)(?=.*--from=(cronjob|cj)/report)'
+  - id: pods
+    title: Look at its Pod
+    explain: |
+      The Job exists, but its Pod is not running: `STATUS` shows `ErrImagePull` or `ImagePullBackOff`.
+    command: kubectl -n nightly get pods
+    match: '^kubectl\b(?=.*\bget\b)(?=.*\b(po|pods?)\b)'
+  - id: describe-pod
+    title: Find out why from the Pod's Events
+    explain: |
+      `describe` ends with the Events: the kubelet tried to pull `busybox:1.63`, and that tag does not exist. `-l job-name=test-1` selects the Job's Pod without its generated name.
+    command: kubectl -n nightly describe pod -l job-name=test-1
+    match: '^kubectl\b(?=.*\bdescribe\b)(?=.*\b(po|pods?)\b)'
+  - id: q-where
+    title: Where does the fix go?
+    question:
+      prompt: The image tag is wrong. Where do you fix it so that the next nightly run works?
+      choices:
+        - In the stuck Pod, with kubectl edit pod
+        - In the CronJob's spec.jobTemplate, which every new Job is made from
+        - In Job test-1, with kubectl edit job
+        - On the nodes, by pulling the image with crictl
+      answer: 1
+      why: |
+        Each run is a new Job created from the CronJob's `jobTemplate`; existing Jobs and Pods are never updated from it. Fixing the Pod or the Job only rescues that one run. Fix the template, then test with a new Job. `kubectl set image` works on CronJobs too.
+  - id: fix-image
+    title: Fix the image in the template
+    explain: |
+      The container is called `report`; the tag the cluster has is `busybox:1.36`.
+    command: kubectl -n nightly set image cronjob/report report=busybox:1.36
+    check:
+      id: image-fixed
+      description: the CronJob's template uses busybox:1.36
+      type: kubectl
+      run: kubectl -n nightly get cronjob report -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}'
+      expect: { equals: busybox:1.36 }
+  - id: test-2
+    title: Test again
+    explain: |
+      A new Job picks up the fixed template (test-1 keeps its old Pod; ignore it). The step turns green once test-2 has failed: it will, for a new reason.
+    command: kubectl -n nightly create job test-2 --from=cronjob/report
+    match: '^kubectl\b(?=.*\bcreate\s+job\s+test-2\b)(?=.*--from=(cronjob|cj)/report)'
+    check:
+      id: test-2-failed
+      description: Job test-2 has finished as failed
+      type: kubectl
+      run: kubectl -n nightly get job test-2 -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}'
+      expect: { equals: 'True' }
+      retrySeconds: 45
+  - id: describe-job
+    title: Read why the Job failed
+    explain: |
+      This time the image was pulled and the container started, but `describe job` shows the condition `Failed` with reason `DeadlineExceeded`: "Job was active longer than specified deadline". The Pod was killed after 4 seconds.
+    command: kubectl -n nightly describe job test-2
+    match: '^kubectl\b(?=.*\bdescribe\b)(?=.*\b(jobs?|job/test-2)\b)'
+  - id: q-deadline
+    title: Which field ends a Job by time?
+    question:
+      prompt: The report sleeps 6 seconds, and the Job was stopped after 4 with `DeadlineExceeded`. Which field of the Job spec did that?
+      choices:
+        - ttlSecondsAfterFinished
+        - activeDeadlineSeconds
+        - startingDeadlineSeconds
+        - terminationGracePeriodSeconds
+      answer: 1
+      why: |
+        `activeDeadlineSeconds` caps how long the whole Job may run, whatever its Pods are doing; it wins over `backoffLimit`. `ttlSecondsAfterFinished` only deletes a Job after it has finished, `startingDeadlineSeconds` (on the CronJob) is how late a missed run may still start, and `terminationGracePeriodSeconds` is how long a Pod gets to shut down.
+  - id: fix-deadline
+    title: Remove the deadline
+    explain: |
+      The report has no reason to be cut short: remove `activeDeadlineSeconds` from the template (in `spec.jobTemplate.spec`).
+    command: "kubectl -n nightly patch cronjob report --type=json -p '[{\"op\":\"remove\",\"path\":\"/spec/jobTemplate/spec/activeDeadlineSeconds\"}]'"
+    check:
+      id: no-deadline
+      description: the CronJob's Jobs have no activeDeadlineSeconds
+      type: kubectl
+      run: kubectl -n nightly get cronjob report -o jsonpath='{.spec.jobTemplate.spec.activeDeadlineSeconds}'
+      expect: { equals: '' }
+  - id: test-3
+    title: Test once more
+    explain: |
+      It fails again, after a single Pod. The step turns green once test-3 has failed.
+    command: kubectl -n nightly create job test-3 --from=cronjob/report
+    match: '^kubectl\b(?=.*\bcreate\s+job\s+test-3\b)(?=.*--from=(cronjob|cj)/report)'
+    check:
+      id: test-3-failed
+      description: Job test-3 has finished as failed
+      type: kubectl
+      run: kubectl -n nightly get job test-3 -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}'
+      expect: { equals: 'True' }
+      retrySeconds: 60
+  - id: logs
+    title: Read what the container said
+    explain: |
+      Now the logs have the answer: `sh: ech: not found`. The command has a typo, so the shell exits with code `127`.
+    command: kubectl -n nightly logs job/test-3
+    match: '^kubectl\b(?=.*\blogs\b)(?=.*\b(job/test-3|test-3-))'
+  - id: q-backoff
+    title: Why only one Pod?
+    question:
+      prompt: "The Job failed after a single Pod. What does `backoffLimit: 0` add to the problem?"
+      choices:
+        - Nothing; the command typo alone explains it
+        - It fails the Job at the first failed Pod, so a run that fails once never gets a retry
+        - It stops the CronJob's schedule
+        - It deletes the failed Pod's logs
+      answer: 1
+      why: |
+        `backoffLimit` is how many failed Pods a Job tolerates before it is marked `Failed` (`BackoffLimitExceeded`); the default is 6. With `0`, a single failure ends the run, so a flaky dependency at 02:00 means no report that night. The typo is the cause; the limit makes any failure final.
+  - id: fix-command
+    title: Fix the command and allow retries
+    explain: |
+      In `spec.jobTemplate.spec`, make the command `date; sleep 6; echo report done` and set `backoffLimit` back to a few retries. `kubectl -n nightly edit cronjob report` works just as well as this patch.
+    command: "kubectl -n nightly patch cronjob report --type=json -p '[{\"op\":\"replace\",\"path\":\"/spec/jobTemplate/spec/template/spec/containers/0/command/2\",\"value\":\"date; sleep 6; echo report done\"},{\"op\":\"replace\",\"path\":\"/spec/jobTemplate/spec/backoffLimit\",\"value\":2}]'"
+    check:
+      id: command-fixed
+      description: the template's command echoes report done, with backoffLimit above 0
+      type: kubectl
+      run: echo "$(kubectl -n nightly get cronjob report -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].command[2]}')|$(kubectl -n nightly get cronjob report -o jsonpath='{.spec.jobTemplate.spec.backoffLimit}')"
+      expect: { matches: 'echo report done\|[1-9]' }
+  - id: test-4
+    title: Prove it works
+    explain: |
+      A last test Job: it completes, and its log ends with `report done`. The next nightly run will do the same.
+    command: kubectl -n nightly create job test-4 --from=cronjob/report
+    match: '^kubectl\b(?=.*\bcreate\s+job\s+test-4\b)(?=.*--from=(cronjob|cj)/report)'
+    check:
+      id: test-4-done
+      description: Job test-4 succeeded
+      type: kubectl
+      run: kubectl -n nightly get job test-4 -o jsonpath='{.status.succeeded}'
+      expect: { equals: '1' }
+      retrySeconds: 60
+  - id: cleanup
+    title: Clear the stuck test Job
+    explain: |
+      One thing is left: `test-1` still sits in `ImagePullBackOff`, because its Pod kept the old image. With `concurrencyPolicy: Forbid`, a Job of this CronJob that never finishes can block every scheduled run, so delete it (and any test you no longer need).
+
+      The order you followed is the one to keep: the CronJob (suspended? schedule?), a test Job (`--from`), its Pod (`get` and `describe`: image, scheduling), the Job's conditions (deadline, backoff), and finally the logs.
+    command: kubectl -n nightly delete job test-1
+    match: '^kubectl\b(?=.*\bdelete\b)(?=.*\b(jobs?|job/test-1)\b)(?=.*test-1)'
+    check:
+      id: test-1-gone
+      description: Job test-1 is gone
+      type: kubectl
+      run: kubectl -n nightly get job test-1 -o name 2>/dev/null || echo gone
+      expect: { equals: gone }
+      retrySeconds: 30

@@ -23,7 +23,6 @@ import { storageCategory } from './storage';
 import type { FaultCategory } from './types';
 import { unschedulableCategory } from './unschedulable';
 import { vpaCategory } from './vpa';
-import { webhooksCategory } from './webhooks';
 
 export { composeTrouble, WORKERS, type FaultSlot } from './compose';
 export type { Fault, FaultCategory, Shell } from './types';
@@ -45,7 +44,6 @@ export const CATEGORIES: FaultCategory[] = [
   nodeConfigCategory,
   controlPlaneCategory,
   apiAccessCategory,
-  webhooksCategory,
   drainCategory,
   restartsCategory,
   admissionCategory,

@@ -120,6 +120,7 @@ app.post<{ Params: { id: string } }>('/api/lessons/:id/start', async (req, reply
 });
 
 app.post('/api/sessions/current/learn/skip', async () => sessions.skipLearnStep());
+app.post<{ Body: { choice?: number } }>('/api/sessions/current/learn/answer', async (req) => sessions.answerLearnStep(Number(req.body?.choice)));
 
 app.get<{ Querystring: { track?: string } }>('/api/quizzes', async (req) => ({
   quizzes: quizzes

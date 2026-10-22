@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { LessonTrackSchema } from './lesson';
 
-export const QUIZ_TOPICS = ['quiz-errors', 'quiz-paths', 'quiz-workloads', 'quiz-networking', 'quiz-storage-rbac', 'quiz-cluster', 'quiz-linux-openssl'] as const;
+export const QUIZ_TOPICS = ['quiz-errors', 'quiz-paths', 'quiz-workloads', 'quiz-jobs', 'quiz-networking', 'quiz-storage-rbac', 'quiz-cluster', 'quiz-linux-openssl'] as const;
 export const QuizTopicSchema = z.enum(QUIZ_TOPICS);
 export type QuizTopic = z.infer<typeof QuizTopicSchema>;
 

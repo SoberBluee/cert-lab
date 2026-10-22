@@ -88,6 +88,17 @@ export function Markdown({ children }: { children: string }) {
   );
 }
 
+/** One line of Markdown (inline code, bold, italics), for quiz choices and other short labels. */
+export function InlineMarkdown({ children }: { children: string }) {
+  return (
+    <span className="md-inline">
+      <ReactMarkdown allowedElements={['code', 'strong', 'em']} unwrapDisallowed>
+        {children}
+      </ReactMarkdown>
+    </span>
+  );
+}
+
 export function CopyField({ value, label }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (

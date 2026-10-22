@@ -1,0 +1,335 @@
+id: admission-create
+title: "Admission control: quotas, LimitRanges, Pod Security, policies and webhooks"
+summary: Every create and update passes admission before it is stored. Set up the admission controls you meet in the exam (a ResourceQuota, a LimitRange, a Pod Security level), write a ValidatingAdmissionPolicy, then register a webhook and see what failurePolicy decides when it cannot be called.
+topic: admission
+estimatedMinutes: 20
+setup:
+  - node: controlplane
+    run: |
+      kubectl create namespace team-a
+      kubectl create namespace team-b
+      timeout 60 bash -c "until kubectl -n team-a get serviceaccount default >/dev/null 2>&1 && kubectl -n team-b get serviceaccount default >/dev/null 2>&1; do sleep 1; done"
+steps:
+  - id: plugins
+    title: See which admission plugins the API server runs
+    explain: |
+      A request is authenticated, then authorized, then goes through **admission**: mutating admission first (which may change the object), then validation, then validating admission. Only then is it stored in etcd.
+
+      kubeadm turns on `NodeRestriction` explicitly; the default set (NamespaceLifecycle, LimitRanger, ServiceAccount, PodSecurity, ResourceQuota, the webhook plugins and more) is on anyway. The manifest is readable by root only.
+    command: sudo grep admission /etc/kubernetes/manifests/kube-apiserver.yaml
+    match: '^grep\b(?=.*admission)(?=.*kube-apiserver)'
+  - id: q-order
+    title: In what order does admission run?
+    question:
+      prompt: "`kubectl apply` sends a Pod. In which order do the admission phases run?"
+      choices:
+        - Validating admission, then mutating admission
+        - Mutating admission, then schema validation, then validating admission
+        - Both phases at the same time, and the slower one wins
+        - Only one of them, depending on whether the Pod is new
+      answer: 1
+      why: |
+        Mutating admission runs first, so defaults and injected fields are in place (LimitRanger filling in requests, a webhook adding a sidecar). The object is then validated against its schema, and validating admission checks the final version, so a validator always sees what will be stored. Any plugin can refuse the request, and the first refusal is what you get back.
+  - id: quota
+    title: Put a ResourceQuota on namespace team-a
+    explain: |
+      A **ResourceQuota** caps what a namespace may hold: counts of objects and sums of requests and limits. The ResourceQuota admission plugin refuses any create that would go over. Allow 2 Pods, 1 CPU and 512Mi of memory in requests.
+    command: kubectl -n team-a create quota team-quota --hard=pods=2,requests.cpu=1,requests.memory=512Mi
+    match: '^kubectl\b(?=.*\bcreate\s+(quota|resourcequota)\s+team-quota\b)'
+    check:
+      id: quota-created
+      description: ResourceQuota team-quota allows 2 Pods
+      type: kubectl
+      run: kubectl -n team-a get resourcequota team-quota -o jsonpath='{.spec.hard.pods}'
+      expect: { equals: '2' }
+  - id: deploy
+    title: Create a Deployment with 3 replicas
+    explain: |
+      The Deployment itself is accepted: the quota does not count Deployments.
+    command: kubectl -n team-a create deployment web --image=nginx:1.27-alpine --replicas=3
+    match: '^kubectl\b(?=.*\bcreate\s+deploy(ment)?\s+web\b)'
+  - id: failedcreate
+    title: Find out why it has no Pods
+    explain: |
+      `kubectl -n team-a get deploy,rs,pods` shows `0/3` and no Pods at all. Pods refused at admission never exist, so look one level up: the ReplicaSet's Events say `FailedCreate ... failed quota: team-quota: must specify requests.cpu, requests.memory`.
+    command: kubectl -n team-a describe rs -l app=web
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(rs|replicasets?|events?|ev)\b)'
+  - id: q-no-pods
+    title: Why no Pods at all?
+    question:
+      prompt: The Deployment exists but no Pod does, and the ReplicaSet reports `must specify requests.cpu`. Why?
+      choices:
+        - The scheduler found no node with enough CPU
+        - A quota that tracks requests.cpu makes every new Pod in the namespace declare a CPU request, and these declare none
+        - The image could not be pulled
+        - Deployments in a namespace with a quota are limited to 2 replicas
+      answer: 1
+      why: |
+        Once a quota tracks a compute resource, the ResourceQuota plugin refuses any Pod that does not set it, because it could not be counted. The refusal happens at admission, so no Pod object is created: no `Pending` Pod to describe, only `FailedCreate` on the ReplicaSet. A scheduler problem would leave Pods `Pending` instead.
+  - id: limitrange
+    title: Give the namespace default requests with a LimitRange
+    explain: |
+      A **LimitRange** sets per-container defaults, minimums and maximums. The LimitRanger plugin runs at the mutating stage, so it fills in requests and limits for containers that set none, before the quota checks them.
+    command: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: LimitRange
+      metadata:
+        name: defaults
+        namespace: team-a
+      spec:
+        limits:
+          - type: Container
+            defaultRequest: { cpu: 100m, memory: 64Mi }
+            default: { cpu: 200m, memory: 128Mi }
+      EOF
+    check:
+      id: limitrange-created
+      description: LimitRange defaults gives containers a 100m CPU request
+      type: kubectl
+      run: kubectl -n team-a get limitrange defaults -o jsonpath='{.spec.limits[0].defaultRequest.cpu}' 2>/dev/null || true
+      expect: { equals: 100m }
+  - id: retry
+    title: Retry the rollout
+    explain: |
+      The ReplicaSet controller retries with a growing back-off; a rollout restart retries at once. Two Pods start, with requests the LimitRange filled in (`kubectl -n team-a get pod -o yaml | grep -A3 requests`). The third is still refused.
+    command: kubectl -n team-a rollout restart deployment web
+    match: '^kubectl\b(?=.*\brollout\s+restart\b)(?=.*\bweb\b)'
+    check:
+      id: two-running
+      description: web runs 2 ready replicas
+      type: kubectl
+      run: kubectl -n team-a get deployment web -o jsonpath='{.status.readyReplicas}'
+      expect: { equals: '2' }
+      retrySeconds: 90
+  - id: quota-used
+    title: Read the quota's usage
+    explain: |
+      `describe quota` lists each limit with what is used: `pods 2/2`, and the CPU and memory requests the two Pods got from the LimitRange.
+    command: kubectl -n team-a describe quota team-quota
+    match: '^kubectl\b(?=.*\b(describe|get)\b)(?=.*\b(quota|resourcequotas?)\b)'
+  - id: q-third
+    title: The third replica
+    question:
+      prompt: "`web` wants 3 replicas and runs 2, and the quota shows `pods 2/2`. What happens to the third replica?"
+      choices:
+        - It is Pending until another Pod in the namespace finishes
+        - The ReplicaSet keeps trying, and admission keeps refusing it while the quota is full, so no third Pod object exists
+        - The quota evicts the oldest Pod to make room
+        - It runs without being counted, because the LimitRange gave it requests
+      answer: 1
+      why: |
+        A full quota refuses the create outright: `exceeded quota: team-quota, requested: pods=1, used: pods=2, limited: pods=2` in the ReplicaSet's Events. Quotas never evict anything. Raise the quota, or lower the replicas, and the ReplicaSet creates the Pod on its next try.
+  - id: pss-label
+    title: Enforce the baseline Pod Security level on team-b
+    explain: |
+      **Pod Security admission** checks Pods against three levels: `privileged` (anything goes), `baseline` (no privileged containers, host namespaces or hostPath, among others) and `restricted` (also non-root, no privilege escalation, all capabilities dropped, a seccomp profile). A namespace label picks the level per mode: `enforce` refuses, `warn` and `audit` only report.
+    command: kubectl label namespace team-b pod-security.kubernetes.io/enforce=baseline
+    match: '^kubectl\b(?=.*\blabel\b)(?=.*\b(ns|namespaces?)\b)(?=.*pod-security\.kubernetes\.io/enforce=baseline)'
+    check:
+      id: baseline-enforced
+      description: namespace team-b enforces the baseline level
+      type: kubectl
+      run: kubectl get namespace team-b -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}'
+      expect: { equals: baseline }
+  - id: privileged
+    title: Try a privileged Pod there
+    explain: |
+      The request is refused: `pods "priv" is forbidden: violates PodSecurity "baseline:latest": privileged (container "priv" must not set securityContext.privileged=true)`. The error names the level and the field.
+    command: |-
+      kubectl -n team-b run priv --image=busybox:1.36 --overrides='{"spec":{"containers":[{"name":"priv","image":"busybox:1.36","command":["sleep","3600"],"securityContext":{"privileged":true}}]}}'
+    match: '^kubectl\b(?=.*\brun\s+priv\b)'
+    allowFailure: true
+    check:
+      id: priv-refused
+      description: no Pod priv exists in team-b
+      type: kubectl
+      run: kubectl -n team-b get pod priv -o name 2>/dev/null || echo none
+      expect: { equals: none }
+  - id: q-levels
+    title: Which level is that?
+    question:
+      prompt: Which Pod Security level refuses `privileged` containers but still lets a container run as root?
+      choices:
+        - privileged
+        - baseline
+        - restricted
+        - none of them; root is always refused
+      answer: 1
+      why: |
+        `baseline` blocks the known privilege escalations (privileged containers, host namespaces, hostPath volumes, added capabilities beyond a safe set) but not running as root, which is why most ordinary images pass it. `restricted` also requires `runAsNonRoot`, `allowPrivilegeEscalation: false`, dropping `ALL` capabilities and a seccomp profile.
+  - id: policy
+    title: Write a ValidatingAdmissionPolicy
+    explain: |
+      For your own rules you no longer need a webhook server: a **ValidatingAdmissionPolicy** holds CEL expressions that the API server evaluates itself, and a **binding** says where it applies and what to do when it fails. This one requires a `team` label on every Deployment in `team-b`.
+    command: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: admissionregistration.k8s.io/v1
+      kind: ValidatingAdmissionPolicy
+      metadata:
+        name: require-team-label
+      spec:
+        failurePolicy: Fail
+        matchConstraints:
+          resourceRules:
+            - apiGroups: ["apps"]
+              apiVersions: ["v1"]
+              operations: ["CREATE", "UPDATE"]
+              resources: ["deployments"]
+        validations:
+          - expression: "has(object.metadata.labels) && 'team' in object.metadata.labels"
+            message: Deployments need a team label
+      ---
+      apiVersion: admissionregistration.k8s.io/v1
+      kind: ValidatingAdmissionPolicyBinding
+      metadata:
+        name: require-team-label
+      spec:
+        policyName: require-team-label
+        validationActions: [Deny]
+        matchResources:
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: team-b
+      EOF
+    check:
+      id: policy-active
+      description: the policy is bound and denies an unlabelled Deployment in team-b
+      type: kubectl
+      # A server-side dry run goes through admission without storing anything: proof the policy is live.
+      run: kubectl -n team-b create deployment policy-probe --image=nginx:1.27-alpine --dry-run=server -o name 2>&1 | grep -c 'team label' || true
+      expect: { gte: 1 }
+      retrySeconds: 30
+  - id: policy-deny
+    title: Create a Deployment without the label
+    explain: |
+      Refused, with the policy's own message: `ValidatingAdmissionPolicy 'require-team-label' with binding 'require-team-label' denied request: Deployments need a team label`. (The policy may take a few seconds to load; run it again if it got through, after deleting the Deployment.)
+    command: kubectl -n team-b create deployment api --image=nginx:1.27-alpine
+    match: '^kubectl\b(?=.*\bcreate\s+deploy(ment)?\s+api\b)'
+    allowFailure: true
+    check:
+      id: api-refused
+      description: no Deployment api exists in team-b
+      type: kubectl
+      run: kubectl -n team-b get deployment api -o name 2>/dev/null || echo none
+      expect: { equals: none }
+  - id: policy-allow
+    title: Create it with the label
+    explain: |
+      `kubectl create deployment` cannot add labels of your choice, but it can feed `kubectl label --local`, which edits the manifest without calling the API, before you apply it.
+    command: kubectl -n team-b create deployment api --image=nginx:1.27-alpine --dry-run=client -o yaml | kubectl label --local -f - team=payments -o yaml | kubectl apply -f -
+    match: '^kubectl\b(?=.*\bcreate\s+deploy(ment)?\s+api\b)(?=.*team=)'
+    check:
+      id: api-labelled
+      description: Deployment api exists with label team=payments
+      type: kubectl
+      run: kubectl -n team-b get deployment api -o jsonpath='{.metadata.labels.team}' 2>/dev/null || true
+      expect: { equals: payments }
+  - id: q-vap
+    title: Policy or webhook?
+    question:
+      prompt: What does a ValidatingAdmissionPolicy save you, compared with a validating webhook?
+      choices:
+        - Nothing; it calls a webhook behind the scenes
+        - Running a server, its Service and a TLS certificate; the API server evaluates the CEL rule itself
+        - It can also change the object, which a webhook cannot
+        - It applies to Pods only, so it is simpler
+      answer: 1
+      why: |
+        A webhook is an HTTPS call from the API server to a Service you run, with a certificate the API server must trust; when that call fails, `failurePolicy` decides. A ValidatingAdmissionPolicy is evaluated in-process, so there is nothing to keep running. Mutation is a webhook's (or a MutatingAdmissionPolicy's) job.
+  - id: webhook
+    title: Register a validating webhook whose server is not there
+    explain: |
+      A **ValidatingWebhookConfiguration** (cluster-scoped) tells the API server which requests to send to which Service. This one covers Pod creates in `team-b` and calls `team-b/pod-audit`, which does not exist: exactly what a half-removed add-on leaves behind. `failurePolicy: Ignore` says what to do when the call fails.
+    command: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: admissionregistration.k8s.io/v1
+      kind: ValidatingWebhookConfiguration
+      metadata:
+        name: audit-pods
+      webhooks:
+        - name: audit.pods.lab
+          admissionReviewVersions: ["v1"]
+          sideEffects: None
+          failurePolicy: Ignore
+          timeoutSeconds: 3
+          clientConfig:
+            service:
+              name: pod-audit
+              namespace: team-b
+              path: /validate
+          rules:
+            - apiGroups: [""]
+              apiVersions: ["v1"]
+              operations: ["CREATE"]
+              resources: ["pods"]
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: team-b
+      EOF
+    check:
+      id: webhook-registered
+      description: ValidatingWebhookConfiguration audit-pods exists
+      type: kubectl
+      run: kubectl get validatingwebhookconfiguration audit-pods -o jsonpath='{.webhooks[0].failurePolicy}' 2>/dev/null || true
+      expect: { equals: Ignore }
+  - id: probe-1
+    title: Create a Pod in team-b
+    explain: |
+      It is created, although the webhook could not be reached.
+    command: kubectl -n team-b run probe-1 --image=busybox:1.36 -- sleep 3600
+    match: '^kubectl\b(?=.*\brun\s+probe-1\b)'
+    check:
+      id: probe-1-created
+      description: Pod probe-1 exists
+      type: kubectl
+      run: kubectl -n team-b get pod probe-1 -o name 2>/dev/null || echo none
+      expect: { equals: pod/probe-1 }
+  - id: q-ignore
+    title: Why was it allowed?
+    question:
+      prompt: The webhook's Service does not exist, yet `probe-1` was created. Why?
+      choices:
+        - Webhooks only apply to Deployments
+        - "`failurePolicy: Ignore` admits the request when the webhook cannot be called"
+        - The API server skipped the webhook because the Pod has no labels
+        - Webhooks only start working after the API server restarts
+      answer: 1
+      why: |
+        A failed call (no Service, no endpoints, a TLS error or a timeout) is decided by `failurePolicy`: `Ignore` fails open and admits the request, `Fail` fails closed and refuses it. `Fail` is the default in `admissionregistration.k8s.io/v1`. Security policies want `Fail`, and that is exactly why a leftover webhook can stop every Pod in a namespace.
+  - id: fail-closed
+    title: Make the webhook fail closed
+    explain: |
+      Switch `failurePolicy` to `Fail`.
+    command: "kubectl patch validatingwebhookconfiguration audit-pods --type=json -p '[{\"op\":\"replace\",\"path\":\"/webhooks/0/failurePolicy\",\"value\":\"Fail\"}]'"
+    check:
+      id: failing-closed
+      description: audit-pods fails closed
+      type: kubectl
+      run: kubectl get validatingwebhookconfiguration audit-pods -o jsonpath='{.webhooks[0].failurePolicy}'
+      expect: { equals: Fail }
+  - id: probe-2
+    title: Try another Pod
+    explain: |
+      Refused now: `Internal error occurred: failed calling webhook "audit.pods.lab": ... service "pod-audit" not found`. Remember the shape of this message: it names the webhook and why the call failed.
+    command: kubectl -n team-b run probe-2 --image=busybox:1.36 -- sleep 3600
+    match: '^kubectl\b(?=.*\brun\s+probe-2\b)'
+    allowFailure: true
+    check:
+      id: probe-2-refused
+      description: no Pod probe-2 exists
+      type: kubectl
+      run: kubectl -n team-b get pod probe-2 -o name 2>/dev/null || echo none
+      expect: { equals: none }
+  - id: remove-webhook
+    title: Remove the webhook
+    explain: |
+      Webhook configurations are cluster-scoped and outlive the add-on that registered them. `kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration` is worth running whenever creates fail with "failed calling webhook". Delete this one.
+    command: kubectl delete validatingwebhookconfiguration audit-pods
+    match: '^kubectl\b(?=.*\bdelete\b)(?=.*\bvalidatingwebhookconfigurations?\b)'
+    check:
+      id: webhook-removed
+      description: audit-pods is gone
+      type: kubectl
+      run: kubectl get validatingwebhookconfiguration audit-pods -o name 2>/dev/null || echo none
+      expect: { equals: none }

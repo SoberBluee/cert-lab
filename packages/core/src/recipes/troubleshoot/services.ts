@@ -67,10 +67,10 @@ export const servicesCategory: FaultCategory = {
   layers: [
     {
       name: 'the Service',
-      faults: ['selector-mismatch', 'target-port', 'selector-extra-label', 'service-port', 'service-protocol', 'selector-cleared', 'target-port-typo', 'service-externalname'],
+      faults: ['selector-mismatch', 'target-port', 'selector-extra-label', 'service-port', 'service-protocol', 'selector-cleared', 'service-externalname'],
     },
     { name: 'the backend Pods', faults: ['not-ready', 'readiness-https', 'readiness-port-number', 'named-port'] },
-    { name: 'the network path', faults: ['network-policy', 'egress-network-policy', 'kube-proxy-down', 'kube-proxy-config-mode'] },
+    { name: 'the network path', faults: ['network-policy', 'egress-network-policy', 'kube-proxy-kubeconfig', 'kube-proxy-config-mode'] },
   ],
   shell: ({ NS, APP, CLIENT }, state) => ({
     title: `Service ${APP} unreachable`,
@@ -262,16 +262,21 @@ kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
       explain: `The Service port is \`80/UDP\`, but HTTP needs TCP, so TCP connections to the Service IP go nowhere. \`kubectl -n ${NS} get svc ${APP}\` shows the protocol: set it back to \`TCP\`.`,
     },
     {
-      id: 'kube-proxy-down',
-      label: 'kube-proxy runs on no node',
-      // Cluster-wide: stage/fix before other Service questions or their waits fail with kube-proxy still down.
+      id: 'kube-proxy-kubeconfig',
+      label: "kube-proxy's kubeconfig points at the wrong API port",
+      // Cluster-wide: stage/fix before other Service questions, or their new endpoints are never programmed.
       disruptive: true,
-      break: `kubectl -n kube-system patch daemonset kube-proxy -p '{"spec":{"template":{"spec":{"nodeSelector":{"kube-proxy":"disabled"}}}}}'
-kubectl -n kube-system wait --for=delete pod -l k8s-app=kube-proxy --timeout=180s >/dev/null 2>&1 || true`,
-      fix: `kubectl -n kube-system patch daemonset kube-proxy --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector/kube-proxy"}]'
+      break: `kubectl -n kube-system get configmap kube-proxy -o yaml | sed -E 's#(server: https://[^[:space:]]+):6443$#\\1:6444#' > /var/tmp/cka-kube-proxy-cm.yaml
+grep -qE 'server: https://[^[:space:]]+:6444$' /var/tmp/cka-kube-proxy-cm.yaml || { echo "could not change the kube-proxy kubeconfig" >&2; exit 1; }
+kubectl replace -f /var/tmp/cka-kube-proxy-cm.yaml >/dev/null
+kubectl -n kube-system rollout restart daemonset/kube-proxy
+# Without the API kube-proxy may keep running or restart; either way it never programs new endpoints.
+kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=120s >/dev/null 2>&1 || true`,
+      fix: `kubectl -n kube-system get configmap kube-proxy -o yaml | sed -E 's#(server: https://[^[:space:]]+):6444$#\\1:6443#' | kubectl replace -f -
+kubectl -n kube-system rollout restart daemonset/kube-proxy
 kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
       wait: waitServing(NS, CLIENT, APP),
-      explain: `Service, endpoints and Pods all look right, and the client can reach a Pod IP directly, but not the Service IP. The \`kube-system/kube-proxy\` DaemonSet has a nodeSelector \`kube-proxy=disabled\` that no node matches, so no kube-proxy runs and the Service's new endpoints are never programmed into iptables (\`kubectl -n kube-system get ds kube-proxy\` shows 0 desired). An unmatched nodeSelector is not an error, so there are no Pods, events or logs to find — \`DESIRED 0\` on the DaemonSet plus a clean namespace is the whole signal. Remove that nodeSelector entry.`,
+      explain: `Service, endpoints and Pods all look right, and the client reaches a Pod IP directly, but not the Service IP. kube-proxy Pods exist on every node, yet the \`kubeconfig.conf\` in ConfigMap \`kube-system/kube-proxy\` points it at port \`6444\`, so it cannot reach the API server: it keeps the rules it had, and never learns about Services or endpoints that changed since. \`kubectl -n kube-system logs <kube-proxy-pod>\` shows "connection refused" to \`:6444\`. Set \`server:\` back to port \`6443\` in the ConfigMap and restart the DaemonSet (\`kubectl -n kube-system rollout restart ds kube-proxy\`).`,
     },
     {
       id: 'selector-cleared',
@@ -280,24 +285,6 @@ kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
       fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"add","path":"/spec/selector","value":{"app":"'"${APP}"'"}}]'`,
       wait: waitServing(NS, CLIENT, APP),
       explain: `The Service has no \`selector\`, so it manages no endpoints (\`kubectl -n ${NS} get endpointslices -l kubernetes.io/service-name=${APP}\` is empty). Restore \`selector: { app: ${APP} }\`.`,
-    },
-    {
-      id: 'target-port-typo',
-      label: 'Service targetPort has a typo',
-      break: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":"htt"}]'`,
-      fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":"http"}]'`,
-      wait: waitServing(NS, CLIENT, APP),
-      explain: `The Service's \`targetPort\` is \`htt\`, but the container port is named \`http\`, so the endpoint slices list no ports and traffic goes nowhere. Set \`targetPort\` back to \`http\`.`,
-    },
-    {
-      id: 'pod-label-drift',
-      label: 'Pod labels drifted away from the Service selector',
-      break: `kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"paused":true}}'
-kubectl -n "${NS}" label pods -l "app=${APP}" "app=${APP}-v2" --overwrite`,
-      fix: `kubectl -n "${NS}" label pods -l "app=${APP}-v2" "app=${APP}" --overwrite
-kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"paused":false}}'`,
-      wait: waitServing(NS, CLIENT, APP),
-      explain: `The running Pods are labelled \`app=${APP}-v2\`, but Service \`${APP}\` still selects \`app=${APP}\`, so it has no endpoints. The Deployment is paused, which is why the controller did not recreate correctly labelled Pods. Relabel the Pods to \`app=${APP}\` and unpause the Deployment (\`spec.paused: false\`).`,
     },
     {
       id: 'readiness-https',
@@ -357,16 +344,6 @@ kubectl -n kube-system rollout restart daemonset/kube-proxy
 kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
       wait: waitServing(NS, CLIENT, APP),
       explain: `ConfigMap \`kube-system/kube-proxy\` sets \`mode: not-a-mode\`, so kube-proxy Pods crash-loop and Service ClusterIPs stop working. Set \`mode\` back to \`iptables\` (or empty) in the ConfigMap and restart the \`kube-proxy\` DaemonSet.`,
-    },
-    {
-      id: 'service-clusterip-none',
-      label: 'Service was made headless (clusterIP: None)',
-      break: `kubectl -n "${NS}" delete service "${APP}" --wait=true
-kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata":{"name":"'"${APP}"'","namespace":"'"${NS}"'"},"spec":{"clusterIP":"None","selector":{"app":"'"${APP}"'"},"ports":[{"port":80,"targetPort":"http"}]}}'`,
-      fix: `kubectl -n "${NS}" delete service "${APP}" --wait=true
-kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Service","metadata":{"name":"'"${APP}"'","namespace":"'"${NS}"'"},"spec":{"selector":{"app":"'"${APP}"'"},"ports":[{"port":80,"targetPort":"http"}]}}'`,
-      wait: waitServing(NS, CLIENT, APP),
-      explain: `Service \`${APP}\` is headless (\`clusterIP: None\`), so clients that expect a virtual IP no longer get a stable ClusterIP even though endpoints exist. Recreate it as a normal ClusterIP Service selecting \`app=${APP}\` with port \`80\` → \`http\`.`,
     },
   ],
 };

@@ -162,9 +162,9 @@ done
     ],
   }),
   layers: [
-    { name: 'the Role', faults: ['role-verb', 'role-resource'] },
-    { name: 'the RoleBinding', faults: ['binding-subject-ns', 'binding-role-ref'] },
-    { name: 'the workload', faults: ['wrong-sa', 'automount-off'] },
+    { name: 'the Role', faults: ['role-verb', 'role-resource', 'role-api-group'] },
+    { name: 'the RoleBinding', faults: ['binding-subject-ns', 'binding-role-ref', 'binding-subject-user'] },
+    { name: 'the workload', faults: ['wrong-sa', 'automount-off', 'pod-automount-off'] },
   ],
   faults: ({ NS, APP }) => [
     {
@@ -184,6 +184,14 @@ done
       explain: `Role \`${APP}-reader\` grants access to \`pod\`. RBAC resources are the plural API names, so \`pod\` matches nothing and the call gets 403. Use \`pods\`.`,
     },
     {
+      id: 'role-api-group',
+      label: 'Role grants pods in the apps API group',
+      break: patchRole(NS, APP, '/rules/0/apiGroups', '["apps"]'),
+      fix: patchRole(NS, APP, '/rules/0/apiGroups', '[""]'),
+      wait: waitStatus(NS, APP),
+      explain: `Role \`${APP}-reader\` names \`pods\` with the verbs \`get\` and \`list\`, but in API group \`apps\`. Pods live in the core group, written \`""\` in a Role (Deployments are the ones in \`apps\`), so the rule matches nothing and the call gets 403. \`kubectl api-resources | grep -w pods\` shows the group (APIVERSION \`v1\`, no group). Set \`apiGroups: [""]\`.`,
+    },
+    {
       id: 'binding-subject-ns',
       label: 'RoleBinding subject in the wrong namespace',
       break: patchSubjectNs(NS, APP, 'default'),
@@ -198,6 +206,14 @@ done
       fix: bindTo(NS, APP, `${APP}-reader`),
       wait: waitStatus(NS, APP),
       explain: `RoleBinding \`${APP}-reader\` refers to Role \`${APP}-viewer\`, which does not exist, so it grants nothing. \`roleRef\` cannot be edited: delete the RoleBinding and create it again for Role \`${APP}-reader\`.`,
+    },
+    {
+      id: 'binding-subject-user',
+      label: 'RoleBinding names a user instead of the ServiceAccount',
+      break: `kubectl -n "${NS}" patch rolebinding "${APP}-reader" --type=json -p ${sq(`[{"op":"replace","path":"/subjects/0","value":{"kind":"User","apiGroup":"rbac.authorization.k8s.io","name":"${APP}-sa"}}]`)}`,
+      fix: `kubectl -n "${NS}" patch rolebinding "${APP}-reader" --type=json -p ${sq(`[{"op":"replace","path":"/subjects/0","value":{"kind":"ServiceAccount","name":"${APP}-sa","namespace":"${NS}"}}]`)}`,
+      wait: waitStatus(NS, APP),
+      explain: `RoleBinding \`${APP}-reader\` grants the Role to a **User** named \`${APP}-sa\`, as \`kubectl create rolebinding --user=${APP}-sa\` would. A ServiceAccount authenticates as \`system:serviceaccount:${NS}:${APP}-sa\`, a different name, so the binding grants it nothing (\`kubectl -n ${NS} describe rolebinding ${APP}-reader\` shows Kind \`User\`). Make the subject \`kind: ServiceAccount\`, name \`${APP}-sa\`, namespace \`${NS}\` (\`--serviceaccount=${NS}:${APP}-sa\`).`,
     },
     {
       id: 'wrong-sa',
@@ -216,6 +232,15 @@ kubectl -n "${NS}" rollout restart "deployment/${APP}"
 ${rollout(NS, APP)}`,
       wait: waitStatus(NS, APP),
       explain: `ServiceAccount \`${APP}-sa\` sets \`automountServiceAccountToken: false\`, so no token is mounted and the Pod logs \`no token\`. RBAC is fine. Allow the automount (on the ServiceAccount or the Pod spec) and restart the Deployment so new Pods get the token.`,
+    },
+    {
+      id: 'pod-automount-off',
+      label: 'The Pod template turns off the token mount',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"add","path":"/spec/template/spec/automountServiceAccountToken","value":false}]'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/automountServiceAccountToken"}]'
+${rollout(NS, APP)}`,
+      wait: waitStatus(NS, APP),
+      explain: `The Pod template sets \`automountServiceAccountToken: false\`, so no token is mounted and the Pod logs \`no token\`, although ServiceAccount \`${APP}-sa\` allows the mount: the Pod's setting wins over the ServiceAccount's. RBAC is fine. Remove the field from the template (or set it to \`true\`); the new Pods get the token.`,
     },
   ],
 };

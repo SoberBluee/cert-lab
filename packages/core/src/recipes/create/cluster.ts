@@ -1,13 +1,10 @@
 import { createNs, nameField, nsField, selectField, type RecipeCheck } from '../types';
-import { CP_PODS, cpPods, readyz } from '../troubleshoot/controlplane';
+import { CP_PODS, cpPods, ETCDCTL, INSTALL_ETCDUTL, readyz } from '../troubleshoot/controlplane';
 import { noPod } from './shared';
 import type { Builder, CreateCtx, FollowUp, Addon } from './types';
 
 const PKI = '/etc/kubernetes/pki';
-const ETCDCTL = `ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=${PKI}/etcd/ca.crt --cert=${PKI}/etcd/server.crt --key=${PKI}/etcd/server.key`;
 const APISERVER_CRT = `${PKI}/apiserver.crt`;
-/** The node's apt etcdctl (3.4) restores snapshots in a format etcd 3.6+ cannot read; the etcd image ships a matching etcdutl. */
-const INSTALL_ETCDUTL = 'command -v etcdutl >/dev/null || install -m 755 "/proc/$(pgrep -xo etcd)/root/usr/local/bin/etcdutl" /usr/local/bin/etcdutl';
 const STATE = '/root/.cka';
 
 const ssh = (c: Omit<Extract<RecipeCheck, { type: 'ssh' }>, 'type' | 'node'>): RecipeCheck => ({ type: 'ssh', node: 'controlplane', ...c });

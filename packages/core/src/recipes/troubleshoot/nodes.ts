@@ -61,7 +61,7 @@ export const nodesCategory: FaultCategory = {
     { name: 'the container runtime or the network', faults: ['containerd-stopped', 'containerd-config-invalid', 'cni-config-removed', 'cni-conflist-typo', 'ip-forward-and-containerd'] },
     {
       name: 'the kubelet',
-      faults: ['kubelet-stopped', 'kubelet-binary-path', 'kubelet-config-invalid', 'kubelet-client-ca', 'kubelet-api-port', 'kubelet-extra-args', 'kubelet-conf-missing', 'kubelet-swap-on'],
+      faults: ['kubelet-stopped', 'kubelet-binary-path', 'kubelet-config-invalid', 'kubelet-api-port', 'kubelet-extra-args', 'kubelet-conf-missing', 'kubelet-swap-on'],
     },
     { name: 'scheduling', faults: ['cordoned', 'stray-taint'] },
   ],
@@ -214,15 +214,6 @@ kubectl -n "${NS}" delete pod -l app=node-probe --field-selector "spec.nodeName=
       nodeFix: editKubelet(KUBELET_CONFIG, 's/^kind: KubeletConfig$/kind: KubeletConfiguration/', '^kind: KubeletConfiguration$'),
       wait: waitReady(NODE),
       explain: `\`${KUBELET_CONFIG}\` says \`kind: KubeletConfig\`. The kubelet cannot decode its own config and exits at start (no kind "KubeletConfig" is registered), so the node turns \`NotReady\`. \`journalctl -u kubelet\` shows the error. Set \`kind: KubeletConfiguration\` again and restart the kubelet.`,
-    },
-    {
-      id: 'kubelet-client-ca',
-      label: 'kubelet client CA file missing',
-      nodeBreak: editKubelet(KUBELET_CONFIG, 's#clientCAFile: /etc/kubernetes/pki/ca\\.crt$#clientCAFile: /etc/kubernetes/pki/ca.pem#', 'clientCAFile: /etc/kubernetes/pki/ca\\.pem$'),
-      settle: waitNotReady(NODE),
-      nodeFix: editKubelet(KUBELET_CONFIG, 's#clientCAFile: /etc/kubernetes/pki/ca\\.pem$#clientCAFile: /etc/kubernetes/pki/ca.crt#', 'clientCAFile: /etc/kubernetes/pki/ca\\.crt$'),
-      wait: waitReady(NODE),
-      explain: `\`authentication.x509.clientCAFile\` in \`${KUBELET_CONFIG}\` points at \`/etc/kubernetes/pki/ca.pem\`, which does not exist, so the kubelet exits with "unable to load client CA file". \`ls /etc/kubernetes/pki\` shows the real \`ca.crt\`. Fix the path and restart the kubelet.`,
     },
     {
       id: 'kubelet-api-port',

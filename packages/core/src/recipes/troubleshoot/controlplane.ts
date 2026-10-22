@@ -64,6 +64,64 @@ grep -qE -- '${proof}' ${file} || { echo "could not modify ${file}" >&2; exit 1;
 const waitPending = (ns: string) => `sleep 15
 [[ "$(kubectl -n "${ns}" get deployment web -o jsonpath='{.status.readyReplicas}')" != 2 ]] || { echo "web is still running" >&2; exit 1; }`;
 
+const PKI = '/etc/kubernetes/pki';
+export const ETCDCTL = `ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=${PKI}/etcd/ca.crt --cert=${PKI}/etcd/server.crt --key=${PKI}/etcd/server.key`;
+/** The node's apt etcdctl (3.4) restores snapshots in a format etcd 3.6+ cannot read; the etcd image ships a matching etcdutl. */
+export const INSTALL_ETCDUTL = 'command -v etcdutl >/dev/null || install -m 755 "/proc/$(pgrep -xo etcd)/root/usr/local/bin/etcdutl" /usr/local/bin/etcdutl';
+
+/** kubectl as system:masters: RBAC does not apply, so it works on an etcd that lost the cluster's RoleBindings. */
+const masterKubectl = `kubectl --kubeconfig "$( [[ -f /etc/kubernetes/super-admin.conf ]] && echo /etc/kubernetes/super-admin.conf || echo /etc/kubernetes/admin.conf )"`;
+
+/** A flag of a static Pod manifest that can point at a file that does not exist. */
+interface FileFlag {
+  /** The flag without its dashes; also a value of the fault's hidden variable. */
+  flag: string;
+  good: string;
+  bad: string;
+}
+
+/** Points the flag that hidden variable `pick` names at its missing file (`to: 'bad'`), or back. */
+const fileCase = (manifest: string, pick: string, flags: FileFlag[], to: 'bad' | 'good') => `case "${pick}" in
+${flags
+  .map((f) => {
+    const [from, dest] = to === 'bad' ? [f.good, f.bad] : [f.bad, f.good];
+    return `  ${f.flag})\n${edit(manifest, `s#^([[:space:]]*- --${f.flag}=)${from}$#\\1${dest}#`, `- --${f.flag}=${dest}$`).replace(/^/gm, '    ')}\n    ;;`;
+  })
+  .join('\n')}
+  *) echo "unknown flag ${pick}" >&2; exit 1 ;;
+esac`;
+
+/** Every flag of the family and its real file, for the solution: the rolled one is named above it. */
+const fileTable = (flags: FileFlag[]) => flags.map((f) => `- \`--${f.flag}\`: \`${f.good}\` (broken: \`${f.bad}\`)`).join('\n');
+
+const APISERVER_FILES: FileFlag[] = [
+  { flag: 'etcd-certfile', good: `${PKI}/apiserver-etcd-client.crt`, bad: `${PKI}/etcd/apiserver-etcd-client.crt` },
+  { flag: 'etcd-keyfile', good: `${PKI}/apiserver-etcd-client.key`, bad: `${PKI}/etcd/apiserver-etcd-client.key` },
+  { flag: 'tls-private-key-file', good: `${PKI}/apiserver.key`, bad: `${PKI}/apiserver.pem` },
+  { flag: 'service-account-key-file', good: `${PKI}/sa.pub`, bad: `${PKI}/sa.pem` },
+];
+const ETCD_FILES: FileFlag[] = [
+  { flag: 'cert-file', good: `${PKI}/etcd/server.crt`, bad: `${PKI}/etcd/server.cert` },
+  { flag: 'key-file', good: `${PKI}/etcd/server.key`, bad: `${PKI}/etcd/server.pem` },
+  { flag: 'trusted-ca-file', good: `${PKI}/etcd/ca.crt`, bad: `${PKI}/etcd/ca.pem` },
+];
+const CM_FILES: FileFlag[] = [
+  { flag: 'kubeconfig', good: '/etc/kubernetes/controller-manager.conf', bad: '/etc/kubernetes/controller-manager.config' },
+  { flag: 'service-account-private-key-file', good: `${PKI}/sa.key`, bad: `${PKI}/sa.pem` },
+];
+const SCHED_CONFIG = '/etc/kubernetes/sched-config.yaml';
+
+/**
+ * Which flag a "missing file" fault breaks, rolled per question: one fault per component teaches the
+ * lesson once, and the flag still varies. Only scripts and the solution see these.
+ */
+export const FILE_PICKS = {
+  APISERVER_FILE: APISERVER_FILES.map((f) => f.flag),
+  ETCD_FILE: ETCD_FILES.map((f) => f.flag),
+  SCHEDULER_FILE: ['kubeconfig', 'config'],
+  CM_FILE: CM_FILES.map((f) => f.flag),
+};
+
 export const controlPlaneCategory: FaultCategory = {
   id: 'controlplane',
   name: 'Control plane',
@@ -162,45 +220,203 @@ EOF`,
   }),
   // The scheduler or controller manager breaks first, while the API still answers; the API server
   // or etcd breaks second. Both fixes are file edits, so their order does not matter.
+  hidden: FILE_PICKS,
   layers: [
     {
       name: 'the scheduler or the controller manager',
       faults: [
         'scheduler-command',
-        'controller-manager-kubeconfig',
-        'scheduler-kubeconfig-path',
+        'scheduler-missing-file',
         'scheduler-image-tag',
-        'controller-manager-sa-key',
         'scheduler-manifest-removed',
         'scheduler-manifest-yaml',
+        'controller-manager-missing-file',
         'controller-manager-command',
-        'scheduler-leader-elect',
       ],
     },
     {
       name: 'the API server or etcd',
       faults: [
         'apiserver-etcd-port',
-        'apiserver-etcd-certfile',
         'apiserver-etcd-flags',
-        'etcd-cert-path',
+        'apiserver-missing-file',
         'apiserver-admission-plugin',
-        'apiserver-etcd-keyfile',
-        'apiserver-tls-key-path',
+        'apiserver-authz-mode',
+        'apiserver-probe-port',
         'apiserver-manifest-removed',
-        'etcd-key-path',
-        'etcd-trusted-ca-path',
-        'etcd-client-urls',
-        'etcd-data-dir',
-        'etcd-image-tag',
+        'apiserver-manifest-copy',
         'apiserver-advertise-address',
-        'apiserver-service-account-key',
-        'etcd-peer-urls',
+        'etcd-missing-file',
+        'etcd-client-urls',
+        'etcd-image-tag',
+        'etcd-restore-half-done',
         'kubelet-static-pod-path',
       ],
     },
   ],
-  faults: ({ NS }, state) => [
+  faults: ({ NS, APISERVER_FILE, ETCD_FILE, SCHEDULER_FILE, CM_FILE }, state) => [
+    {
+      id: 'apiserver-missing-file',
+      label: 'An API server flag points at a file that does not exist',
+      break: `${scaleUp(NS)}
+${fileCase(`${M}/kube-apiserver.yaml`, APISERVER_FILE, APISERVER_FILES, 'bad')}`,
+      settle: apiDown,
+      fix: fileCase(`${M}/kube-apiserver.yaml`, APISERVER_FILE, APISERVER_FILES, 'good'),
+      wait: waitHealthy(NS),
+      explain: `In this run \`--${APISERVER_FILE}\` in \`${M}/kube-apiserver.yaml\` names a file that does not exist, so the API server exits at startup and kubectl gets \`connection refused\`. Without the API, read the container's last words on the node: \`crictl ps -a | grep kube-apiserver\`, then \`crictl logs <id>\` ends with "no such file or directory" and the path. \`ls ${PKI}\` (and \`${PKI}/etcd\`) shows where the file really is. Every flag this fault can break, with its real file:
+
+${fileTable(APISERVER_FILES)}`,
+    },
+    {
+      id: 'etcd-missing-file',
+      label: 'An etcd flag points at a file that does not exist',
+      break: `${scaleUp(NS)}
+${fileCase(`${M}/etcd.yaml`, ETCD_FILE, ETCD_FILES, 'bad')}`,
+      settle: apiDown,
+      fix: fileCase(`${M}/etcd.yaml`, ETCD_FILE, ETCD_FILES, 'good'),
+      wait: waitHealthy(NS),
+      explain: `In this run \`--${ETCD_FILE}\` in \`${M}/etcd.yaml\` names a file that does not exist. etcd exits at startup and the API server loses its storage with it: kubectl fails, and the kube-apiserver logs only show etcd connection errors. Follow them one component further: \`crictl ps -a | grep etcd\` and \`crictl logs <id>\` of the etcd container name the missing file; \`ls ${PKI}/etcd\` shows the real one. Every flag this fault can break:
+
+${fileTable(ETCD_FILES)}`,
+    },
+    {
+      id: 'scheduler-missing-file',
+      label: 'A scheduler flag points at a file that does not exist',
+      break: `case "${SCHEDULER_FILE}" in
+  kubeconfig)
+${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/scheduler)\\.conf$#\\1.config#', '- --kubeconfig=/etc/kubernetes/scheduler.config$').replace(/^/gm, '    ')}
+    ;;
+  config)
+    sed -i -E '/^[[:space:]]*- kube-scheduler$/a\\    - --config=${SCHED_CONFIG}' ${M}/kube-scheduler.yaml
+    grep -qE -- '- --config=${SCHED_CONFIG.replace(/\./g, '\\.')}$' ${M}/kube-scheduler.yaml || { echo "could not set scheduler --config" >&2; exit 1; }
+    ;;
+  *) echo "unknown flag ${SCHEDULER_FILE}" >&2; exit 1 ;;
+esac
+${componentDown('kube-scheduler')}
+kubectl -n "${NS}" scale deployment/web --replicas=2`,
+      settle: waitPending(NS),
+      fix: `case "${SCHEDULER_FILE}" in
+  kubeconfig)
+${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/scheduler)\\.config$#\\1.conf#', '- --kubeconfig=/etc/kubernetes/scheduler.conf$').replace(/^/gm, '    ')}
+    ;;
+  config)
+    sed -i -E '\\#^[[:space:]]*- --config=${SCHED_CONFIG}$#d' ${M}/kube-scheduler.yaml
+    ! grep -qE -- '- --config=' ${M}/kube-scheduler.yaml || { echo "could not remove scheduler --config" >&2; exit 1; }
+    ;;
+esac`,
+      wait: waitHealthy(NS),
+      explain: `In this run the scheduler's \`--${SCHEDULER_FILE}\` flag in \`${M}/kube-scheduler.yaml\` names a file that does not exist, so the scheduler exits at startup and the new \`web\` Pods stay \`Pending\` with no scheduling events. \`kubectl -n kube-system logs kube-scheduler-controlplane\` (or \`crictl logs\`) names the file. The two ways this fault breaks the scheduler:
+
+- \`--kubeconfig\` points at \`/etc/kubernetes/scheduler.config\`; \`ls /etc/kubernetes\` shows the real \`scheduler.conf\`
+- an added \`--config=${SCHED_CONFIG}\`, a scheduler configuration that was never written: remove the flag (kubeadm's scheduler needs no \`--config\`), or write the file`,
+    },
+    {
+      id: 'controller-manager-missing-file',
+      label: 'A controller manager flag points at a file that does not exist',
+      break: `${fileCase(`${M}/kube-controller-manager.yaml`, CM_FILE, CM_FILES, 'bad')}
+${componentDown('kube-controller-manager')}
+kubectl -n "${NS}" scale deployment/web --replicas=2`,
+      settle: waitPending(NS),
+      fix: fileCase(`${M}/kube-controller-manager.yaml`, CM_FILE, CM_FILES, 'good'),
+      wait: waitHealthy(NS),
+      explain: `In this run \`--${CM_FILE}\` in \`${M}/kube-controller-manager.yaml\` names a file that does not exist. The controller manager exits at startup, so \`web\` is scaled to 2 but no ReplicaSet creates Pods: \`kubectl get deploy\` shows 0 of 2 and there are no Pods at all, which tells it apart from a broken scheduler (Pods that stay \`Pending\`). Its logs name the missing file. Every flag this fault can break:
+
+${fileTable(CM_FILES)}`,
+    },
+    {
+      id: 'apiserver-authz-mode',
+      label: 'API server authorization mode is misspelled',
+      break: `${scaleUp(NS)}
+${edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --authorization-mode=)Node,RBAC$#\\1Node,RABC#', '- --authorization-mode=Node,RABC$')}`,
+      settle: apiDown,
+      fix: edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --authorization-mode=)Node,RABC$#\\1Node,RBAC#', '- --authorization-mode=Node,RBAC$'),
+      wait: waitHealthy(NS),
+      explain: `\`--authorization-mode\` in \`${M}/kube-apiserver.yaml\` is \`Node,RABC\`. The API server rejects the unknown mode at startup and exits, so kubectl gets \`connection refused\`. \`crictl logs\` of the last kube-apiserver container names the bad value. Set it back to \`Node,RBAC\`.`,
+    },
+    {
+      id: 'apiserver-probe-port',
+      label: "The API server's liveness and startup probes check the wrong port",
+      break: `${scaleUp(NS)}
+sed -n -E '/^    livenessProbe:$/,/^    [a-zA-Z]/ s/^[[:space:]]+port: (.*)$/\\1/p' ${M}/kube-apiserver.yaml | head -1 > "${state}.probe-port"
+[[ -s "${state}.probe-port" ]] || { echo "could not read the probe port" >&2; exit 1; }
+for probe in livenessProbe startupProbe; do
+  sed -i -E '/^    '"$probe"':$/,/^    [a-zA-Z]/ s/^([[:space:]]+port: ).*$/\\16444/' ${M}/kube-apiserver.yaml
+done
+[[ "$(grep -cE '^[[:space:]]+port: 6444$' ${M}/kube-apiserver.yaml)" == 2 ]] || { echo "could not move the probes" >&2; exit 1; }`,
+      // The API keeps answering until the startup probe gives up (about 4 minutes), then restarts in a loop.
+      settle: `for _ in $(seq 1 60); do
+  kubectl -n kube-system get events --field-selector involvedObject.name=kube-apiserver-controlplane,reason=Unhealthy -o jsonpath='{.items[*].message}' 2>/dev/null | grep -q ':6444' && exit 0
+  sleep 3
+done
+echo "the API server's probes still pass" >&2
+exit 1`,
+      fix: `orig="$(cat "${state}.probe-port")"
+for probe in livenessProbe startupProbe; do
+  sed -i -E '/^    '"$probe"':$/,/^    [a-zA-Z]/ s/^([[:space:]]+port: )6444$/\\1'"$orig"'/' ${M}/kube-apiserver.yaml
+done
+! grep -qE '^[[:space:]]+port: 6444$' ${M}/kube-apiserver.yaml || { echo "could not restore the probes" >&2; exit 1; }`,
+      wait: waitHealthy(NS),
+      explain: `The \`livenessProbe\` and \`startupProbe\` of \`${M}/kube-apiserver.yaml\` check port \`6444\`, where nothing listens. The API server itself is fine, so kubectl works at first and the logs are clean; but the startup probe never passes, the Pod never turns Ready, and after about four minutes the kubelet kills the container and starts it again, over and over. The evidence is in the kubelet, not the component: \`kubectl -n kube-system describe pod kube-apiserver-controlplane\` lists \`Unhealthy\` events for probes to \`:6444\`, and \`crictl ps -a\` shows the restarts. Point both probes back at the port the readiness probe uses (\`probe-port\`, 6443).`,
+    },
+    {
+      id: 'apiserver-manifest-copy',
+      label: 'A second copy of the API server manifest',
+      break: `${scaleUp(NS)}
+sed -E 's#^(  name: )kube-apiserver$#\\1kube-apiserver-new#' ${M}/kube-apiserver.yaml > ${M}/kube-apiserver-new.yaml
+grep -qE '^  name: kube-apiserver-new$' ${M}/kube-apiserver-new.yaml || { echo "could not write the copy" >&2; exit 1; }`,
+      settle: `for _ in $(seq 1 60); do
+  kubectl -n kube-system get pod kube-apiserver-new-controlplane >/dev/null 2>&1 && exit 0
+  sleep 3
+done
+echo "the copy never started" >&2
+exit 1`,
+      fix: `rm -f ${M}/kube-apiserver-new.yaml`,
+      wait: `for _ in $(seq 1 60); do
+  kubectl -n kube-system get pod kube-apiserver-new-controlplane >/dev/null 2>&1 || break
+  sleep 3
+done
+${waitHealthy(NS)}`,
+      explain: `\`${M}\` holds \`kube-apiserver-new.yaml\`, an edited copy of the API server manifest with the Pod name \`kube-apiserver-new\`. The kubelet runs every manifest in that directory, so it starts a second API server, which cannot bind \`6443\` ("address already in use") and crash-loops as \`kube-apiserver-new-controlplane\`; kubectl still works through the first one. Static Pods are not deleted with kubectl: remove the extra file (keep backups outside \`${M}\`).`,
+    },
+    {
+      id: 'etcd-restore-half-done',
+      label: 'Half-finished etcd restore: etcd starts on an empty data directory',
+      break: `${scaleUp(NS)}
+${INSTALL_ETCDUTL}
+${ETCDCTL} snapshot save /var/tmp/cka-etcd-snapshot.db >/dev/null
+rm -rf /var/lib/etcd-restore
+etcdutl snapshot restore /var/tmp/cka-etcd-snapshot.db --data-dir /var/lib/etcd-restore >/dev/null 2>&1
+${edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --data-dir=)/var/lib/etcd$#\\1/var/lib/etcd-restore#', '- --data-dir=/var/lib/etcd-restore$')}
+# What a restart of the control plane after a restore does: the API server reconnects to the new, empty etcd.
+for _ in $(seq 1 60); do
+  [[ "$(crictl ps --name '^etcd$' -q 2>/dev/null | head -1)" != "" ]] && crictl inspect "$(crictl ps --name '^etcd$' -q | head -1)" 2>/dev/null | grep -q -- '--data-dir=/var/lib/etcd-restore' && break
+  sleep 2
+done
+crictl ps --name kube-apiserver -q | xargs -r crictl stop >/dev/null 2>&1 || true`,
+      settle: `for _ in $(seq 1 120); do
+  if [[ "$(${readyz})" == ok ]] && ! ${masterKubectl} get namespace "${NS}" >/dev/null 2>&1; then exit 0; fi
+  sleep 3
+done
+echo "the API server still sees the cluster's data" >&2
+exit 1`,
+      fix: `old="$(crictl ps --name '^etcd$' -q | head -1)"
+${edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --data-dir=)/var/lib/etcd-restore$#\\1/var/lib/etcd#', '- --data-dir=/var/lib/etcd$')}
+${edit(`${M}/etcd.yaml`, 's#^([[:space:]]*path: )/var/lib/etcd$#\\1/var/lib/etcd-restore#', 'path: /var/lib/etcd-restore$')}
+for _ in $(seq 1 60); do
+  new="$(crictl ps --name '^etcd$' -q | head -1)"
+  [[ -n "$new" && "$new" != "$old" ]] && break
+  sleep 2
+done
+crictl ps --name kube-apiserver -q | xargs -r crictl stop`,
+      wait: `for _ in $(seq 1 120); do
+  ${masterKubectl} get namespace "${NS}" >/dev/null 2>&1 && break
+  sleep 3
+done
+${waitHealthy(NS)}`,
+      explain: `Someone restored an etcd snapshot into \`/var/lib/etcd-restore\` and then changed only \`--data-dir\` in \`${M}/etcd.yaml\`. But etcd runs in a container, and \`--data-dir\` is a path inside it: the \`etcd-data\` volume still mounts the host's \`/var/lib/etcd\` at \`/var/lib/etcd\`, so \`/var/lib/etcd-restore\` is an empty directory in the container and etcd starts a brand-new, empty cluster. The API answers, but everything is gone: namespaces, Deployments, and the kubeadm RoleBinding that makes \`admin.conf\` an admin, so kubectl says \`Forbidden\` (\`/etc/kubernetes/super-admin.conf\` still works). The kubelets then stop the Pods the API no longer lists.
+
+Finish the restore the kubeadm way: keep \`--data-dir=/var/lib/etcd\` and point the \`etcd-data\` volume's \`hostPath\` at \`/var/lib/etcd-restore\`. Once etcd has restarted on the restored data, restart the API server too (\`crictl stop\` its container; the kubelet starts a new one), so it does not serve what it cached from the empty etcd.`,
+    },
     {
       id: 'apiserver-etcd-port',
       label: 'API server talks to the etcd peer port',
@@ -210,24 +426,6 @@ ${edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --etcd-servers=https://127
       fix: edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --etcd-servers=https://127.0.0.1):2380$#\\1:2379#', '- --etcd-servers=https://127.0.0.1:2379$'),
       wait: waitHealthy(NS),
       explain: `\`--etcd-servers\` in \`${M}/kube-apiserver.yaml\` points at port \`2380\`, etcd's peer port, instead of the client port \`2379\`. The API server cannot reach its storage and keeps exiting, so kubectl fails. \`crictl logs\` of the kube-apiserver container shows the etcd connection errors; \`--listen-client-urls\` in \`etcd.yaml\` shows the right port.`,
-    },
-    {
-      id: 'apiserver-etcd-certfile',
-      label: 'API server etcd client certificate path is wrong',
-      break: `${scaleUp(NS)}
-${edit(
-  `${M}/kube-apiserver.yaml`,
-  's#^([[:space:]]*- --etcd-certfile=)/etc/kubernetes/pki/apiserver-etcd-client.crt$#\\1/etc/kubernetes/pki/etcd/apiserver-etcd-client.crt#',
-  '- --etcd-certfile=/etc/kubernetes/pki/etcd/apiserver-etcd-client.crt$',
-)}`,
-      settle: apiDown,
-      fix: edit(
-        `${M}/kube-apiserver.yaml`,
-        's#^([[:space:]]*- --etcd-certfile=)/etc/kubernetes/pki/etcd/apiserver-etcd-client.crt$#\\1/etc/kubernetes/pki/apiserver-etcd-client.crt#',
-        '- --etcd-certfile=/etc/kubernetes/pki/apiserver-etcd-client.crt$',
-      ),
-      wait: waitHealthy(NS),
-      explain: `\`--etcd-certfile\` in \`${M}/kube-apiserver.yaml\` points at \`/etc/kubernetes/pki/etcd/apiserver-etcd-client.crt\`, which does not exist. The certificate lives one directory up, in \`/etc/kubernetes/pki/\`. The API server exits at startup with "no such file or directory", which \`crictl logs\` shows.`,
     },
     {
       id: 'apiserver-etcd-flags',
@@ -246,20 +444,6 @@ sed -i -E 's#^([[:space:]]*- --etcd-cafile=)/etc/kubernetes/pki/ca.crt$#\\1/etc/
       explain: `\`--etcd-servers\` was renamed to \`--etcd-server\` (singular), downgraded to \`http://\`, and \`--etcd-cafile\` points at the cluster CA instead of \`/etc/kubernetes/pki/etcd/ca.crt\`. The API server cannot talk to etcd and keeps exiting. \`crictl logs\` of kube-apiserver and a side-by-side with \`etcd.yaml\` show the correct flag name, \`https\`, and etcd CA path.`,
     },
     {
-      id: 'etcd-cert-path',
-      label: 'etcd server certificate path is wrong',
-      break: `${scaleUp(NS)}
-${edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --cert-file=/etc/kubernetes/pki/etcd/server)\\.crt$#\\1.cert#', '- --cert-file=/etc/kubernetes/pki/etcd/server.cert$')}`,
-      settle: apiDown,
-      fix: edit(
-        `${M}/etcd.yaml`,
-        's#^([[:space:]]*- --cert-file=/etc/kubernetes/pki/etcd/server)\\.cert$#\\1.crt#',
-        '- --cert-file=/etc/kubernetes/pki/etcd/server.crt$',
-      ),
-      wait: waitHealthy(NS),
-      explain: `\`--cert-file\` in \`${M}/etcd.yaml\` points at \`server.cert\` instead of \`server.crt\`. etcd exits at startup, and the API server loses its storage with it. kubectl fails, the kube-apiserver logs show etcd connection errors, and \`crictl logs\` of the etcd container shows the missing file.`,
-    },
-    {
       id: 'scheduler-command',
       label: 'Typo in the scheduler command',
       break: `${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*)- kube-scheduler$#\\1- kube-schedular#', '- kube-schedular$')}
@@ -269,25 +453,6 @@ kubectl -n "${NS}" scale deployment/web --replicas=2`,
       fix: edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*)- kube-schedular$#\\1- kube-scheduler#', '- kube-scheduler$'),
       wait: waitHealthy(NS),
       explain: `The command in \`${M}/kube-scheduler.yaml\` runs \`kube-schedular\`, a binary that does not exist, so the scheduler never starts and new Pods stay \`Pending\` with no events. \`kubectl -n kube-system describe pod kube-scheduler-controlplane\` shows the failing command.`,
-    },
-    {
-      id: 'controller-manager-kubeconfig',
-      label: 'Controller manager kubeconfig path is wrong',
-      break: `${edit(
-        `${M}/kube-controller-manager.yaml`,
-        's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/controller-manager)\\.conf$#\\1.config#',
-        '- --kubeconfig=/etc/kubernetes/controller-manager.config$',
-      )}
-${componentDown('kube-controller-manager')}
-kubectl -n "${NS}" scale deployment/web --replicas=2`,
-      settle: waitPending(NS),
-      fix: edit(
-        `${M}/kube-controller-manager.yaml`,
-        's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/controller-manager)\\.config$#\\1.conf#',
-        '- --kubeconfig=/etc/kubernetes/controller-manager.conf$',
-      ),
-      wait: waitHealthy(NS),
-      explain: `\`--kubeconfig\` in \`${M}/kube-controller-manager.yaml\` points at \`controller-manager.config\` instead of \`controller-manager.conf\`. The controller manager exits at startup, so the Deployment is scaled but no ReplicaSet creates Pods (\`kubectl get deploy\` shows 0 of 2, with no Pods at all). Its logs show the missing file.`,
     },
     {
       id: 'kubelet-client-cert',
@@ -315,17 +480,6 @@ systemctl restart kubelet`,
       explain: `\`staticPodPath\` in \`${KUBELET_CONFIG}\` is \`/etc/kubernetes/manifest\`, a directory that does not exist. The kubelet runs, but it finds no static pod manifests and stops etcd, the API server, the scheduler and the controller manager, so kubectl fails. \`crictl ps\` on controlplane shows no control plane containers, and \`journalctl -u kubelet\` mentions the missing path. Set it back to \`${M}\` and restart the kubelet.`,
     },
     {
-      id: 'scheduler-kubeconfig-path',
-      label: 'Scheduler kubeconfig path is wrong',
-      break: `${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/scheduler)\\.conf$#\\1.config#', '- --kubeconfig=/etc/kubernetes/scheduler.config$')}
-${componentDown('kube-scheduler')}
-kubectl -n "${NS}" scale deployment/web --replicas=2`,
-      settle: waitPending(NS),
-      fix: edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --kubeconfig=/etc/kubernetes/scheduler)\\.config$#\\1.conf#', '- --kubeconfig=/etc/kubernetes/scheduler.conf$'),
-      wait: waitHealthy(NS),
-      explain: `\`--kubeconfig\` in \`${M}/kube-scheduler.yaml\` points at \`/etc/kubernetes/scheduler.config\` instead of \`scheduler.conf\`. The scheduler exits at startup, so the new \`web\` Pods stay \`Pending\` with no scheduling events. \`kubectl -n kube-system logs kube-scheduler-controlplane\` (or \`crictl logs\`) shows the missing file; \`ls /etc/kubernetes\` shows the real one.`,
-    },
-    {
       id: 'scheduler-image-tag',
       label: 'Scheduler image tag does not exist',
       break: `grep -oE 'kube-scheduler:[^[:space:]"]+' ${M}/kube-scheduler.yaml | head -1 > "${state}.scheduler-image"
@@ -339,25 +493,6 @@ grep -q 'kube-scheduler:v0\\.0\\.0' ${M}/kube-scheduler.yaml && { echo "could no
       explain: `The image in \`${M}/kube-scheduler.yaml\` has tag \`v0.0.0\`, which does not exist. The kubelet cannot pull it (\`ErrImagePull\` in \`kubectl -n kube-system describe pod kube-scheduler-controlplane\`, or \`crictl ps -a\` shows no scheduler), so new Pods stay \`Pending\`. Use the same tag as the other control plane images (\`grep image: ${M}/*.yaml\`, or \`kubeadm config images list\`).`,
     },
     {
-      id: 'controller-manager-sa-key',
-      label: 'Controller manager service account key path is wrong',
-      break: `${edit(
-        `${M}/kube-controller-manager.yaml`,
-        's#^([[:space:]]*- --service-account-private-key-file=/etc/kubernetes/pki/sa)\\.key$#\\1.pem#',
-        '- --service-account-private-key-file=/etc/kubernetes/pki/sa.pem$',
-      )}
-${componentDown('kube-controller-manager')}
-kubectl -n "${NS}" scale deployment/web --replicas=2`,
-      settle: waitPending(NS),
-      fix: edit(
-        `${M}/kube-controller-manager.yaml`,
-        's#^([[:space:]]*- --service-account-private-key-file=/etc/kubernetes/pki/sa)\\.pem$#\\1.key#',
-        '- --service-account-private-key-file=/etc/kubernetes/pki/sa.key$',
-      ),
-      wait: waitHealthy(NS),
-      explain: `\`--service-account-private-key-file\` in \`${M}/kube-controller-manager.yaml\` points at \`/etc/kubernetes/pki/sa.pem\`, which does not exist. The controller manager exits at startup, so \`web\` is scaled to 2 but no ReplicaSet creates Pods. Its logs (\`crictl logs\`) name the missing key; \`ls /etc/kubernetes/pki\` shows \`sa.key\`.`,
-    },
-    {
       id: 'apiserver-admission-plugin',
       label: 'API server enables an admission plugin that does not exist',
       break: `${scaleUp(NS)}
@@ -366,42 +501,6 @@ ${edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --enable-admission-plugins
       fix: edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --enable-admission-plugins=[^[:space:]]+),PodSecurityPolicy$#\\1#', '- --enable-admission-plugins=[^,[:space:]]+(,[^,[:space:]]+)*$'),
       wait: waitHealthy(NS),
       explain: `\`--enable-admission-plugins\` in \`${M}/kube-apiserver.yaml\` adds \`PodSecurityPolicy\`, a plugin that was removed from Kubernetes in 1.25. The API server exits at startup ("unknown admission plugins"), so kubectl gets \`connection refused\`. \`crictl ps -a\` and \`crictl logs\` of the last kube-apiserver container show the error. Remove the plugin from the list.`,
-    },
-    {
-      id: 'apiserver-etcd-keyfile',
-      label: 'API server etcd client key path is wrong',
-      break: `${scaleUp(NS)}
-${edit(
-  `${M}/kube-apiserver.yaml`,
-  's#^([[:space:]]*- --etcd-keyfile=)/etc/kubernetes/pki/apiserver-etcd-client.key$#\\1/etc/kubernetes/pki/etcd/apiserver-etcd-client.key#',
-  '- --etcd-keyfile=/etc/kubernetes/pki/etcd/apiserver-etcd-client.key$',
-)}`,
-      settle: apiDown,
-      fix: edit(
-        `${M}/kube-apiserver.yaml`,
-        's#^([[:space:]]*- --etcd-keyfile=)/etc/kubernetes/pki/etcd/apiserver-etcd-client.key$#\\1/etc/kubernetes/pki/apiserver-etcd-client.key#',
-        '- --etcd-keyfile=/etc/kubernetes/pki/apiserver-etcd-client.key$',
-      ),
-      wait: waitHealthy(NS),
-      explain: `\`--etcd-keyfile\` in \`${M}/kube-apiserver.yaml\` points at \`/etc/kubernetes/pki/etcd/apiserver-etcd-client.key\`, which does not exist. The key lives with the certificate in \`/etc/kubernetes/pki/\`. The API server exits at startup; \`crictl logs\` shows the missing key.`,
-    },
-    {
-      id: 'apiserver-tls-key-path',
-      label: 'API server TLS private key path is wrong',
-      break: `${scaleUp(NS)}
-${edit(
-  `${M}/kube-apiserver.yaml`,
-  's#^([[:space:]]*- --tls-private-key-file=/etc/kubernetes/pki/apiserver)\\.key$#\\1.pem#',
-  '- --tls-private-key-file=/etc/kubernetes/pki/apiserver.pem$',
-)}`,
-      settle: apiDown,
-      fix: edit(
-        `${M}/kube-apiserver.yaml`,
-        's#^([[:space:]]*- --tls-private-key-file=/etc/kubernetes/pki/apiserver)\\.pem$#\\1.key#',
-        '- --tls-private-key-file=/etc/kubernetes/pki/apiserver.key$',
-      ),
-      wait: waitHealthy(NS),
-      explain: `\`--tls-private-key-file\` in \`${M}/kube-apiserver.yaml\` points at \`apiserver.pem\`, which does not exist, so the API server cannot load its serving key and exits; kubectl gets \`connection refused\`. \`ls /etc/kubernetes/pki\` shows \`apiserver.key\`.`,
     },
     {
       id: 'apiserver-manifest-removed',
@@ -416,26 +515,6 @@ mv ${M}/kube-apiserver.yaml /var/tmp/cka-kube-apiserver.yaml
       explain: `\`${M}/kube-apiserver.yaml\` was moved aside, so the kubelet no longer runs the API server and nothing listens on \`6443\`. \`ls ${M}\` is missing the file; a copy sits in \`/var/tmp/cka-kube-apiserver.yaml\`. Put it back.`,
     },
     {
-      id: 'etcd-key-path',
-      label: 'etcd server key path is wrong',
-      break: `${scaleUp(NS)}
-${edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --key-file=/etc/kubernetes/pki/etcd/server)\\.key$#\\1.pem#', '- --key-file=/etc/kubernetes/pki/etcd/server.pem$')}`,
-      settle: apiDown,
-      fix: edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --key-file=/etc/kubernetes/pki/etcd/server)\\.pem$#\\1.key#', '- --key-file=/etc/kubernetes/pki/etcd/server.key$'),
-      wait: waitHealthy(NS),
-      explain: `\`--key-file\` in \`${M}/etcd.yaml\` points at \`server.pem\` instead of \`server.key\`. etcd exits at startup and the API server loses its storage. \`crictl logs\` of the etcd container shows the missing file.`,
-    },
-    {
-      id: 'etcd-trusted-ca-path',
-      label: 'etcd trusted CA path is wrong',
-      break: `${scaleUp(NS)}
-${edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --trusted-ca-file=/etc/kubernetes/pki/etcd/ca)\\.crt$#\\1.pem#', '- --trusted-ca-file=/etc/kubernetes/pki/etcd/ca.pem$')}`,
-      settle: apiDown,
-      fix: edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --trusted-ca-file=/etc/kubernetes/pki/etcd/ca)\\.pem$#\\1.crt#', '- --trusted-ca-file=/etc/kubernetes/pki/etcd/ca.crt$'),
-      wait: waitHealthy(NS),
-      explain: `\`--trusted-ca-file\` in \`${M}/etcd.yaml\` points at \`ca.pem\`, which does not exist. etcd exits; the API server cannot reach storage and kubectl fails. \`ls /etc/kubernetes/pki/etcd\` shows \`ca.crt\`.`,
-    },
-    {
       id: 'etcd-client-urls',
       label: 'etcd listens on the wrong client port',
       break: `${scaleUp(NS)}
@@ -448,16 +527,6 @@ grep -qE -- '--advertise-client-urls=.*:2378' ${M}/etcd.yaml || { echo "could no
 sed -i -E '/--advertise-client-urls=/s/:2378/:2379/g' ${M}/etcd.yaml`,
       wait: waitHealthy(NS),
       explain: `\`--listen-client-urls\` and \`--advertise-client-urls\` in \`${M}/etcd.yaml\` use port \`2378\` instead of \`2379\`. The API server still dials \`2379\` (\`--etcd-servers\` in \`kube-apiserver.yaml\`), so it cannot reach etcd and keeps exiting. Put both URLs back on \`2379\`.`,
-    },
-    {
-      id: 'etcd-data-dir',
-      label: 'etcd data directory path is wrong',
-      break: `${scaleUp(NS)}
-${edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --data-dir=)/var/lib/etcd$#\\1/var/lib/etcd-broken#', '- --data-dir=/var/lib/etcd-broken$')}`,
-      settle: apiDown,
-      fix: edit(`${M}/etcd.yaml`, 's#^([[:space:]]*- --data-dir=)/var/lib/etcd-broken$#\\1/var/lib/etcd#', '- --data-dir=/var/lib/etcd$'),
-      wait: waitHealthy(NS),
-      explain: `\`--data-dir\` in \`${M}/etcd.yaml\` points at \`/var/lib/etcd-broken\`, which is empty or missing. etcd cannot open its database and exits; the API goes down with it. Set the path back to \`/var/lib/etcd\`.`,
     },
     {
       id: 'etcd-image-tag',
@@ -527,59 +596,10 @@ grep -oE -- '--advertise-address=[^[:space:]]+' ${M}/kube-apiserver.yaml | head 
 ${edit(`${M}/kube-apiserver.yaml`, 's#^([[:space:]]*- --advertise-address=).*$#\\1not-a-valid-ip#', '- --advertise-address=not-a-valid-ip$')}`,
       settle: apiDown,
       fix: `addr=$(cat "${state}.advertise")
-sed -i -E "s#^([[:space:]]*- --advertise-address=).*\$#\\1\${addr}#" ${M}/kube-apiserver.yaml
-grep -qE -- "- --advertise-address=\${addr}\$" ${M}/kube-apiserver.yaml || { echo "could not restore advertise-address" >&2; exit 1; }`,
+sed -i -E 's#^([[:space:]]*- --advertise-address=).*$#\\1'"$addr"'#' ${M}/kube-apiserver.yaml
+grep -qE -- '- --advertise-address='"$addr"'$' ${M}/kube-apiserver.yaml || { echo "could not restore advertise-address" >&2; exit 1; }`,
       wait: waitHealthy(NS),
       explain: `\`--advertise-address\` in \`${M}/kube-apiserver.yaml\` is \`not-a-valid-ip\`, so the API server exits at startup. Set it back to the control plane node's IPv4 address (\`ip -4 addr\` or the value that was in the manifest before).`,
-    },
-    {
-      id: 'apiserver-service-account-key',
-      label: 'API server service-account-key-file path is wrong',
-      break: `${scaleUp(NS)}
-${edit(
-  `${M}/kube-apiserver.yaml`,
-  's#^([[:space:]]*- --service-account-key-file=/etc/kubernetes/pki/sa)\\.pub$#\\1.pem#',
-  '- --service-account-key-file=/etc/kubernetes/pki/sa.pem$',
-)}`,
-      settle: apiDown,
-      fix: edit(
-        `${M}/kube-apiserver.yaml`,
-        's#^([[:space:]]*- --service-account-key-file=/etc/kubernetes/pki/sa)\\.pem$#\\1.pub#',
-        '- --service-account-key-file=/etc/kubernetes/pki/sa.pub$',
-      ),
-      wait: waitHealthy(NS),
-      explain: `\`--service-account-key-file\` in \`${M}/kube-apiserver.yaml\` points at \`sa.pem\`, which does not exist. The API server exits at startup; \`ls /etc/kubernetes/pki\` shows \`sa.pub\`. Set the path back to \`/etc/kubernetes/pki/sa.pub\`.`,
-    },
-    {
-      id: 'scheduler-leader-elect',
-      label: 'Scheduler --config points at a missing file',
-      break: `if grep -qE -- '- --config=' ${M}/kube-scheduler.yaml; then
-  ${edit(`${M}/kube-scheduler.yaml`, 's#^([[:space:]]*- --config=).*$#\\1/etc/kubernetes/sched-config.yaml#', '- --config=/etc/kubernetes/sched-config\\.yaml$')}
-else
-  sed -i -E '/^[[:space:]]*- kube-scheduler$/a\\    - --config=/etc/kubernetes/sched-config.yaml' ${M}/kube-scheduler.yaml
-  grep -qE -- '- --config=/etc/kubernetes/sched-config\\.yaml$' ${M}/kube-scheduler.yaml || { echo "could not set scheduler --config" >&2; exit 1; }
-fi
-${componentDown('kube-scheduler')}
-kubectl -n "${NS}" scale deployment/web --replicas=2`,
-      settle: waitPending(NS),
-      fix: `sed -i -E '/^[[:space:]]*- --config=\\/etc\\/kubernetes\\/sched-config\\.yaml$/d' ${M}/kube-scheduler.yaml
-! grep -qE -- '- --config=/etc/kubernetes/sched-config\\.yaml$' ${M}/kube-scheduler.yaml || { echo "could not remove scheduler --config" >&2; exit 1; }`,
-      wait: waitHealthy(NS),
-      explain: `\`${M}/kube-scheduler.yaml\` passes \`--config=/etc/kubernetes/sched-config.yaml\`, which does not exist, so the scheduler exits and new Pods stay \`Pending\`. Remove that flag (kubeadm schedulers use \`--kubeconfig\` / \`--authentication-kubeconfig\` instead) so the scheduler starts again.`,
-    },
-    {
-      id: 'etcd-peer-urls',
-      label: 'etcd peer URLs use the wrong port',
-      break: `${scaleUp(NS)}
-sed -i -E '/--listen-peer-urls=/s/:2380/:2381/g' ${M}/etcd.yaml
-sed -i -E '/--initial-advertise-peer-urls=/s/:2380/:2381/g' ${M}/etcd.yaml
-grep -qE -- '--listen-peer-urls=.*:2381' ${M}/etcd.yaml || { echo "could not break listen-peer-urls" >&2; exit 1; }
-grep -qE -- '--initial-advertise-peer-urls=.*:2381' ${M}/etcd.yaml || { echo "could not break initial-advertise-peer-urls" >&2; exit 1; }`,
-      settle: apiDown,
-      fix: `sed -i -E '/--listen-peer-urls=/s/:2381/:2380/g' ${M}/etcd.yaml
-sed -i -E '/--initial-advertise-peer-urls=/s/:2381/:2380/g' ${M}/etcd.yaml`,
-      wait: waitHealthy(NS),
-      explain: `\`--listen-peer-urls\` and \`--initial-advertise-peer-urls\` in \`${M}/etcd.yaml\` use port \`2381\` instead of \`2380\`. etcd becomes unhealthy and the API server loses storage. Put both peer URLs back on \`2380\`.`,
     },
   ],
 };

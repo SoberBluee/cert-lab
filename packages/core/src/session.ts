@@ -136,7 +136,9 @@ export class SessionManager extends EventEmitter {
 
   private learnView(row: SessionRow): Pick<SessionView, 'lesson' | 'learn'> {
     const lesson = this.lessonFor(row.scenarioId);
-    return lesson ? { lesson: toLessonView(lesson), learn: row.learnProgress ?? initialProgress(lesson) } : {};
+    if (!lesson) return {};
+    const learn = row.learnProgress ?? initialProgress(lesson);
+    return { lesson: toLessonView(lesson, learn), learn };
   }
 
   /** The open session (running, provisioning, grading or failed), or null. */
@@ -628,6 +630,23 @@ export class SessionManager extends EventEmitter {
   private stopWatching() {
     this.watcher?.stop();
     this.watcher = undefined;
+  }
+
+  /** Learn mode: answers the current step's question with choice number `choice`. */
+  async answerLearnStep(choice: number): Promise<SessionView> {
+    const row = this.requireOpen();
+    if (row.mode !== 'learn') throw new OrchestratorError('Only a lesson has questions to answer.', 409);
+    if (row.state !== 'running') throw new OrchestratorError(`Cannot answer while the lab is ${row.state}.`, 409);
+    const lesson = this.lessonFor(row.scenarioId);
+    const step = lesson && lesson.def.steps[(row.learnProgress ?? initialProgress(lesson)).current];
+    if (!step?.question) throw new OrchestratorError('The current step is not a question.', 409);
+    if (!Number.isInteger(choice) || choice < 0 || choice >= step.question.choices.length) {
+      throw new OrchestratorError(`Choose an answer from 0 to ${step.question.choices.length - 1}.`, 400);
+    }
+    const watcher = this.watcher?.sessionId === row.id ? this.watcher : this.watchLesson(row.id);
+    if (!watcher) throw new OrchestratorError(`Lesson "${row.scenarioId.replace(LEARN_PREFIX, '')}" no longer exists on disk.`, 404);
+    await watcher.answer(choice);
+    return this.toView(this.store.getSession(row.id)!);
   }
 
   /** Learn mode: marks the current step skipped. */

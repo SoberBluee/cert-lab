@@ -40,7 +40,14 @@ tasks:
         type: kubectl
         run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
         expect: { equals: "True" }
-        weight: 3
+        weight: 2
+        retrySeconds: 90
+      - id: q1-memory-pressure
+        description: no node is under MemoryPressure
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="MemoryPressure")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "False" }
+        weight: 2
         retrySeconds: 90
       - id: q1-kubelet-worker-1
         description: the kubelet is running and enabled on worker-1
@@ -61,10 +68,10 @@ tasks:
         type: kubectl
         run: kubectl -n ${Q1_NS} get daemonset node-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
         expect: { equals: 2/2 }
-        weight: 2
+        weight: 1
         retrySeconds: 90
     hints:
       - "kubectl get nodes, then kubectl describe node <node>: which node is unhealthy, which condition, and since when?"
-      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job?"
+      - "On that node: systemctl status kubelet and journalctl -u kubelet -n 50. Is the kubelet crash-looping, or running but unable to do its job? If it cannot reach the container runtime, check containerd the same way."
       - systemctl cat kubelet shows the unit and drop-ins, and so every file and flag the kubelet starts with. Check each path and value against what exists on the node and against a healthy worker.
       - After editing a file, restart the kubelet (and run systemctl daemon-reload if you changed the unit).

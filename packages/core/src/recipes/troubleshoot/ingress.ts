@@ -54,7 +54,8 @@ curl -H 'Host: ${api}' http://controlplane:30080/
 Do not change the Deployment or the Service, and do not delete the Ingress or the HTTPRoute.`,
       spec: `- Service \`${APP}\`: port \`80\`, forwarding to the \`${APP}\` Pods
 - Ingress \`${APP}\`: class \`traefik\`, host \`${www}\`, path \`/\` (\`Prefix\`) to Service \`${APP}\` on port \`80\`
-- HTTPRoute \`${APP}\`: attached to the \`web\` listener of Gateway \`traefik-gateway\` in namespace \`traefik\`, host \`${api}\`, path \`/\` to Service \`${APP}\` on port \`80\``,
+- HTTPRoute \`${APP}\`: attached to the \`web\` listener of Gateway \`traefik-gateway\` in namespace \`traefik\`, host \`${api}\`, path \`/\` to Service \`${APP}\` on port \`80\`
+- the controller: Deployment \`traefik\` in namespace \`traefik\`, its Service publishing the \`web\` port on NodePort \`30080\`, and IngressClass \`traefik\` naming controller \`traefik.io/ingress-controller\``,
       before: `${requireIngress}
 ${createNs(NS)}
 kubectl apply -f - <<EOF
@@ -168,29 +169,20 @@ ${waitServing(api)}`,
         `curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken.`,
         `kubectl -n ${NS} describe ingress ${APP} and kubectl -n ${NS} describe httproute ${APP}: read the Status conditions and the Events, then compare every name, host, path and port with what really exists.`,
         'kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.',
+        'When every host fails at once, suspect the controller rather than the objects: kubectl -n traefik get deploy,pods,svc, and the controller each IngressClass names.',
       ],
     };
   },
   layers: [
     {
       name: 'the Ingress',
-      faults: ['ingress-service-name', 'ingress-service-port', 'ingress-class', 'ingress-path', 'ingress-host-typo', 'ingress-path-prefix', 'ingress-tls-secret-missing'],
+      faults: ['ingress-service-name', 'ingress-service-port', 'ingress-class', 'ingress-path', 'ingress-host-typo', 'ingress-path-prefix'],
     },
     {
       name: 'the HTTPRoute',
-      faults: [
-        'route-parent',
-        'route-section',
-        'route-backend-port',
-        'route-hostname-typo',
-        'route-parent-namespace',
-        'route-backend-name',
-        'route-path-prefix',
-        'route-weight-zero',
-        'route-parent-group',
-        'route-filter-redirect',
-      ],
+      faults: ['route-parent', 'route-section', 'route-backend-port', 'route-parent-namespace', 'route-backend-name', 'route-path-prefix', 'route-weight-zero', 'route-filter-redirect'],
     },
+    { name: 'the controller', faults: ['controller-down', 'controller-nodeport', 'ingressclass-controller'] },
   ],
   faults: ({ NS, APP }) => {
     const www = `www.${NS}.lab`;
@@ -280,15 +272,6 @@ ${waitServing(api)}`,
         explain: `The Ingress rule's host is \`ww.${NS}.lab\`, not \`${www}\`. Traefik routes only matching Host headers, so \`${www}\` gets a 404. \`kubectl -n ${NS} get ingress\` shows the host: set it back to \`${www}\`.`,
       },
       {
-        id: 'route-hostname-typo',
-        label: 'HTTPRoute has a misspelled hostname',
-        break: route([{ op: 'replace', path: '/spec/hostnames/0', value: `apl.${NS}.lab` }]),
-        settle: waitBroken(api),
-        fix: route([{ op: 'replace', path: '/spec/hostnames/0', value: api }]),
-        wait: waitServing(api),
-        explain: `The HTTPRoute's hostname is \`apl.${NS}.lab\`, not \`${api}\`, so requests for \`${api}\` match no route and get a 404. \`kubectl -n ${NS} get httproute\` shows the hostname: set it back to \`${api}\`.`,
-      },
-      {
         id: 'route-parent-namespace',
         label: 'HTTPRoute looks for the Gateway in its own namespace',
         break: route([{ op: 'remove', path: '/spec/parentRefs/0/namespace' }]),
@@ -340,15 +323,6 @@ ${waitServing(api)}`,
         explain: `The HTTPRoute backendRef has \`weight: 0\`, so Traefik sends it no traffic and \`${api}\` fails even though the Service is healthy. Remove the weight (or set it above 0).`,
       },
       {
-        id: 'route-parent-group',
-        label: 'HTTPRoute parentRef uses the wrong API group',
-        break: route([{ op: 'add', path: '/spec/parentRefs/0/group', value: 'networking.k8s.io' }]),
-        settle: waitBroken(api),
-        fix: route([{ op: 'remove', path: '/spec/parentRefs/0/group' }]),
-        wait: waitServing(api),
-        explain: `The HTTPRoute's \`parentRefs\` sets \`group: networking.k8s.io\`, but Gateways live in \`gateway.networking.k8s.io\`. No parent accepts the route. Remove the \`group\` field (or set it to \`gateway.networking.k8s.io\`).`,
-      },
-      {
         id: 'route-filter-redirect',
         label: 'HTTPRoute redirects instead of proxying',
         break: route([
@@ -364,15 +338,46 @@ ${waitServing(api)}`,
         explain: `The HTTPRoute has a \`RequestRedirect\` filter, so requests for \`${api}\` get a 302 to \`elsewhere.example\` instead of the nginx welcome page. Remove the \`filters\` block so the route proxies to Service \`${APP}\`.`,
       },
       {
-        id: 'ingress-tls-secret-missing',
-        label: 'Ingress TLS references a Secret that does not exist',
-        break: `kubectl -n "${NS}" annotate ingress "${APP}" traefik.ingress.kubernetes.io/router.entrypoints=websecure --overwrite
-kubectl -n "${NS}" patch ingress "${APP}" --type=json -p '[{"op":"add","path":"/spec/tls","value":[{"hosts":["'"${www}"'"],"secretName":"missing-tls"}]}]'`,
+        id: 'controller-down',
+        label: 'The Traefik controller is scaled to zero',
+        // The controller serves every Ingress and route of the cluster: stage after other questions, fix first.
+        disruptive: true,
+        break: `kubectl -n traefik scale deployment traefik --replicas=0
+kubectl -n traefik wait --for=delete pod -l app.kubernetes.io/name=traefik --timeout=120s >/dev/null 2>&1 || true`,
         settle: waitBroken(www),
-        fix: `kubectl -n "${NS}" annotate ingress "${APP}" traefik.ingress.kubernetes.io/router.entrypoints-
-kubectl -n "${NS}" patch ingress "${APP}" --type=json -p '[{"op":"remove","path":"/spec/tls"}]'`,
+        fix: `kubectl -n traefik scale deployment traefik --replicas=1`,
+        wait: `kubectl -n traefik rollout status deployment/traefik --timeout=180s
+${waitServing(www)}
+${waitServing(api)}`,
+        explain: `Both hosts fail at once, and nothing in \`${NS}\` is wrong: Deployment \`traefik\` in namespace \`traefik\` has \`0\` replicas, so nothing listens behind NodePort \`30080\` (curl gets "connection refused"). Scale it back to \`1\`.`,
+      },
+      {
+        id: 'controller-nodeport',
+        label: "The controller's Service moved to another NodePort",
+        disruptive: true,
+        break: `i=$(kubectl -n traefik get service traefik -o jsonpath='{range .spec.ports[*]}{.name}{"\\n"}{end}' | grep -n '^web$' | cut -d: -f1)
+[[ -n "$i" ]] || { echo "no web port on the traefik Service" >&2; exit 1; }
+kubectl -n traefik patch service traefik --type=json -p '[{"op":"replace","path":"/spec/ports/'"$((i - 1))"'/nodePort","value":30081}]'`,
+        settle: waitBroken(www),
+        fix: `i=$(kubectl -n traefik get service traefik -o jsonpath='{range .spec.ports[*]}{.name}{"\\n"}{end}' | grep -n '^web$' | cut -d: -f1)
+kubectl -n traefik patch service traefik --type=json -p '[{"op":"replace","path":"/spec/ports/'"$((i - 1))"'/nodePort","value":30080}]'`,
+        wait: `${waitServing(www)}
+${waitServing(api)}`,
+        explain: `Traefik runs and every object in \`${NS}\` is right, but the \`web\` port of Service \`traefik/traefik\` now uses NodePort \`30081\`, so nothing answers on \`30080\` (\`kubectl -n traefik get svc traefik\` shows \`80:30081/TCP\`). The task's URL uses \`30080\`: set the \`web\` port's \`nodePort\` back to \`30080\`.`,
+      },
+      {
+        id: 'ingressclass-controller',
+        label: 'IngressClass traefik names another controller',
+        disruptive: true,
+        break: `kubectl get ingressclass traefik -o json | python3 -c 'import json,sys; o=json.load(sys.stdin); m=o["metadata"]; [m.pop(k, None) for k in ("resourceVersion","uid","creationTimestamp","managedFields","generation")]; print(json.dumps(o))' > /var/tmp/cka-ingressclass-traefik.json
+python3 -c 'import json; o=json.load(open("/var/tmp/cka-ingressclass-traefik.json")); o["spec"]["controller"]="k8s.io/ingress-nginx"; print(json.dumps(o))' > /var/tmp/cka-ingressclass-broken.json
+kubectl delete ingressclass traefik --wait=true >/dev/null
+kubectl create -f /var/tmp/cka-ingressclass-broken.json >/dev/null`,
+        settle: waitBroken(www),
+        fix: `kubectl delete ingressclass traefik --wait=true
+kubectl create -f /var/tmp/cka-ingressclass-traefik.json`,
         wait: waitServing(www),
-        explain: `Ingress \`${APP}\` references TLS Secret \`missing-tls\` (which does not exist) and is pinned to the \`websecure\` entrypoint, so HTTP on \`${www}\` fails. Remove the \`spec.tls\` stanza (or create a valid TLS Secret) and clear the entrypoints annotation so Traefik serves the host on \`web\` again.`,
+        explain: `IngressClass \`traefik\` now names controller \`k8s.io/ingress-nginx\`, which does not run here. Traefik only serves Ingresses whose class names \`traefik.io/ingress-controller\`, so \`${www}\` fails while \`${api}\` (Gateway API, which uses the GatewayClass) still works. \`kubectl get ingressclass traefik -o yaml\` shows the controller; the field cannot be edited, so delete the IngressClass and create it again with \`controller: traefik.io/ingress-controller\`.`,
       },
     ];
   },
