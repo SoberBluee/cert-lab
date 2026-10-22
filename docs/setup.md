@@ -121,6 +121,30 @@ brew install cirruslabs/cli/tart
 - **Base image:** `ghcr.io/cirruslabs/ubuntu:<ubuntuRelease>`, overridable with `CKA_TART_IMAGE`. The build uses the image's default `admin`/`admin` login once to create the `ubuntu` user. `CKA_TART_BIN` overrides the `tart` binary.
 - **Licence:** Tart is fair-source, not open source; larger organisations may need a paid licence. Check the current terms on [tart.run](https://tart.run) for your use.
 
+## AWS Labs (Floci)
+
+The AWS section (`/aws`) runs Solutions Architect Associate scenarios against [Floci](https://github.com/floci-io/floci), a local AWS emulator, instead of the lab VMs. It needs:
+
+- **Docker** running. Floci starts EC2 instances and RDS databases as containers.
+- **Floci** listening on `http://localhost:4566`: `floci start` (or `docker run -d --name floci -p 4566:4566 -v /var/run/docker.sock:/var/run/docker.sock floci/floci:latest`). The scenarios were checked against Floci 1.7.0.
+- **AWS CLI v2** on `PATH` (`brew install awscli`), and `python3`, which the browser terminal and some checks use.
+
+The scenario list shows whether Floci and the CLI are found, and checks again every few seconds until they are.
+
+Each attempt gets its own new 12-digit AWS account on Floci, so it starts empty and cannot see other attempts; Reset starts another account. Nothing else is provisioned, so a lab is ready in a few seconds. Commands run on this machine with a session-only AWS CLI config in `~/.cka-lab/aws/<session>/`: dummy credentials, the Floci endpoint, and none of your own `~/.aws` settings. The browser terminal is a local bash shell with that setup, in the session's `work/` folder. To use your own terminal instead, copy the export line from the Connect panel.
+
+`CKA_FLOCI_URL` points at another Floci. It must be on this machine unless `CKA_FLOCI_ALLOW_REMOTE=1` is set, so a typo cannot send lab commands elsewhere.
+
+Ending or resetting a session terminates the account's EC2 instances and deletes its RDS databases, which would otherwise keep running as containers. Everything else in an abandoned account is only records in Floci's memory, and goes when Floci restarts.
+
+Floci is an emulator, so some things differ from AWS. The scenarios are written around these:
+
+- It accepts much of what AWS rejects: a subnet outside its VPC's CIDR, overlapping subnets, a one-AZ DB subnet group. Checks therefore compare exact values.
+- Auto Scaling groups keep their configuration but launch no instances.
+- RDS does not keep the backup retention, storage encryption or deletion protection settings, and has no read replicas.
+- NAT gateways, peering and Route 53 records are records only; no traffic flows through them. Labs grade configuration, not connectivity.
+- `ModifyVpcEndpoint` is not supported: give gateway endpoints their route tables when you create them.
+
 ## Developing without VMs
 
 `CKA_DRIVER=fake npm run dev` runs the API against a simulated lab. Provisioning steps are faked, and every command returns empty output, so most checks fail. It uses a separate `state-fake.db`, which keeps fake attempts out of your real history.
@@ -132,4 +156,7 @@ brew install cirruslabs/cli/tart
 - **Tart: "SSH to worker-1 did not come up"** or **"did not get an IP address"**: check `~/.cka-lab/logs/tart-<node>.log` and `tart list`. A VM left running by another process blocks `tart run`; `tart stop <vm>` it, then reset.
 - **Tart: "driver key ... is missing"**: the images were built under another account or `CKA_LAB_HOME`. Rebuild with `./cka images build --driver tart --force`.
 - **A session stuck in provisioning after a crash**: restarting the API marks it failed. Then press Reset or End, or run `./cka end`.
+- **"Floci is not reachable at http://localhost:4566"**: start Docker, then `floci start`, then press Reset. `floci status` and `floci doctor` diagnose it.
+- **An RDS question takes a minute to set up the first time**: Floci is pulling the MySQL image. Later starts take about a second.
+- **The AWS terminal says it needs python3**: install the Xcode command line tools (`xcode-select --install`).
 - **Restore is slow**: both backends boot the VMs on every reset (`multipass restore` needs stopped instances; Tart clones stopped golden VMs). The time for each reset is in the log (`snapshot restored`, `seconds`).

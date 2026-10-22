@@ -2,7 +2,7 @@ import { useLocation } from 'react-router-dom';
 
 /**
  * Top-level product areas in the UI. Lesson tracks (`cka` | `linux`) stay a subset;
- * terraform / aws / docker are shells until they have content.
+ * terraform / docker are shells until they have content.
  */
 export type Section = 'cka' | 'linux' | 'terraform' | 'aws' | 'docker' | 'system';
 
@@ -10,7 +10,7 @@ export const SECTIONS: Record<Section, { name: string; base: string; home: strin
   cka: { name: 'CKA Labs', base: '', home: '/', blurb: 'Kubernetes scenarios and drills' },
   linux: { name: 'Linux Labs', base: '/linux', home: '/linux/learn', blurb: 'Linux commands for the CKA' },
   terraform: { name: 'Terraform Labs', base: '/terraform', home: '/terraform', blurb: 'Coming soon' },
-  aws: { name: 'AWS Labs', base: '/aws', home: '/aws', blurb: 'Coming soon' },
+  aws: { name: 'AWS Labs', base: '/aws', home: '/aws/scenarios', blurb: 'Solutions Architect scenarios on Floci' },
   docker: { name: 'Docker Labs', base: '/docker', home: '/docker', blurb: 'Coming soon' },
   system: { name: 'System Labs', base: '/system', home: '/system/learn', blurb: 'Networking and system design, interactively' },
 };

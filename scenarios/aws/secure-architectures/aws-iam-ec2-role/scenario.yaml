@@ -1,0 +1,96 @@
+id: aws-iam-ec2-role
+title: Least-privilege IAM role for EC2
+track: aws
+domain: secure-architectures
+difficulty: 2
+estimatedMinutes: 15
+points: 10
+tags: [iam, roles, least-privilege, instance-profile, s3]
+base: floci
+settleSeconds: 5
+variables:
+  SUFFIX: { random: 6 }
+  PREFIX: { oneOf: [reports, exports, invoices] }
+  ROLE: { oneOf: [report-reader, billing-app, export-worker] }
+setup:
+  - script: setup/buckets.sh
+tasks:
+  - id: q1
+    title: A role that EC2 can assume
+    points: 3
+    checks:
+      - id: q1-trust
+        description: Only the EC2 service can assume ${ROLE}
+        type: aws
+        weight: 3
+        run: |
+          aws iam get-role --role-name ${ROLE} --query Role.AssumeRolePolicyDocument --output json 2>&1 | python3 -c 'import json, sys
+          t = sys.stdin.read().strip()
+          doc = json.loads(t) if t.startswith("{") else {}
+          def listify(v): return v if isinstance(v, list) else [v]
+          principals = set()
+          for s in listify(doc.get("Statement", [])):
+              if s.get("Effect") == "Allow" and set(listify(s.get("Action", []))) & {"sts:AssumeRole", "sts:*"}:
+                  p = s.get("Principal", {})
+                  for kind, v in (p.items() if isinstance(p, dict) else [("*", p)]):
+                      principals |= {kind + ":" + x for x in listify(v)}
+          print(" ".join(sorted(principals)) or "nobody")'
+        expect: { equals: "Service:ec2.amazonaws.com" }
+    hints:
+      - "The trust policy says who may assume the role: {\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}."
+      - "aws iam create-role --role-name ${ROLE} --assume-role-policy-document file://trust.json"
+  - id: q2
+    title: Read one prefix, nothing more
+    points: 5
+    checks:
+      - id: q2-get-prefix
+        description: ${ROLE} can read objects under ${PREFIX}/ in app-${SUFFIX}
+        type: aws
+        weight: 2
+        run: |
+          aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/${ROLE} \
+            --action-names s3:GetObject --resource-arns arn:aws:s3:::app-${SUFFIX}/${PREFIX}/2026/summary.csv \
+            --query 'EvaluationResults[0].EvalDecision' --output text 2>&1
+        expect: { equals: "allowed" }
+      - id: q2-list-bucket
+        description: ${ROLE} can list app-${SUFFIX}
+        type: aws
+        run: |
+          aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/${ROLE} \
+            --action-names s3:ListBucket --resource-arns arn:aws:s3:::app-${SUFFIX} \
+            --query 'EvaluationResults[0].EvalDecision' --output text 2>&1
+        expect: { equals: "allowed" }
+      - id: q2-no-writes
+        description: ${ROLE} cannot write or delete objects, even under ${PREFIX}/
+        type: aws
+        run: |
+          aws iam get-role --role-name ${ROLE} >/dev/null 2>&1 || { echo "no role ${ROLE}"; exit; }
+          aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/${ROLE} \
+            --action-names s3:PutObject s3:DeleteObject --resource-arns arn:aws:s3:::app-${SUFFIX}/${PREFIX}/2026/summary.csv \
+            --query 'EvaluationResults[].EvalDecision' --output text 2>&1 | xargs
+        expect: { matches: "^(implicitDeny|explicitDeny) (implicitDeny|explicitDeny)$" }
+      - id: q2-no-other-data
+        description: ${ROLE} cannot read outside ${PREFIX}/ or from audit-${SUFFIX}
+        type: aws
+        run: |
+          aws iam get-role --role-name ${ROLE} >/dev/null 2>&1 || { echo "no role ${ROLE}"; exit; }
+          aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/${ROLE} \
+            --action-names s3:GetObject --resource-arns arn:aws:s3:::app-${SUFFIX}/private/keys.txt arn:aws:s3:::audit-${SUFFIX}/${PREFIX}/log.txt \
+            --query 'EvaluationResults[].EvalDecision' --output text 2>&1 | xargs
+        expect: { matches: "^(implicitDeny|explicitDeny) (implicitDeny|explicitDeny)$" }
+    hints:
+      - "Object actions (s3:GetObject) apply to object ARNs like arn:aws:s3:::bucket/prefix/*; bucket actions (s3:ListBucket) apply to the bucket ARN itself."
+      - "aws iam put-role-policy --role-name ${ROLE} --policy-name read-${PREFIX} --policy-document file://policy.json"
+      - "Test before you grade: aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/${ROLE} --action-names s3:GetObject --resource-arns ..."
+  - id: q3
+    title: Instance profile
+    points: 2
+    checks:
+      - id: q3-instance-profile
+        description: Instance profile ${ROLE}-profile contains ${ROLE}
+        type: aws
+        weight: 2
+        run: aws iam get-instance-profile --instance-profile-name ${ROLE}-profile --query 'InstanceProfile.Roles[].RoleName' --output text 2>&1 | xargs
+        expect: { equals: "${ROLE}" }
+    hints:
+      - "EC2 does not take a role directly: create-instance-profile, then add-role-to-instance-profile."

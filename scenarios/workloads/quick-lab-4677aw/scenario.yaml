@@ -1,0 +1,126 @@
+id: quick-lab-4677aw
+title: "Quick lab: Horizontal Pod Autoscaling"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 16
+points: 14
+tags: [ troubleshooting, hpa, autoscaling, metrics-server ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+draft: true
+variables:
+  Q1_NS: { oneOf: [ shop, storefront, media, scale, traffic, web-tier, frontend, api-tier, loadtest, elastic ] }
+  Q1_APP: { oneOf: [ web, api, frontend, gateway, catalog, search, checkout, cdn, proxy, edge ] }
+  Q1_FAULT: { oneOf: [ no-cpu-request, target-name, target-kind, max-one, metrics-server-down, metrics-apiservice ], hidden: true }
+  Q2_NS: { oneOf: [ shop, storefront, media, scale, traffic, web-tier, frontend, api-tier, loadtest, elastic ] }
+  Q2_APP: { oneOf: [ web, api, frontend, gateway, catalog, search, checkout, cdn, proxy, edge ] }
+  Q2_FAULT: { oneOf: [ no-cpu-request, target-name, target-kind, max-one, metrics-server-down, metrics-apiservice ], hidden: true }
+tasks:
+  - id: q1
+    title: Autoscaler ${Q1_APP} not working
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-hpa-spec
+        description: the autoscaler targets Deployment ${Q1_APP} between 2 and 6 replicas at 50% CPU
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q1_APP}/2/6/50" }
+        weight: 1
+      - id: q1-hpa-active
+        description: the autoscaler reads current metrics (ScalingActive)
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.status.conditions[?(@.type=="ScalingActive")].status}'
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-hpa-metric
+        description: it reports the current CPU utilization
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.status.currentMetrics[?(@.resource.name=="cpu")].resource.current.averageUtilization}' | grep -qE '^[0-9]+$' && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 120
+      - id: q1-ready
+        description: ${Q1_APP} has at least 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}'
+        expect: { gte: 2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-spec
+        description: ${Q1_APP} keeps its image and has a CPU request
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu}'
+        expect: { matches: ^nginx:1\.27-alpine \S+$ }
+        weight: 1
+      - id: q1-same-deployment
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get hpa ${Q1_APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics; MINPODS and MAXPODS show its range."
+      - "kubectl -n ${Q1_NS} describe hpa ${Q1_APP}: the Conditions and Events say why it cannot scale."
+      - "kubectl top pods -n ${Q1_NS}: when this fails, the problem is the metrics pipeline (kubectl get apiservice, then the Deployment and Service behind it), not the autoscaler."
+    recipe: { category: hpa }
+  - id: q2
+    title: Autoscaler ${Q2_APP} not working
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+        lane: q2
+    checks:
+      - id: q2-hpa-spec
+        description: the autoscaler targets Deployment ${Q2_APP} between 2 and 6 replicas at 50% CPU
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get hpa ${Q2_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q2_APP}/2/6/50" }
+        weight: 1
+      - id: q2-hpa-active
+        description: the autoscaler reads current metrics (ScalingActive)
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get hpa ${Q2_APP} -o jsonpath='{.status.conditions[?(@.type=="ScalingActive")].status}'
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 120
+      - id: q2-hpa-metric
+        description: it reports the current CPU utilization
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get hpa ${Q2_APP} -o jsonpath='{.status.currentMetrics[?(@.resource.name=="cpu")].resource.current.averageUtilization}' | grep -qE '^[0-9]+$' && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 120
+      - id: q2-ready
+        description: ${Q2_APP} has at least 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}'
+        expect: { gte: 2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q2-spec
+        description: ${Q2_APP} keeps its image and has a CPU request
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu}'
+        expect: { matches: ^nginx:1\.27-alpine \S+$ }
+        weight: 1
+      - id: q2-same-deployment
+        description: ${Q2_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q2.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} get hpa ${Q2_APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics; MINPODS and MAXPODS show its range."
+      - "kubectl -n ${Q2_NS} describe hpa ${Q2_APP}: the Conditions and Events say why it cannot scale."
+      - "kubectl top pods -n ${Q2_NS}: when this fails, the problem is the metrics pipeline (kubectl get apiservice, then the Deployment and Service behind it), not the autoscaler."
+    recipe: { category: hpa }

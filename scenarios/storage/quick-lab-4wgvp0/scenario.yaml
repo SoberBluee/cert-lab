@@ -1,0 +1,61 @@
+id: quick-lab-4wgvp0
+title: "Quick lab: Dynamic provisioning"
+domain: storage
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ storageclass, dynamic-provisioning, local-path, default-class, waitforfirstconsumer ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ cache-ns, data, scratch, build, artifacts, uploads, queue, media, search, feeds ] }
+  Q1_SC: { oneOf: [ local-fast, node-local, fast-local, local-ssd, local-std, hostdisk, local-nvme, edge-local, local-tier, local-default ] }
+tasks:
+  - id: q1
+    title: Default StorageClass with local-path
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-class
+        description: StorageClass ${Q1_SC} uses rancher.io/local-path, WaitForFirstConsumer and reclaim Delete
+        type: kubectl
+        run: kubectl get storageclass ${Q1_SC} -o jsonpath='{.provisioner} {.volumeBindingMode} {.reclaimPolicy}'
+        expect: { equals: rancher.io/local-path WaitForFirstConsumer Delete }
+        weight: 2
+      - id: q1-only-default
+        description: ${Q1_SC} is the only default StorageClass
+        type: kubectl
+        run: kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' | xargs
+        expect: { equals: "${Q1_SC}" }
+        weight: 1
+      - id: q1-claim
+        description: PVC cache in ${Q1_NS} is Bound through ${Q1_SC}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pvc cache -o jsonpath='{.status.phase} {.spec.storageClassName}'
+        expect: { equals: "Bound ${Q1_SC}" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-pod
+        description: Pod cache-app runs with the claim at /cache
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pod cache-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+        expect: { matches: ^Running cache .*/cache }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-local
+        description: the volume was provisioned on the node the Pod runs on
+        type: kubectl
+        run: pv=$(kubectl -n ${Q1_NS} get pvc cache -o jsonpath='{.spec.volumeName}'); [ -n "$pv" ] && [ "$(kubectl get pv "$pv" -o jsonpath='{.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]}')" = "$(kubectl -n ${Q1_NS} get pod cache-app -o jsonpath='{.spec.nodeName}')" ] && echo local || echo elsewhere
+        expect: { equals: local }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - kubectl get storageclass marks the default class with (default); the annotation storageclass.kubernetes.io/is-default-class decides it.
+      - "A claim without storageClassName gets the default class when it is created, not later: make the class the default first."
+      - With WaitForFirstConsumer a claim stays Pending until a Pod that uses it is scheduled; then the volume is created for that Pod's node.
+    recipe: { builder: dynamic-storage, parts: [] }

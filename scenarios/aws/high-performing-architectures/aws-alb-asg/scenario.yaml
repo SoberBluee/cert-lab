@@ -1,0 +1,101 @@
+id: aws-alb-asg
+title: Scale a web tier behind an Application Load Balancer
+track: aws
+domain: high-performing-architectures
+difficulty: 3
+estimatedMinutes: 25
+points: 10
+tags: [elb, alb, target-group, auto-scaling, launch-template, target-tracking]
+base: floci
+settleSeconds: 5
+variables:
+  APP_PORT: { oneOf: [8080, 3000, 9000] }
+  HEALTH_PATH: { oneOf: [/healthz, /health, /status] }
+setup:
+  - script: setup/network.sh
+tasks:
+  - id: q1
+    title: Load balancer
+    points: 5
+    checks:
+      - id: q1-alb
+        description: web-alb is internet-facing, in public-a and public-b, with alb-sg
+        type: aws
+        weight: 2
+        run: |
+          out=$(aws elbv2 describe-load-balancers --names web-alb \
+            --query 'LoadBalancers[0].[Scheme,join(`,`,AvailabilityZones[].SubnetId),join(`,`,SecurityGroups)]' --output text 2>&1) || { echo "$out"; exit; }
+          read -r scheme subnets sgs <<<"$out"
+          # describe-* with no ids lists everything, so only look up ids that are there.
+          [ -n "$subnets" ] && names=$(aws ec2 describe-subnets --subnet-ids ${subnets//,/ } --query 'Subnets[].[Tags[?Key==`Name`]|[0].Value]' --output text | sort | paste -sd, -)
+          [ -n "$sgs" ] && sg=$(aws ec2 describe-security-groups --group-ids ${sgs//,/ } --query 'SecurityGroups[].GroupName' --output text | xargs)
+          echo "$scheme ${names:-no-subnets} ${sg:-no-security-group}"
+        expect: { equals: "internet-facing public-a,public-b alb-sg" }
+      - id: q1-target-group
+        description: app-tg sends HTTP to port ${APP_PORT} on instances and health-checks ${HEALTH_PATH} every 15s, healthy after 2
+        type: aws
+        weight: 2
+        run: |
+          aws elbv2 describe-target-groups --names app-tg \
+            --query 'TargetGroups[0].[Protocol,Port,TargetType,HealthCheckPath,HealthCheckIntervalSeconds,HealthyThresholdCount]' --output text 2>&1 | xargs
+        expect: { equals: "HTTP ${APP_PORT} instance ${HEALTH_PATH} 15 2" }
+      - id: q1-listener
+        description: web-alb listens on HTTP 80 and forwards to app-tg
+        type: aws
+        run: |
+          alb=$(aws elbv2 describe-load-balancers --names web-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>&1) || { echo "$alb"; exit; }
+          aws elbv2 describe-listeners --load-balancer-arn "$alb" \
+            --query 'Listeners[?Port==`80`].[Protocol,Port,DefaultActions[0].Type,DefaultActions[0].TargetGroupArn]' --output text |
+            awk '{ split($4, a, "/"); print $1, $2, $3, a[2] }'
+        expect: { equals: "HTTP 80 forward app-tg" }
+    hints:
+      - "aws elbv2 create-load-balancer --name web-alb --type application --scheme internet-facing --subnets <public-a> <public-b> --security-groups <alb-sg>"
+      - "Health check settings belong to the target group: --health-check-path, --health-check-interval-seconds, --healthy-threshold-count."
+      - "aws elbv2 create-listener --load-balancer-arn ... --protocol HTTP --port 80 --default-actions Type=forward,TargetGroupArn=..."
+  - id: q2
+    title: Auto Scaling group
+    points: 5
+    checks:
+      - id: q2-launch-template
+        description: app-lt launches ami-0abcdef1234567891 on t3.micro with app-sg
+        type: aws
+        run: |
+          out=$(aws ec2 describe-launch-template-versions --launch-template-name app-lt --versions '$Default' \
+            --query 'LaunchTemplateVersions[0].LaunchTemplateData.[ImageId,InstanceType,join(`,`,SecurityGroupIds||`[]`)]' --output text 2>&1) || { echo "$out"; exit; }
+          read -r ami type sgs <<<"$out"
+          [ "$ami" = None ] && { echo "no launch template app-lt"; exit; }
+          [ -n "$sgs" ] && sg=$(aws ec2 describe-security-groups --group-ids ${sgs//,/ } --query 'SecurityGroups[].GroupName' --output text | xargs)
+          echo "$ami $type ${sg:-no-security-group}"
+        expect: { equals: "ami-0abcdef1234567891 t3.micro app-sg" }
+      - id: q2-capacity
+        description: app-asg runs 2 instances and can grow to 6
+        type: aws
+        run: aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names app-asg --query 'AutoScalingGroups[0].[LaunchTemplate.LaunchTemplateName,MinSize,MaxSize,DesiredCapacity]' --output text 2>&1 | xargs
+        expect: { equals: "app-lt 2 6 2" }
+      - id: q2-placement
+        description: app-asg spreads over app-a and app-b and registers with app-tg
+        type: aws
+        run: |
+          read -r subnets tgs <<<"$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names app-asg \
+            --query 'AutoScalingGroups[0].[VPCZoneIdentifier,join(`,`,TargetGroupARNs)]' --output text 2>&1)"
+          [ -n "$subnets" ] && [ "$subnets" != None ] && names=$(aws ec2 describe-subnets --subnet-ids ${subnets//,/ } --query 'Subnets[].[Tags[?Key==`Name`]|[0].Value]' --output text | sort | paste -sd, -)
+          tg=$(for a in ${tgs//,/ }; do echo "$a" | cut -d/ -f2; done | sort | paste -sd, -)
+          echo "${names:-no-subnets} ${tg:-no-target-group}"
+        expect: { equals: "app-a,app-b app-tg" }
+      - id: q2-health
+        description: app-asg replaces instances that fail the load balancer health check, after a 120s grace period
+        type: aws
+        run: aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names app-asg --query 'AutoScalingGroups[0].[HealthCheckType,HealthCheckGracePeriod]' --output text 2>&1 | xargs
+        expect: { equals: "ELB 120" }
+      - id: q2-scaling-policy
+        description: Target tracking policy cpu-50 keeps average CPU at 50%
+        type: aws
+        run: |
+          aws autoscaling describe-policies --auto-scaling-group-name app-asg --policy-names cpu-50 \
+            --query 'ScalingPolicies[0].[PolicyType,TargetTrackingConfiguration.PredefinedMetricSpecification.PredefinedMetricType,TargetTrackingConfiguration.TargetValue]' \
+            --output text 2>&1 | xargs
+        expect: { matches: "^TargetTrackingScaling ASGAverageCPUUtilization 50(\\.0)?$" }
+    hints:
+      - "aws ec2 create-launch-template --launch-template-name app-lt --launch-template-data '{\"ImageId\":\"ami-0abcdef1234567891\",\"InstanceType\":\"t3.micro\",\"SecurityGroupIds\":[\"<app-sg>\"]}'"
+      - "aws autoscaling create-auto-scaling-group ... --vpc-zone-identifier <app-a>,<app-b> --target-group-arns <app-tg ARN> --health-check-type ELB --health-check-grace-period 120"
+      - "aws autoscaling put-scaling-policy --policy-type TargetTrackingScaling --target-tracking-configuration '{\"PredefinedMetricSpecification\":{\"PredefinedMetricType\":\"ASGAverageCPUUtilization\"},\"TargetValue\":50}'"

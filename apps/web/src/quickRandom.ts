@@ -1,4 +1,4 @@
-import type { BuilderSummary, CategorySummary, Domain, LabTopic, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
+import type { BuilderSummary, CategorySummary, CkaDomain, LabTopic, PartSummary, QuickCreateRequest, QuickQuestion, RecipeCatalog, RecipeField } from '@cka/schema';
 import { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS } from '@cka/schema';
 import { studioApi } from './api';
 
@@ -257,7 +257,7 @@ export async function randomLab(catalog: RecipeCatalog, n: number, kind: LabKind
 }
 
 /** Questions per curriculum domain in a full mock: 17, as the CKA curriculum weights its domains. */
-export const MOCK_PLAN: Record<Domain, number> = {
+export const MOCK_PLAN: Record<CkaDomain, number> = {
   troubleshooting: 5,
   'cluster-architecture': 4,
   'services-networking': 3,
@@ -277,7 +277,7 @@ export async function fullMock(catalog: RecipeCatalog): Promise<Question[]> {
   const pool = itemPool(catalog, MOCK_QUESTIONS, 'random');
   const out: Item[] = [];
   let apiTaken = false;
-  for (const [domain, want] of Object.entries(MOCK_PLAN) as [Domain, number][]) {
+  for (const [domain, want] of Object.entries(MOCK_PLAN) as [CkaDomain, number][]) {
     const inDomain = pool.filter((i) => info(i).domain === domain);
     const ordered = [...shuffle(inDomain.filter((i) => !seen.has(itemId(i)))), ...shuffle(inDomain.filter((i) => seen.has(itemId(i))))];
     let taken = 0;

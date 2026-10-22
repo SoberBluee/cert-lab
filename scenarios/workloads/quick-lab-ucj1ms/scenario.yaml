@@ -1,0 +1,116 @@
+id: quick-lab-ucj1ms
+title: "Quick lab: VerticalPodAutoscaler"
+domain: workloads
+difficulty: 3
+estimatedMinutes: 24
+points: 15
+tags: [ vpa, autoscaling, resources, cpu-only, requests-only, cap-memory, bounds, switch-mode ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ shop, billing, reports, rightsizing, finops, workloads, compute, media, batch, services ] }
+  Q1_NAME: { oneOf: [ web, api, worker, renderer, encoder, processor, analyzer, indexer, compiler, transformer ] }
+  Q1_MODE: { oneOf: [ Off, Initial, Recreate ] }
+  Q1_CAP_MEM: { oneOf: [ 256Mi, 384Mi ] }
+  Q2_NS: { oneOf: [ shop, billing, reports, rightsizing, finops, workloads, compute, media, batch, services ] }
+  Q2_NAME: { oneOf: [ web, api, worker, renderer, encoder, processor, analyzer, indexer, compiler, transformer ] }
+  Q2_MODE: { oneOf: [ Off, Initial, Recreate ] }
+  Q2_BOUNDS_MINCPU: { oneOf: [ 25m, 50m ] }
+  Q2_BOUNDS_MAXMEM: { oneOf: [ 256Mi, 512Mi ] }
+tasks:
+  - id: q1
+    title: Right-size ${Q1_NAME}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-vpa-spec
+        description: ${Q1_NAME}-vpa targets Deployment ${Q1_NAME} in mode ${Q1_MODE}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get vpa ${Q1_NAME}-vpa -o jsonpath='{.spec.targetRef.kind}/{.spec.targetRef.name}/{.spec.updatePolicy.updateMode}'
+        expect: { equals: "Deployment/${Q1_NAME}/${Q1_MODE}" }
+        weight: 2
+      - id: q1-vpa-recommends
+        description: it recommends resources for container web
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get vpa ${Q1_NAME}-vpa -o jsonpath='{.status.recommendation.containerRecommendations[?(@.containerName=="web")].target.cpu}' | grep -q . && echo yes || echo no
+        expect: { equals: yes }
+        weight: 2
+        retrySeconds: 180
+      - id: q1-vpa-cpu-only
+        description: only CPU is controlled for web
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get vpa ${Q1_NAME}-vpa -o jsonpath='{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].controlledResources[*]}'
+        expect: { equals: cpu }
+        weight: 1
+      - id: q1-vpa-requests-only
+        description: only requests are controlled for web
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get vpa ${Q1_NAME}-vpa -o jsonpath='{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].controlledValues}'
+        expect: { equals: RequestsOnly }
+        weight: 1
+      - id: q1-vpa-cap
+        description: web may get at most ${Q1_CAP_MEM} memory
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get vpa ${Q1_NAME}-vpa -o jsonpath='{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].maxAllowed.memory}'
+        expect: { equals: "${Q1_CAP_MEM}" }
+        weight: 1
+    hints:
+      - "There is no kubectl create for it: write apiVersion autoscaling.k8s.io/v1, kind VerticalPodAutoscaler, with spec.targetRef and spec.updatePolicy.updateMode (kubectl explain vpa.spec)."
+      - kubectl -n ${Q1_NS} describe vpa ${Q1_NAME}-vpa shows the recommendation once the recommender has run (about a minute).
+      - "controlledResources: [cpu] in the container policy."
+      - "controlledValues: RequestsOnly in the container policy (the default is RequestsAndLimits)."
+      - "kubectl -n ${Q1_NS} edit vpa ${Q1_NAME}-vpa: add maxAllowed.memory to the container policy for web (create the policy if there is none)."
+    recipe: { builder: vpa, parts: [ cpu-only, requests-only, cap-memory ] }
+  - id: q2
+    title: Right-size ${Q2_NAME}
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - id: q2-vpa-recommends
+        description: it recommends resources for container web
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get vpa ${Q2_NAME}-vpa -o jsonpath='{.status.recommendation.containerRecommendations[?(@.containerName=="web")].target.cpu}' | grep -q . && echo yes || echo no
+        expect: { equals: yes }
+        weight: 2
+        retrySeconds: 180
+      - id: q2-vpa-requests-only
+        description: only requests are controlled for web
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get vpa ${Q2_NAME}-vpa -o jsonpath='{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].controlledValues}'
+        expect: { equals: RequestsOnly }
+        weight: 1
+      - id: q2-vpa-cpu-only
+        description: only CPU is controlled for web
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get vpa ${Q2_NAME}-vpa -o jsonpath='{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].controlledResources[*]}'
+        expect: { equals: cpu }
+        weight: 1
+      - id: q2-vpa-bounds
+        description: web is bounded to at least ${Q2_BOUNDS_MINCPU} CPU and at most ${Q2_BOUNDS_MAXMEM} memory
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get vpa ${Q2_NAME}-vpa -o jsonpath='{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].minAllowed.cpu}/{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].maxAllowed.memory}'
+        expect: { equals: "${Q2_BOUNDS_MINCPU}/${Q2_BOUNDS_MAXMEM}" }
+        weight: 1
+      - id: q2-vpa-mode
+        description: ${Q2_NAME}-vpa targets Deployment ${Q2_NAME} and switched away from mode ${Q2_MODE}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get vpa ${Q2_NAME}-vpa -o jsonpath='{.spec.targetRef.kind}/{.spec.targetRef.name}/{.spec.updatePolicy.updateMode}'
+        expect: { matches: "^Deployment/${Q2_NAME}/(Recreate|Initial)$", notContains: "/${Q2_MODE}" }
+        weight: 3
+    hints:
+      - "There is no kubectl create for it: write apiVersion autoscaling.k8s.io/v1, kind VerticalPodAutoscaler, with spec.targetRef and spec.updatePolicy.updateMode (kubectl explain vpa.spec)."
+      - kubectl -n ${Q2_NS} describe vpa ${Q2_NAME}-vpa shows the recommendation once the recommender has run (about a minute).
+      - "controlledValues: RequestsOnly in the container policy (the default is RequestsAndLimits)."
+      - "controlledResources: [cpu] in the container policy."
+      - "spec.resourcePolicy.containerPolicies: [{containerName: web, minAllowed: {cpu: ...}, maxAllowed: {memory: ...}}]."
+      - kubectl -n ${Q2_NS} patch vpa ${Q2_NAME}-vpa --type=merge -p '{"spec":{"updatePolicy":{"updateMode":"..."}}}', or kubectl edit vpa.
+    recipe: { builder: vpa, parts: [ requests-only, cpu-only, bounds, switch-mode ] }

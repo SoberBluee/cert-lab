@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { BlueprintSummary, CreateScenarioRequest, Domain } from '@cka/schema';
+import type { BlueprintSummary, CkaDomain, CreateScenarioRequest, Domain } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
 import { api, studioApi } from '../api';
 import { Button, buttonClass, Card, Difficulty, DomainBadge, ErrorBanner } from '../components/ui';
@@ -9,7 +9,7 @@ import { TRACKS } from '../studio/tracks';
 
 const input = 'w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600';
 
-const TOPIC_BLURBS: Record<Domain, string> = {
+const TOPIC_BLURBS: Record<CkaDomain, string> = {
   'cluster-architecture': 'RBAC, kubeadm, etcd, upgrades',
   workloads: 'Deployments, scheduling, config',
   'services-networking': 'Services, Ingress, NetworkPolicy, DNS',

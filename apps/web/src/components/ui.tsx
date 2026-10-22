@@ -60,6 +60,10 @@ const domainStyles: Record<Domain, string> = {
   'services-networking': 'text-sky-300 bg-sky-500/10',
   storage: 'text-amber-300 bg-amber-500/10',
   troubleshooting: 'text-rose-300 bg-rose-500/10',
+  'secure-architectures': 'text-rose-300 bg-rose-500/10',
+  'resilient-architectures': 'text-emerald-300 bg-emerald-500/10',
+  'high-performing-architectures': 'text-sky-300 bg-sky-500/10',
+  'cost-optimized-architectures': 'text-amber-300 bg-amber-500/10',
 };
 
 export function DomainBadge({ domain }: { domain: Domain }) {

@@ -1,0 +1,52 @@
+id: quick-lab-e2d1um
+title: "Quick lab: Dynamic provisioning"
+domain: storage
+difficulty: 2
+estimatedMinutes: 8
+points: 5
+tags: [ troubleshooting, storageclass, dynamic-provisioning, pvc, local-path ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ assets, thumbnails, exports, imports, archive-ns, renders, logs-ns, mail, images, staging-data ] }
+  Q1_CLAIM: { oneOf: [ assets, renders, exports, store, blobs, cache, spool, drafts, outbox, vault ] }
+  Q1_FAULT: { oneOf: [ provisioner-typo, no-class, rwop-taken, hostpath-missing, claim-elsewhere ], hidden: true }
+tasks:
+  - id: q1
+    title: Pod ${Q1_CLAIM}-app never starts
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-bound
+        description: PVC ${Q1_CLAIM} is Bound through StorageClass ${Q1_CLAIM}-local
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pvc ${Q1_CLAIM} -o jsonpath='{.status.phase} {.spec.storageClassName}'
+        expect: { equals: "Bound ${Q1_CLAIM}-local" }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-running
+        description: Pod ${Q1_CLAIM}-app runs with claim ${Q1_CLAIM} at /data
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pod ${Q1_CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[?(@.persistentVolumeClaim)].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+        expect: { matches: "^Running ${Q1_CLAIM} .*/data" }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-provisioned
+        description: the volume was provisioned by rancher.io/local-path
+        type: kubectl
+        run: pv=$(kubectl -n ${Q1_NS} get pvc ${Q1_CLAIM} -o jsonpath='{.spec.volumeName}'); [ -n "$pv" ] && kubectl get pv "$pv" -o jsonpath='{.metadata.annotations.pv\.kubernetes\.io/provisioned-by}' || echo none
+        expect: { equals: rancher.io/local-path }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - "kubectl -n ${Q1_NS} describe pod ${Q1_CLAIM}-app: is it waiting to be scheduled, waiting for its claim, or failing to mount? The Events say which."
+      - "kubectl -n ${Q1_NS} describe pvc ${Q1_CLAIM}: the Events of a Pending claim say who is supposed to provision it, and what they are waiting for."
+      - "Compare the claim and the StorageClass with what the provisioner really offers: kubectl get storageclass, kubectl -n local-path-storage logs deploy/local-path-provisioner."
+      - "Many fields of StorageClasses, claims and Pods cannot be edited: delete and re-create them with the same names."
+    recipe: { category: provisioning }

@@ -81,6 +81,8 @@ function planCheck(check: Check): Plan {
   switch (check.type) {
     case 'kubectl':
       return { node: 'controlplane', command: check.run, expect: check.expect, env: ADMIN_KUBECONFIG };
+    case 'aws':
+      return { node: 'controlplane', command: check.run, expect: check.expect };
     case 'ssh':
       return { node: check.node, command: check.run, expect: check.expect, env: ADMIN_KUBECONFIG };
     case 'script':

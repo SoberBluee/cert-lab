@@ -32,7 +32,7 @@ export const vpaCategory: FaultCategory = {
   domain: 'workloads',
   difficulty: 3,
   minutes: 10,
-  points: 8,
+  points: 14,
   tags: ['troubleshooting', 'vpa', 'autoscaling', 'resources'],
   settleSeconds: 20,
   fields: [
@@ -111,12 +111,21 @@ kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=120s >/dev/null 
         retrySeconds: 180,
       },
       {
+        id: 'vpa-components',
+        description: 'recommender, updater and admission controller are ready in namespace vpa',
+        type: 'kubectl',
+        run: `kubectl -n vpa get deploy vpa-recommender vpa-updater vpa-admission-controller -o jsonpath='{range .items[*]}{.status.readyReplicas}{" "}{end}' | xargs`,
+        expect: { equals: '1 1 1' },
+        weight: 2,
+        retrySeconds: 120,
+      },
+      {
         id: 'vpa-applied',
         description: `running Pods of ${APP} got their requests from the VPA`,
         type: 'kubectl',
         run: `kubectl -n ${NS} get pods -l app=${APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.annotations.vpaUpdates}{"\\n"}{end}' | grep -c 'updated by' || true`,
         expect: { gte: 2 },
-        weight: 2,
+        weight: 6,
         retrySeconds: 120,
       },
       {

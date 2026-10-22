@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@cka/driver-fake": "*",
+    "@cka/driver-floci": "*",
     "@cka/driver-multipass": "*",
     "@cka/driver-tart": "*",
     "@cka/driver-vm-common": "*",

@@ -1,0 +1,45 @@
+id: aws-vpc-gateway-endpoints
+title: Stop paying NAT charges for S3 and DynamoDB traffic
+track: aws
+domain: cost-optimized-architectures
+difficulty: 1
+estimatedMinutes: 8
+points: 5
+tags: [vpc-endpoints, gateway-endpoint, nat-gateway, s3, dynamodb]
+base: floci
+settleSeconds: 5
+setup:
+  - script: setup/network.sh
+checks:
+  - id: s3-endpoint
+    description: A gateway endpoint for S3 in analytics-vpc is attached to private-rt
+    type: aws
+    weight: 2
+    run: |
+      vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=analytics-vpc --query 'Vpcs[0].VpcId' --output text)
+      rt=$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=private-rt --query 'RouteTables[0].RouteTableId' --output text)
+      aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=$vpc Name=service-name,Values=com.amazonaws.us-east-1.s3 \
+        --query 'VpcEndpoints[].[VpcEndpointType,join(`,`,RouteTableIds)]' --output text | sed "s/$rt/private-rt/g" | xargs
+    expect: { equals: "Gateway private-rt" }
+  - id: dynamodb-endpoint
+    description: A gateway endpoint for DynamoDB in analytics-vpc is attached to private-rt
+    type: aws
+    weight: 2
+    run: |
+      vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=analytics-vpc --query 'Vpcs[0].VpcId' --output text)
+      rt=$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=private-rt --query 'RouteTables[0].RouteTableId' --output text)
+      aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=$vpc Name=service-name,Values=com.amazonaws.us-east-1.dynamodb \
+        --query 'VpcEndpoints[].[VpcEndpointType,join(`,`,RouteTableIds)]' --output text | sed "s/$rt/private-rt/g" | xargs
+    expect: { equals: "Gateway private-rt" }
+  - id: nat-route-kept
+    description: private-rt still sends other internet traffic to the NAT gateway
+    type: aws
+    run: |
+      vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=analytics-vpc --query 'Vpcs[0].VpcId' --output text)
+      aws ec2 describe-route-tables --filters Name=vpc-id,Values=$vpc Name=tag:Name,Values=private-rt \
+        --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].NatGatewayId|[0]" --output text | cut -c1-4
+    expect: { equals: "nat-" }
+hints:
+  - "Gateway endpoints exist only for S3 and DynamoDB, cost nothing, and work by adding routes to the route tables you name."
+  - "aws ec2 create-vpc-endpoint --vpc-id ... --vpc-endpoint-type Gateway --service-name com.amazonaws.us-east-1.s3 --route-table-ids <private-rt>"
+  - "Pass --route-table-ids when you create the endpoint: Floci cannot change an endpoint's route tables afterwards (ModifyVpcEndpoint)."

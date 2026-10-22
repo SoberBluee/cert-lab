@@ -1,0 +1,90 @@
+id: aws-sg-three-tier
+title: Lock down a three-tier app with security groups
+track: aws
+domain: secure-architectures
+difficulty: 2
+estimatedMinutes: 12
+points: 8
+tags: [security-groups, least-privilege, vpc, three-tier]
+base: floci
+settleSeconds: 5
+variables:
+  APP_PORT: { oneOf: [8080, 8443, 9000] }
+  DB_PORT: { oneOf: [3306, 5432] }
+setup:
+  - script: setup/groups.sh
+tasks:
+  - id: q1
+    title: Web tier
+    points: 2
+    checks:
+      - id: q1-web-https-only
+        description: web-sg allows HTTPS (443) from anywhere and nothing else
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=shop-vpc --query 'Vpcs[0].VpcId' --output text)
+          aws ec2 describe-security-groups --filters Name=vpc-id,Values=$vpc Name=group-name,Values=web-sg \
+            --query 'SecurityGroups[].IpPermissions[].[IpProtocol,FromPort,ToPort,join(`,`,UserIdGroupPairs[].GroupId),join(`,`,IpRanges[].CidrIp)]' \
+            --output text | sort | xargs
+        expect: { equals: "tcp 443 443 0.0.0.0/0" }
+    hints:
+      - "Look at what is there first: aws ec2 describe-security-groups --filters Name=group-name,Values=web-sg --query 'SecurityGroups[0].IpPermissions'"
+      - "aws ec2 revoke-security-group-ingress takes the same arguments as the authorize command that created the rule."
+  - id: q2
+    title: Application tier
+    points: 3
+    checks:
+      - id: q2-app-from-web
+        description: app-sg allows TCP ${APP_PORT} from web-sg
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=shop-vpc --query 'Vpcs[0].VpcId' --output text)
+          sg() { aws ec2 describe-security-groups --filters Name=vpc-id,Values=$vpc Name=group-name,Values=$1 --query 'SecurityGroups[0].GroupId' --output text; }
+          web=$(sg web-sg)
+          aws ec2 describe-security-groups --group-ids $(sg app-sg) \
+            --query "SecurityGroups[0].IpPermissions[?FromPort==\`${APP_PORT}\` && ToPort==\`${APP_PORT}\`].UserIdGroupPairs[].GroupId" --output text \
+            | tr '\t' '\n' | grep -qx "$web" && echo "from web-sg" || echo "not from web-sg"
+        expect: { equals: "from web-sg" }
+      - id: q2-app-only-web
+        description: app-sg has no other inbound rules
+        type: aws
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=shop-vpc --query 'Vpcs[0].VpcId' --output text)
+          web=$(aws ec2 describe-security-groups --filters Name=vpc-id,Values=$vpc Name=group-name,Values=web-sg --query 'SecurityGroups[0].GroupId' --output text)
+          aws ec2 describe-security-groups --filters Name=vpc-id,Values=$vpc Name=group-name,Values=app-sg \
+            --query 'SecurityGroups[].IpPermissions[].[IpProtocol,FromPort,ToPort,join(`,`,UserIdGroupPairs[].GroupId),join(`,`,IpRanges[].CidrIp)]' \
+            --output text | sed "s/$web/web-sg/g" | sort | xargs
+        expect: { equals: "tcp ${APP_PORT} ${APP_PORT} web-sg" }
+    hints:
+      - "Chain the tiers by security group: --source-group <web-sg id> instead of a CIDR, so only members of web-sg can connect."
+      - "A rule open to 0.0.0.0/0 on the app port lets the whole internet skip the web tier."
+  - id: q3
+    title: Database tier
+    points: 3
+    checks:
+      - id: q3-db-from-app
+        description: db-sg allows TCP ${DB_PORT} from app-sg
+        type: aws
+        weight: 2
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=shop-vpc --query 'Vpcs[0].VpcId' --output text)
+          sg() { aws ec2 describe-security-groups --filters Name=vpc-id,Values=$vpc Name=group-name,Values=$1 --query 'SecurityGroups[0].GroupId' --output text; }
+          app=$(sg app-sg)
+          aws ec2 describe-security-groups --group-ids $(sg db-sg) \
+            --query "SecurityGroups[0].IpPermissions[?FromPort==\`${DB_PORT}\` && ToPort==\`${DB_PORT}\`].UserIdGroupPairs[].GroupId" --output text \
+            | tr '\t' '\n' | grep -qx "$app" && echo "from app-sg" || echo "not from app-sg"
+        expect: { equals: "from app-sg" }
+      - id: q3-db-only-app
+        description: db-sg has no other inbound rules, not even from inside the VPC
+        type: aws
+        run: |
+          vpc=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=shop-vpc --query 'Vpcs[0].VpcId' --output text)
+          app=$(aws ec2 describe-security-groups --filters Name=vpc-id,Values=$vpc Name=group-name,Values=app-sg --query 'SecurityGroups[0].GroupId' --output text)
+          aws ec2 describe-security-groups --filters Name=vpc-id,Values=$vpc Name=group-name,Values=db-sg \
+            --query 'SecurityGroups[].IpPermissions[].[IpProtocol,FromPort,ToPort,join(`,`,UserIdGroupPairs[].GroupId),join(`,`,IpRanges[].CidrIp)]' \
+            --output text | sed "s/$app/app-sg/g" | sort | xargs
+        expect: { equals: "tcp ${DB_PORT} ${DB_PORT} app-sg" }
+    hints:
+      - "The VPC CIDR is not least privilege: every instance in the VPC, including the web tier, could reach the database."

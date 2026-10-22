@@ -3,7 +3,7 @@ title: Full mock exam
 domain: services-networking
 difficulty: 3
 estimatedMinutes: 120
-points: 105
+points: 111
 tags: [ troubleshooting, ingress, gateway-api, httproute, pv, labels, node, kubelet, containerd, kubectl-top, logs, sort-by, metrics-server, drain, pdb, disruption, etcd, restore, static-pod, admission, resourcequota, limitrange, pod-security, webhook, resources, job, priorityclass, serviceaccount-token, backup, status-table, storageclass, dynamic-provisioning, pvc, local-path, service, loadbalancer, endpointslice, networkpolicy, scheduling, taints, helm, replicas, values-file, certificates, pki, kubeadm, renew, dns, coredns, vpa, autoscaling ]
 base: cluster
 nodes: { controlPlane: 1, workers: 2 }
@@ -695,7 +695,7 @@ tasks:
   - id: q16
     title: VPA for ${Q16_APP} not working
     recipe: { category: vpa }
-    points: 8
+    points: 14
     context: k8s-alpha
     setup:
       - node: controlplane
@@ -722,12 +722,19 @@ tasks:
         expect: { equals: yes }
         weight: 2
         retrySeconds: 180
+      - id: q16-vpa-components
+        description: recommender, updater and admission controller are ready in namespace vpa
+        type: kubectl
+        run: kubectl -n vpa get deploy vpa-recommender vpa-updater vpa-admission-controller -o jsonpath='{range .items[*]}{.status.readyReplicas}{" "}{end}' | xargs
+        expect: { equals: "1 1 1" }
+        weight: 2
+        retrySeconds: 120
       - id: q16-vpa-applied
         description: running Pods of ${Q16_APP} got their requests from the VPA
         type: kubectl
         run: kubectl -n ${Q16_NS} get pods -l app=${Q16_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.annotations.vpaUpdates}{"\n"}{end}' | grep -c 'updated by' || true
         expect: { gte: 2 }
-        weight: 2
+        weight: 6
         retrySeconds: 120
       - id: q16-ready
         description: ${Q16_APP} has at least 2 ready replicas

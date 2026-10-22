@@ -1,0 +1,104 @@
+id: aws-sns-sqs-fanout
+title: Fan out order events with SNS and SQS
+track: aws
+domain: resilient-architectures
+difficulty: 2
+estimatedMinutes: 15
+points: 8
+tags: [sns, sqs, dead-letter-queue, decoupling, fan-out]
+base: floci
+settleSeconds: 5
+variables:
+  TOPIC: { oneOf: [order-events, checkout-events, payment-events] }
+  MAX_RECEIVES: { oneOf: [3, 4, 5] }
+tasks:
+  - id: q1
+    title: Queues with a dead-letter queue
+    points: 4
+    checks:
+      - id: q1-redrive
+        description: billing and shipping move a message to orders-dlq after ${MAX_RECEIVES} receives
+        type: aws
+        weight: 2
+        run: |
+          for q in billing shipping; do
+            url=$(aws sqs get-queue-url --queue-name $q --query QueueUrl --output text 2>/dev/null) || { echo "$q:missing"; continue; }
+            aws sqs get-queue-attributes --queue-url "$url" --attribute-names RedrivePolicy --query Attributes.RedrivePolicy --output text |
+              python3 -c 'import json, sys
+          t = sys.stdin.read().strip()
+          p = json.loads(t) if t.startswith("{") else {}
+          print("%s:%s:%s" % (sys.argv[1], str(p.get("deadLetterTargetArn", "none")).split(":")[-1], p.get("maxReceiveCount", "none")))' $q
+          done | xargs
+        expect: { equals: "billing:orders-dlq:${MAX_RECEIVES} shipping:orders-dlq:${MAX_RECEIVES}" }
+      - id: q1-visibility
+        description: billing and shipping hide a received message for 60 seconds
+        type: aws
+        run: |
+          for q in billing shipping; do
+            url=$(aws sqs get-queue-url --queue-name $q --query QueueUrl --output text 2>/dev/null) || { echo missing; continue; }
+            aws sqs get-queue-attributes --queue-url "$url" --attribute-names VisibilityTimeout --query Attributes.VisibilityTimeout --output text
+          done | xargs
+        expect: { equals: "60 60" }
+      - id: q1-dlq-retention
+        description: orders-dlq keeps messages for 14 days
+        type: aws
+        run: |
+          url=$(aws sqs get-queue-url --queue-name orders-dlq --query QueueUrl --output text 2>&1) || { echo "$url"; exit; }
+          aws sqs get-queue-attributes --queue-url "$url" --attribute-names MessageRetentionPeriod --query Attributes.MessageRetentionPeriod --output text
+        expect: { equals: "1209600" }
+    hints:
+      - "Create orders-dlq first: the redrive policy of the other queues names its ARN (aws sqs get-queue-attributes --attribute-names QueueArn)."
+      - "RedrivePolicy is a JSON string inside the attributes JSON: {\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"arn:...\\\",\\\"maxReceiveCount\\\":\\\"3\\\"}\"}. Writing the attributes to a file and passing --attributes file://attrs.json is easier."
+      - "14 days is 1209600 seconds, the maximum MessageRetentionPeriod."
+  - id: q2
+    title: Fan out from one topic
+    points: 4
+    checks:
+      - id: q2-subscriptions
+        description: billing and shipping are subscribed to ${TOPIC}
+        type: aws
+        weight: 2
+        run: |
+          arn=$(aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${TOPIC}')].TopicArn|[0]" --output text)
+          aws sns list-subscriptions-by-topic --topic-arn "$arn" --query 'Subscriptions[].[Protocol,Endpoint]' --output text 2>&1 |
+            awk '{ n = split($2, a, ":"); print $1 ":" a[n] }' | sort | xargs
+        expect: { equals: "sqs:billing sqs:shipping" }
+      - id: q2-raw
+        description: Both subscriptions deliver the raw message, without the SNS envelope
+        type: aws
+        run: |
+          arn=$(aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${TOPIC}')].TopicArn|[0]" --output text)
+          for s in $(aws sns list-subscriptions-by-topic --topic-arn "$arn" --query 'Subscriptions[].SubscriptionArn' --output text 2>/dev/null); do
+            aws sns get-subscription-attributes --subscription-arn "$s" --query 'Attributes.[Endpoint,RawMessageDelivery]' --output text
+          done | awk '{ n = split($1, a, ":"); print a[n] ":" $2 }' | sort | xargs
+        expect: { equals: "billing:true shipping:true" }
+      - id: q2-queue-policies
+        description: The access policies of billing and shipping let ${TOPIC}, and only it, send messages
+        type: aws
+        run: |
+          arn=$(aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${TOPIC}')].TopicArn|[0]" --output text)
+          for q in billing shipping; do
+            url=$(aws sqs get-queue-url --queue-name $q --query QueueUrl --output text 2>/dev/null) || { echo "$q:missing"; continue; }
+            aws sqs get-queue-attributes --queue-url "$url" --attribute-names Policy --query Attributes.Policy --output text |
+              python3 -c 'import json, sys
+          q, topic = sys.argv[1], sys.argv[2]
+          t = sys.stdin.read().strip()
+          doc = json.loads(t) if t.startswith("{") else {}
+          stmts = doc.get("Statement", [])
+          stmts = stmts if isinstance(stmts, list) else [stmts]
+          def listify(v): return v if isinstance(v, list) else [v]
+          def ok(s):
+              if s.get("Effect") != "Allow": return False
+              p = s.get("Principal", {})
+              svc = listify(p.get("Service", [])) if isinstance(p, dict) else []
+              if "sns.amazonaws.com" not in svc: return False
+              if not set(listify(s.get("Action", []))) & {"sqs:SendMessage", "sqs:*"}: return False
+              conds = [v for c in s.get("Condition", {}).values() for k, v in c.items() if k.lower() == "aws:sourcearn"]
+              return any(topic in listify(v) for v in conds)
+          print("%s:%s" % (q, "topic-only" if any(ok(s) for s in stmts) else "no"))' $q "$arn"
+          done | xargs
+        expect: { equals: "billing:topic-only shipping:topic-only" }
+    hints:
+      - "aws sns subscribe --topic-arn ... --protocol sqs --notification-endpoint <queue ARN> --attributes RawMessageDelivery=true"
+      - "A queue only accepts messages from SNS when its access policy allows sns.amazonaws.com to sqs:SendMessage, with a condition on aws:SourceArn equal to the topic ARN."
+      - "Set the policy with aws sqs set-queue-attributes --queue-url ... --attributes file://policy-attrs.json, where the file holds {\"Policy\": \"<the policy JSON as a string>\"}."

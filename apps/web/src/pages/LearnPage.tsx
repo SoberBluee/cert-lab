@@ -43,6 +43,8 @@ const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
       files: { name: 'Files and text', blurb: 'find, grep, sed, awk, base64, tar and permissions' },
     },
   },
+  // AWS Labs has scenarios only so far; this keeps the record complete.
+  aws: { intro: 'AWS lessons are not written yet. Practise with the scenarios instead.', topics: {} },
 };
 
 export function LearnPage({ track }: { track: LessonTrack }) {

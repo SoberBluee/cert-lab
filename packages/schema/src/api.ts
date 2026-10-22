@@ -448,3 +448,13 @@ export interface TryCheckResult {
   check: CheckResult;
   vars: Record<string, string>;
 }
+
+/** GET /api/aws/status: whether aws scenarios can start. */
+export interface FlociStatus {
+  endpoint: string;
+  reachable: boolean;
+  version?: string;
+  /** AWS CLI version; absent when `aws` is not on PATH. */
+  cli?: string;
+  error?: string;
+}

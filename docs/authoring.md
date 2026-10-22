@@ -119,8 +119,26 @@ Every setup step, solution step and check runs as **root** with `KUBECONFIG=/etc
 | `ssh`     | `node`           | `run`, `expect`                                    |
 | `script`  | `node` (default controlplane) | `script` (path in the scenario), `args`, optional `expect` (default `exitCode: 0`) |
 | `file`    | `node` (default controlplane) | `path`, `exists` (default true), `contains`, `matches`, `sha256` |
+| `aws`     | this machine, against Floci (aws scenarios only) | `run`, `expect` |
 
 Common fields: `id`, `description` (shown to the user after grading), `weight` (default 1), and `retrySeconds`, which overrides `settleSeconds`.
+
+### AWS scenarios
+
+AWS Labs scenarios live in `scenarios/aws/<domain>/<id>/` and use the same files as the Kubernetes ones (`scenario.yaml`, `task.md` or `tasks/`, `setup/`, `solution.md`, `solution.sh`), with these differences:
+
+- `track: aws`, `base: floci`, and one of the SAA-C03 domains: `secure-architectures`, `resilient-architectures`, `high-performing-architectures`, `cost-optimized-architectures`.
+- There are no nodes. Steps need no `node:`, and setup, solution and checks all run in bash on this machine, with the AWS CLI pointed at the session's own Floci account (see [setup](setup.md#aws-labs-floci)). `$AWS_ACCOUNT_ID` holds the account id, for building ARNs.
+- Checks are `aws` (a command and `expect`) or `script`; `kubectl` and `ssh` checks are refused.
+- Every attempt starts with an empty account, so setup creates everything the task assumes. Do not rely on the default VPC.
+- Find resources by the names the task gives (`--filters Name=tag:Name,Values=...`, `--group-name`, `--names`), never by generated ids.
+- Print one line that names what is wrong: map ids back to names (`sed "s/$sg/app-sg/"`), join lines with `xargs`, and compare with `equals`. A check that prints `public-a:igw public-b:None` tells the learner which subnet is missing a route; a check that prints a bare id does not.
+- Guard lookups whose id may be empty: `aws ec2 describe-subnets --subnet-ids` with no ids lists every subnet. Add `2>&1` where an error message is the useful output.
+- Parse JSON documents (bucket, queue and IAM policies) with `python3 -c`; JMESPath cannot look inside a policy string. For permissions, prefer `aws iam simulate-principal-policy`: it grades what a policy allows, however it is written.
+- Use `settleSeconds: 5`. AWS state changes immediately, so long retry windows only slow grading down.
+- Floci accepts much of what AWS would reject (see [setup](setup.md#aws-labs-floci)), so check exact values rather than relying on errors.
+
+`./cka dry-run` and `./cka verify` work as for the other scenarios and need only Floci running.
 
 Expectation operators, all of which must hold: `equals`, `contains`, `notContains`, `matches` (regex, multiline), `exitCode`, `notEmpty`, `gte`, `lte`. Comparisons use stdout with surrounding whitespace trimmed. A command that fails without an `exitCode` operator is judged only on its stdout.
 

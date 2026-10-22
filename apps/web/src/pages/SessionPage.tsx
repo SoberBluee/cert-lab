@@ -231,6 +231,7 @@ function TaskPane(props: {
 /** Shown after End: final score and a way to retry. */
 function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () => void }) {
   const qc = useQueryClient();
+  const aws = useSection() === 'aws';
   const playground = ended.mode === 'playground';
   const exam = ended.mode === 'mock';
   const lesson = ended.mode === 'learn' ? ended.lesson : undefined;
@@ -276,11 +277,11 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
           <Button variant="primary" onClick={() => retry.mutate()} disabled={retry.isPending}>
             {retry.isPending ? 'Starting…' : playground ? 'Start a new playground' : lesson ? 'Drill it again' : exam ? 'Retake exam' : 'Retry scenario'}
           </Button>
-          <Link to={lesson ? `${SECTIONS[lesson.track].base}/learn` : '/'} className={buttonClass()}>
+          <Link to={lesson ? `${SECTIONS[lesson.track].base}/learn` : aws ? '/aws/scenarios' : '/'} className={buttonClass()}>
             {lesson ? 'Back to lessons' : 'Back to scenarios'}
           </Link>
           {lesson?.track !== 'linux' && (
-            <Link to="/history" className={buttonClass('ghost')}>
+            <Link to={aws ? '/aws/history' : '/history'} className={buttonClass('ghost')}>
               History
             </Link>
           )}
@@ -367,22 +368,26 @@ export function SessionPage() {
   const canSolution = !!session && session.mode === 'practice' && !session.solutionViewed && !!scenario.data?.hasSolution && state !== 'provisioning';
   const canSubmit = exam && state === 'running' && !submit.isPending;
 
+  // aws labs have no VMs or snapshots: a reset is a fresh account, ending removes the session's resources.
+  const aws = session?.base === 'floci';
+  const fresh = aws ? 'A fresh AWS account is set up' : 'The snapshot is restored';
+  const teardown = aws ? "remove the lab's AWS resources" : 'stop the lab VMs';
   const doReset = () => {
-    if (canReset && confirm('Reset the lab? The snapshot is restored and your changes are lost.')) reset.mutate();
+    if (canReset && confirm(`Reset the lab? ${fresh} and your changes are lost.`)) reset.mutate();
   };
   const canReroll = !!session?.rerollable && (state === 'running' || state === 'failed') && !reroll.isPending && !reset.isPending;
   const doReroll = () => {
-    if (canReroll && confirm('Roll a new variant? The snapshot is restored and a different version of the question is set up.')) reroll.mutate();
+    if (canReroll && confirm(`Roll a new variant? ${fresh} and a different version of the question is set up.`)) reroll.mutate();
   };
   const doSolution = () => {
     if (canSolution && confirm('Reveal the solution? This attempt will be marked as assisted.')) solution.mutate();
   };
   const doEnd = () => {
-    const msg = exam ? 'Abandon the exam without a score and stop the lab VMs?' : 'End the session and stop the lab VMs?';
+    const msg = exam ? `Abandon the exam without a score and ${teardown}?` : `End the session and ${teardown}?`;
     if (confirm(msg)) end.mutate();
   };
   const doSubmit = () => {
-    if (canSubmit && confirm('Submit the exam? Your answers are checked once and the lab VMs are stopped.')) submit.mutate();
+    if (canSubmit && confirm(`Submit the exam? Your answers are checked once and ${aws ? "the lab's AWS resources are removed" : 'the lab VMs are stopped'}.`)) submit.mutate();
   };
 
   const autoSubmitted = useRef<string | null>(null);
@@ -441,7 +446,7 @@ export function SessionPage() {
     return (
       <div className="mx-auto max-w-md pt-16 text-center">
         <p className="mb-4 text-zinc-400">No active session.</p>
-        <Link to={section === 'linux' ? '/linux/learn' : '/'} className={buttonClass('primary')}>
+        <Link to={section === 'linux' ? '/linux/learn' : section === 'aws' ? '/aws/scenarios' : '/'} className={buttonClass('primary')}>
           {section === 'linux' ? 'Choose a lesson' : 'Choose a scenario'}
         </Link>
       </div>
@@ -496,7 +501,7 @@ export function SessionPage() {
             </Button>
           )}
           {session.rerollable && (
-            <Button disabled={!canReroll} onClick={doReroll} title="Restore the snapshot and set up a different variant of this question">
+            <Button disabled={!canReroll} onClick={doReroll} title={aws ? 'Start a fresh AWS account with a different variant of this question' : 'Restore the snapshot and set up a different variant of this question'}>
               {reroll.isPending ? 'Rolling…' : 'New variant'}
             </Button>
           )}
@@ -590,7 +595,7 @@ export function SessionPage() {
           {(session.state === 'grading' || grade.isPending || submit.isPending) && (
             <div className="rounded-xl border border-sky-900 bg-sky-950/30 px-4 py-3 text-sm text-sky-200">
               {exam
-                ? 'Submitting… your answers are being checked, then the lab VMs are stopped.'
+                ? `Submitting… your answers are being checked, then ${aws ? "the lab's AWS resources are removed" : 'the lab VMs are stopped'}.`
                 : 'Grading… checks that are not yet satisfied are retried for up to 30 seconds.'}
             </div>
           )}
@@ -624,7 +629,7 @@ export function SessionPage() {
               <ProgressLog session={session} compact />
             </Card>
           )}
-          {!exam && <ReferencePanel />}
+          {!exam && <ReferencePanel aws={Boolean(session.connection?.aws) || section === 'aws'} />}
         </aside>
       </div>
     </div>

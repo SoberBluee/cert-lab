@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { LabTopic, LessonTrack, ScenarioSummary } from '@cka/schema';
-import { DOMAINS } from '@cka/schema/constants';
+import { AWS_DOMAINS, DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
 import { isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
@@ -45,18 +45,21 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   const session = useSession().data;
   const active = isActive(session);
   const recipesReady = track === 'cka';
+  // aws scenarios run on Floci, not the lab VMs: no base images, no Quick lab recipes.
+  const aws = track === 'aws';
+  const domains = aws ? AWS_DOMAINS : DOMAINS;
 
   const baseFilter: ScenarioFilters = { track };
   const queryFilters = { ...filters, ...baseFilter };
   const all = useQuery({ queryKey: ['scenarios', baseFilter], queryFn: () => api.scenarios(baseFilter) });
   const filtered = useQuery({ queryKey: ['scenarios', queryFilters], queryFn: () => api.scenarios(queryFilters) });
-  const images = useQuery({ queryKey: ['images'], queryFn: api.images, retry: false });
+  const images = useQuery({ queryKey: ['images'], queryFn: api.images, retry: false, enabled: !aws });
 
   const tags = useMemo(
     () => [...new Set(all.data?.scenarios.flatMap((s) => s.tags) ?? [])].sort(),
     [all.data],
   );
-  const missingImages = images.data?.filter((i) => !i.available).map((i) => i.name) ?? [];
+  const missingImages = images.data?.filter((i) => !i.available && i.name !== 'floci').map((i) => i.name) ?? [];
 
   const [exam] = useExamMode();
   const start = useMutation({
@@ -201,7 +204,7 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
         />
         <select className={select} value={filters.domain ?? ''} onChange={set('domain')}>
           <option value="">All domains</option>
-          {DOMAINS.map((d) => (
+          {domains.map((d) => (
             <option key={d}>{d}</option>
           ))}
         </select>
@@ -269,99 +272,101 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
         )
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-zinc-300">Quick lab</span>
-        <select
-          className={select}
-          value={labKind}
-          onChange={(e) => setLabKind(e.target.value as LabKind)}
-          disabled={quickStart.isPending || !recipesReady}
-        >
-          {(Object.keys(KIND_LABELS) as LabKind[]).map((k) => (
-            <option key={k} value={k}>
-              {KIND_LABELS[k]}
-            </option>
-          ))}
-        </select>
-        <select
-          className={select}
-          value={chosenTopic?.id ?? 'any'}
-          onChange={(e) => setLabTopic(e.target.value)}
-          disabled={quickStart.isPending || !catalog.data || !recipesReady}
-        >
-          <option value="any">Any</option>
-          {labKind === 'random' ? (
-            <>
-              <optgroup label="Create">{topicOptions(topicChoices.filter((t) => t.group === 'create'))}</optgroup>
-              <optgroup label="Troubleshoot">{topicOptions(topicChoices.filter((t) => t.group === 'troubleshoot'))}</optgroup>
-            </>
-          ) : (
-            topicOptions(topicChoices)
-          )}
-        </select>
-        <label className="flex items-center gap-1.5 text-sm text-zinc-400">
-          <input
-            type="number"
-            min={1}
-            max={RANDOM_MAX}
-            className={`${select} w-16`}
-            value={labCount}
-            onChange={(e) => setLabCount(e.target.value)}
+      {!aws && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-zinc-300">Quick lab</span>
+          <select
+            className={select}
+            value={labKind}
+            onChange={(e) => setLabKind(e.target.value as LabKind)}
             disabled={quickStart.isPending || !recipesReady}
-          />
-          question{labN === 1 ? '' : 's'}
-        </label>
-        <select
-          className={select}
-          value={labLayers}
-          onChange={(e) => setLabLayers(e.target.value)}
-          disabled={quickStart.isPending || !recipesReady || labKind === 'create'}
-          title="Troubleshooting questions can stack several separate faults, one per layer (for example the Service, the Pods and a NetworkPolicy). Categories without layers stay single."
-        >
-          <option value="1">1 fault each</option>
-          <option value="2">2 faults stacked</option>
-          <option value="3">3 faults stacked</option>
-        </select>
-        <label
-          className="flex items-center gap-1.5 text-sm text-zinc-400"
-          title="Each question names its own kubeconfig context to switch to, as the exam names a host per task."
-        >
-          <input type="checkbox" checked={labContexts} onChange={(e) => setLabContexts(e.target.checked)} disabled={quickStart.isPending || !recipesReady} />
-          Per-question contexts
-        </label>
-        <Button
-          variant="primary"
-          disabled={active || !recipesReady || !catalog.data || quickStart.isPending || start.isPending}
-          title={
-            !recipesReady
-              ? 'Linux Quick lab recipes are not available yet'
-              : active
-                ? 'End the current session first'
-                : catalog.error
-                  ? 'Could not load the recipe catalog'
-                  : undefined
-          }
-          onClick={() =>
-            quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic, layers: labKind === 'create' ? 1 : Number(labLayers), contexts: labContexts })
-          }
-        >
-          {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
-        </Button>
-        <Button
-          disabled={active || !recipesReady || !catalog.data || quickStart.isPending || mockStart.isPending || start.isPending}
-          title={`${MOCK_QUESTIONS} questions weighted like the CKA curriculum, ${MOCK_MINUTES} minutes, exam mode, a kubeconfig context per question`}
-          onClick={() => mockStart.mutate()}
-        >
-          {mockStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : `Full mock (${MOCK_QUESTIONS} Qs, ${MOCK_MINUTES} min)`}
-        </Button>
-        <span className="text-xs text-zinc-500">
-          {!recipesReady
-            ? 'Linux Quick lab recipes are not available yet.'
-            : chosenTopic
-              ? `Questions from ${chosenTopic.label}, saved as a hidden draft.`
-              : 'A random lab from the recipe catalog, saved as a hidden draft.'}
-        </span>
-      </div>
+          >
+            {(Object.keys(KIND_LABELS) as LabKind[]).map((k) => (
+              <option key={k} value={k}>
+                {KIND_LABELS[k]}
+              </option>
+            ))}
+          </select>
+          <select
+            className={select}
+            value={chosenTopic?.id ?? 'any'}
+            onChange={(e) => setLabTopic(e.target.value)}
+            disabled={quickStart.isPending || !catalog.data || !recipesReady}
+          >
+            <option value="any">Any</option>
+            {labKind === 'random' ? (
+              <>
+                <optgroup label="Create">{topicOptions(topicChoices.filter((t) => t.group === 'create'))}</optgroup>
+                <optgroup label="Troubleshoot">{topicOptions(topicChoices.filter((t) => t.group === 'troubleshoot'))}</optgroup>
+              </>
+            ) : (
+              topicOptions(topicChoices)
+            )}
+          </select>
+          <label className="flex items-center gap-1.5 text-sm text-zinc-400">
+            <input
+              type="number"
+              min={1}
+              max={RANDOM_MAX}
+              className={`${select} w-16`}
+              value={labCount}
+              onChange={(e) => setLabCount(e.target.value)}
+              disabled={quickStart.isPending || !recipesReady}
+            />
+            question{labN === 1 ? '' : 's'}
+          </label>
+          <select
+            className={select}
+            value={labLayers}
+            onChange={(e) => setLabLayers(e.target.value)}
+            disabled={quickStart.isPending || !recipesReady || labKind === 'create'}
+            title="Troubleshooting questions can stack several separate faults, one per layer (for example the Service, the Pods and a NetworkPolicy). Categories without layers stay single."
+          >
+            <option value="1">1 fault each</option>
+            <option value="2">2 faults stacked</option>
+            <option value="3">3 faults stacked</option>
+          </select>
+          <label
+            className="flex items-center gap-1.5 text-sm text-zinc-400"
+            title="Each question names its own kubeconfig context to switch to, as the exam names a host per task."
+          >
+            <input type="checkbox" checked={labContexts} onChange={(e) => setLabContexts(e.target.checked)} disabled={quickStart.isPending || !recipesReady} />
+            Per-question contexts
+          </label>
+          <Button
+            variant="primary"
+            disabled={active || !recipesReady || !catalog.data || quickStart.isPending || start.isPending}
+            title={
+              !recipesReady
+                ? 'Linux Quick lab recipes are not available yet'
+                : active
+                  ? 'End the current session first'
+                  : catalog.error
+                    ? 'Could not load the recipe catalog'
+                    : undefined
+            }
+            onClick={() =>
+              quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic, layers: labKind === 'create' ? 1 : Number(labLayers), contexts: labContexts })
+            }
+          >
+            {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
+          </Button>
+          <Button
+            disabled={active || !recipesReady || !catalog.data || quickStart.isPending || mockStart.isPending || start.isPending}
+            title={`${MOCK_QUESTIONS} questions weighted like the CKA curriculum, ${MOCK_MINUTES} minutes, exam mode, a kubeconfig context per question`}
+            onClick={() => mockStart.mutate()}
+          >
+            {mockStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : `Full mock (${MOCK_QUESTIONS} Qs, ${MOCK_MINUTES} min)`}
+          </Button>
+          <span className="text-xs text-zinc-500">
+            {!recipesReady
+              ? 'Linux Quick lab recipes are not available yet.'
+              : chosenTopic
+                ? `Questions from ${chosenTopic.label}, saved as a hidden draft.`
+                : 'A random lab from the recipe catalog, saved as a hidden draft.'}
+          </span>
+        </div>
+      )}
 
       <ErrorBanner error={quickStart.error} onDismiss={() => quickStart.reset()} />
       <ErrorBanner error={mockStart.error} onDismiss={() => mockStart.reset()} />

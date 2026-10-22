@@ -181,8 +181,11 @@ export function lintScenarios(root = scenariosDir): { issues: LintIssue[]; scena
     for (const s of lib.list()) {
       const where = prefix + s.relDir;
       if (basename(s.dir) !== s.def.id) issues.push({ level: 'error', where, message: `directory name "${basename(s.dir)}" must equal id "${s.def.id}"` });
-      const domainDir = s.relDir.split(sep)[0];
-      if (domainDir !== s.def.domain) issues.push({ level: 'error', where, message: `scenario is in "${domainDir}/" but its domain is "${s.def.domain}"` });
+      // aws scenarios live under aws/<domain>/, apart from the Kubernetes domains.
+      const parts = s.relDir.split(sep);
+      const domainDir = s.def.track === 'aws' ? parts.slice(0, 2).join('/') : parts[0];
+      const wantDir = s.def.track === 'aws' ? `aws/${s.def.domain}` : s.def.domain;
+      if (domainDir !== wantDir) issues.push({ level: 'error', where, message: `scenario is in "${domainDir}/" but belongs in "${wantDir}/"` });
       issues.push(...lintScenario(s, diskReader(s.dir), where, meta));
     }
   };

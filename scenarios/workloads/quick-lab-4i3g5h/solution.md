@@ -1,0 +1,64 @@
+## Solution
+
+### Question 1: Deployment ${Q1_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "${Q1_NAME}"
+  namespace: "${Q1_NS}"
+  labels:
+    app: "${Q1_NAME}"
+spec:
+  replicas: ${Q1_REPLICAS}
+  selector:
+    matchLabels:
+      app: "${Q1_NAME}"
+  template:
+    metadata:
+      labels:
+        app: "${Q1_NAME}"
+    spec:
+      containers:
+        - name: app
+          image: "${Q1_IMAGE}"
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "${Q1_NAME}"
+  namespace: "${Q1_NS}"
+spec:
+  type: "${Q1_EXPOSE_TYPE}"
+  selector:
+    app: "${Q1_NAME}"
+  ports:
+    - port: ${Q1_EXPOSE_PORT}
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: "${Q1_NAME}"
+  namespace: "${Q1_NS}"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: "${Q1_INGRESS_SUB}.${Q1_NS}.lab"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: "${Q1_NAME}"
+                port:
+                  number: ${Q1_EXPOSE_PORT}
+EOF
+kubectl -n "${Q1_NS}" rollout status "deployment/${Q1_NAME}" --timeout=240s
+for _ in $(seq 1 30); do [[ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Host: ${Q1_INGRESS_SUB}.${Q1_NS}.lab' http://controlplane:30080/)" == 200 ]] && break; sleep 2; done
+```

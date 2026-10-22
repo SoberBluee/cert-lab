@@ -30,12 +30,32 @@ export interface NodeConnection {
   sshCommand: string;
 }
 
+/** Where an aws session's commands go: its own account on the local Floci emulator. */
+export interface AwsConnection {
+  endpoint: string;
+  region: string;
+  accountId: string;
+  /** Working directory of the browser terminal, for files the learner writes. */
+  workdir: string;
+  /** Points an AWS CLI in the learner's own terminal at this session. */
+  exportLine: string;
+}
+
 export interface ConnectionInfo {
   nodes: NodeConnection[];
   sshKeyPath: string;
   /** Absent for bare scenarios, where no cluster exists yet. */
   kubeconfigPath?: string;
   exportLine?: string;
+  /** Set for aws scenarios, whose terminal is a local shell rather than SSH to a node. */
+  aws?: AwsConnection;
+}
+
+/** A shell to run on this machine for the browser terminal. */
+export interface LocalShell {
+  command: string[];
+  cwd: string;
+  env: Record<string, string>;
 }
 
 export type ProgressFn = (message: string) => void;
@@ -58,4 +78,6 @@ export interface Driver {
   copyIn(sessionId: string, node: string, localPath: string, remotePath: string): Promise<void>;
   getConnectionInfo(sessionId: string): Promise<ConnectionInfo>;
   destroySession(sessionId: string): Promise<void>;
+  /** Backends whose terminal runs on this machine instead of over SSH. */
+  localShell?(sessionId: string): Promise<LocalShell>;
 }
