@@ -143,7 +143,8 @@ export function SystemApp() {
         {PREVIEWS.map((p) => (
           <Route key={p.id} path={`preview/${p.id}`} element={<p.Page />} />
         ))}
-        <Route path="*" element={<Navigate to="learn" replace />} />
+        {/* Absolute: in a catch-all route a relative path resolves against the unknown URL itself, and loops. */}
+        <Route path="*" element={<Navigate to="/system/learn" replace />} />
       </Routes>
     </Shell>
   );

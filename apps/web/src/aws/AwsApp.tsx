@@ -79,7 +79,8 @@ export function AwsApp() {
         />
         <Route path="session" element={<SessionPage />} />
         <Route path="history" element={<HistoryPage />} />
-        <Route path="*" element={<Navigate to="scenarios" replace />} />
+        {/* Absolute: in a catch-all route a relative path resolves against the unknown URL itself, and loops. */}
+        <Route path="*" element={<Navigate to="/aws/scenarios" replace />} />
       </Routes>
     </Shell>
   );
