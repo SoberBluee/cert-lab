@@ -3,13 +3,14 @@ import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { Shell, type NavItem } from '../components/Shell';
 import { SimShell, card } from './components';
 import { loadProgress, revisitIds } from './progress';
+import { CachingLab } from './sims/CachingLab';
 import { DnsSim } from './sims/DnsSim';
 import { IpSim } from './sims/IpSim';
 import { LbSim } from './sims/LbSim';
 import { OsiSim } from './sims/OsiSim';
 import { TcpUdpSim } from './sims/TcpUdpSim';
 import { TOPIC_MAP, TOPICS } from './topics';
-import type { SystemTopicId } from './types';
+import type { SystemTopicId, TopicGroup } from './types';
 
 const SIMS: Record<SystemTopicId, ComponentType> = {
   ip: IpSim,
@@ -17,13 +18,19 @@ const SIMS: Record<SystemTopicId, ComponentType> = {
   'tcp-udp': TcpUdpSim,
   dns: DnsSim,
   'load-balancing': LbSim,
+  caching: CachingLab,
 };
+
+const GROUPS: { id: TopicGroup; title: string; blurb: string }[] = [
+  { id: 'networking', title: 'Networking', blurb: 'How a request finds its way: addresses, layers, transports and names.' },
+  { id: 'building-blocks', title: 'Building blocks', blurb: 'The parts large systems are made of. Caching is a live stage: watch every request, break things, and pass missions.' },
+];
 
 const NAV: NavItem[] = [{ to: '/system/learn', label: 'Learn' }];
 
 function TopicIndex() {
   return (
-    <div className="mx-auto max-w-4xl space-y-5">
+    <div className="mx-auto max-w-4xl space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-zinc-100">System Labs</h1>
         <p className="mt-1 text-sm text-zinc-400">
@@ -41,25 +48,42 @@ function TopicIndex() {
           ; explanations and simulations here are original.
         </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {TOPICS.map((t, i) => {
-          const p = loadProgress(t.id);
-          const revisit = revisitIds(p);
-          return (
-            <Link key={t.id} to={`/system/learn/${t.id}`} className={`${card} group block transition hover:border-indigo-700`}>
-              <div className="text-xs tracking-wide text-indigo-400 uppercase">
-                {i + 1} · {t.level} · ~{t.estimatedMinutes} min
-              </div>
-              <div className="mt-1 font-semibold text-zinc-100 group-hover:text-indigo-200">{t.title}</div>
-              <p className="mt-1 text-sm text-zinc-400">{t.short}</p>
-              <div className="mt-3 text-xs text-zinc-500">
-                {p.completed ? <span className="text-emerald-400">Completed</span> : p.prediction ? 'In progress' : 'Not started'}
-                {revisit.length > 0 && <span className="ml-2 text-amber-300">{revisit.length} to revisit</span>}
-              </div>
-            </Link>
-          );
-        })}
-      </div>
+      {GROUPS.map((g) => (
+        <section key={g.id} aria-label={g.title} className="space-y-2">
+          <div>
+            <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">{g.title}</h2>
+            <p className="text-xs text-zinc-500">{g.blurb}</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {TOPICS.filter((t) => t.group === g.id).map((t) => {
+              const n = TOPICS.indexOf(t) + 1;
+              const p = loadProgress(t.id);
+              const revisit = revisitIds(p);
+              const missions = t.missions ?? [];
+              const passed = missions.filter((m) => p.missions[m.id]).length;
+              const started = !!p.prediction || passed > 0;
+              return (
+                <Link key={t.id} to={`/system/learn/${t.id}`} className={`${card} group block transition hover:border-indigo-700`}>
+                  <div className="text-xs tracking-wide text-indigo-400 uppercase">
+                    {n} · {t.level} · ~{t.estimatedMinutes} min{missions.length > 0 && ' · live stage'}
+                  </div>
+                  <div className="mt-1 font-semibold text-zinc-100 group-hover:text-indigo-200">{t.title}</div>
+                  <p className="mt-1 text-sm text-zinc-400">{t.short}</p>
+                  <div className="mt-3 text-xs text-zinc-500">
+                    {p.completed ? <span className="text-emerald-400">Completed</span> : started ? 'In progress' : 'Not started'}
+                    {missions.length > 0 && (
+                      <span className="ml-2">
+                        {passed} of {missions.length} missions
+                      </span>
+                    )}
+                    {revisit.length > 0 && <span className="ml-2 text-amber-300">{revisit.length} to revisit</span>}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

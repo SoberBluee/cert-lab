@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { loadProgress, revisitIds, saveProgress, type TopicProgress } from './progress';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { isComplete, loadProgress, missionsNeeded, revisitIds, saveProgress, type TopicProgress } from './progress';
 import type { QuizQuestion, SystemTopic } from './types';
 
 export const card = 'rounded-xl border border-zinc-800 bg-zinc-900/60 p-4';
@@ -184,20 +184,40 @@ export function SourceLinks({ topic }: { topic: SystemTopic }) {
   );
 }
 
+interface ProgressApi {
+  progress: TopicProgress;
+  update: (change: (p: TopicProgress) => TopicProgress) => void;
+}
+
+const ProgressContext = createContext<ProgressApi | null>(null);
+
+/** The current topic's saved progress, for sims that record missions and freeze frames. */
+export function useTopicProgress(): ProgressApi {
+  const api = useContext(ProgressContext);
+  if (!api) throw new Error('useTopicProgress must be used inside SimShell');
+  return api;
+}
+
 /** Objectives → concepts → prediction (gates the sim) → sim → recall → recap + sources. */
 export function SimShell({ topic, children }: { topic: SystemTopic; children: ReactNode }) {
   const [progress, setProgress] = useState<TopicProgress>(() => loadProgress(topic.id));
-  const update = (next: TopicProgress) => {
-    setProgress(next);
-    saveProgress(topic.id, next);
-  };
+  const update = (change: (p: TopicProgress) => TopicProgress) =>
+    setProgress((prev) => {
+      const next = change(prev);
+      const full = { ...next, completed: isComplete(topic, next) };
+      saveProgress(topic.id, full);
+      return full;
+    });
   const predictionDone = !!progress.prediction;
   const answeredCount = Object.keys(progress.answers).length;
   const score = Object.values(progress.answers).filter((a) => a.correct).length;
   const revisit = revisitIds(progress);
+  const missions = topic.missions ?? [];
+  const passed = missions.filter((m) => progress.missions[m.id]).length;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5">
+    <ProgressContext.Provider value={{ progress, update }}>
+    <div className={`mx-auto space-y-5 ${missions.length ? 'max-w-6xl' : 'max-w-4xl'}`}>
       <div>
         <p className="text-xs tracking-wide text-indigo-400 uppercase">
           System Labs · {topic.level} · ~{topic.estimatedMinutes} min
@@ -230,7 +250,7 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
         <QuestionCard
           q={topic.prediction}
           saved={progress.prediction}
-          onAnswer={(selected, correct) => update({ ...progress, prediction: { selected, correct } })}
+          onAnswer={(selected, correct) => update((p) => ({ ...p, prediction: { selected, correct } }))}
         />
         {!predictionDone && <p className="text-xs text-zinc-500">Answer the prediction to unlock the simulation — guessing wrong is part of it.</p>}
       </section>
@@ -249,10 +269,7 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
             key={q.id}
             q={q}
             saved={progress.answers[q.id]}
-            onAnswer={(selected, correct) => {
-              const answers = { ...progress.answers, [q.id]: { selected, correct } };
-              update({ ...progress, answers, completed: Object.keys(answers).length === topic.quiz.length });
-            }}
+            onAnswer={(selected, correct) => update((p) => ({ ...p, answers: { ...p.answers, [q.id]: { selected, correct } } }))}
           />
         ))}
         {answeredCount > 0 && (
@@ -260,6 +277,11 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
             Score so far: {score} of {answeredCount} answered
             {progress.completed ? ' — topic complete.' : '.'}
             {revisit.length > 0 && <span className="text-amber-300"> Revisit: {revisit.join(', ')}.</span>}
+          </p>
+        )}
+        {missions.length > 0 && !progress.completed && (
+          <p className="text-xs text-zinc-500">
+            Missions passed: {passed} of {missions.length}. Completing the topic takes every recall question and {missionsNeeded(topic)} missions.
           </p>
         )}
       </section>
@@ -275,5 +297,6 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
 
       <SourceLinks topic={topic} />
     </div>
+    </ProgressContext.Provider>
   );
 }

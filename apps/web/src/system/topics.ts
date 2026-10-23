@@ -1,3 +1,4 @@
+import { MISSIONS } from './logic/cachingLesson';
 import type { SystemTopic } from './types';
 
 const KARAN = 'https://github.com/karanpratapsingh/system-design';
@@ -12,6 +13,7 @@ const sources = (karanAnchor: string, karanLabel: string, primerAnchor?: string,
 export const TOPICS: SystemTopic[] = [
   {
     id: 'ip',
+    group: 'networking',
     title: 'IP — addresses, subnets and routing',
     short: 'How packets know where to go: IPv4, CIDR and the gateway decision.',
     level: 'beginner',
@@ -43,6 +45,7 @@ export const TOPICS: SystemTopic[] = [
   },
   {
     id: 'osi',
+    group: 'networking',
     title: 'OSI Model — seven layers of wrapping',
     short: 'Encapsulation down, decapsulation up — and which layer to blame.',
     level: 'beginner',
@@ -74,6 +77,7 @@ export const TOPICS: SystemTopic[] = [
   },
   {
     id: 'tcp-udp',
+    group: 'networking',
     title: 'TCP and UDP — guarantees cost time',
     short: 'Handshake, ACKs and retransmission vs fire-and-forget datagrams.',
     level: 'beginner',
@@ -105,6 +109,7 @@ export const TOPICS: SystemTopic[] = [
   },
   {
     id: 'dns',
+    group: 'networking',
     title: 'DNS — the internet’s phone book, cached everywhere',
     short: 'Root → TLD → authoritative, and why TTL decides freshness.',
     level: 'beginner',
@@ -136,6 +141,7 @@ export const TOPICS: SystemTopic[] = [
   },
   {
     id: 'load-balancing',
+    group: 'building-blocks',
     title: 'Load Balancing — spreading work without losing it',
     short: 'Algorithms, health checks, and what happens when a backend dies.',
     level: 'intermediate',
@@ -164,6 +170,52 @@ export const TOPICS: SystemTopic[] = [
     ],
     recap: ['Algorithm = the spreading policy; health checks = the safety net. You need both.', 'Round-robin/least-connections balance work; weighted respects capacity; IP-hash trades balance for stickiness.', 'A balancer removes dead backends only as fast as its health checks notice.'],
     sourceReferences: sources('#load-balancing', 'Load Balancing', '#load-balancer', 'Load balancer'),
+  },
+  {
+    id: 'caching',
+    group: 'building-blocks',
+    title: 'Caching — keeping hot data close',
+    short: 'Watch requests turn round at the cache: hits, misses, eviction, writes and stampedes.',
+    level: 'intermediate',
+    estimatedMinutes: 35,
+    learningObjectives: [
+      'Explain hits and misses, and why a cache shields the database behind it',
+      'Pick an eviction policy for a workload, and say when each policy fails',
+      'Compare write-through, write-around and write-back on staleness, latency and data loss',
+      'Choose where to cache, and recognise a cache stampede and its fixes',
+    ],
+    prerequisites: ['DNS (TTLs)', 'Load balancing (helpful)'],
+    introduction:
+      'A cache keeps a small, fast copy of data that is expensive to fetch. When it holds what a request needs (a hit), the slow system behind it never sees the request. Everything interesting about caching comes from two facts: the cache is small, and its copy goes out of date.',
+    concepts: [
+      { title: 'Hit ratio is everything', body: 'Every hit is work the database doesn’t do: at a 90% hit ratio it sees a tenth of the traffic. That only happens when requests repeat, with a few popular keys getting most of them.' },
+      { title: 'Small on purpose', body: 'Memory is fast but limited, so a cache holds a fraction of the data and evicts entries to make room. The eviction policy (LRU, LFU, FIFO…) is a bet on which entries will be needed again.' },
+      { title: 'The copy goes stale', body: 'When the database changes, a cached copy is wrong until something deletes it, updates it, or its TTL runs out. Write strategies trade staleness against write latency and the risk of losing writes.' },
+    ],
+    prediction: {
+      id: 'caching-predict',
+      prompt: 'A cache with a 75% hit ratio sits in front of a database. Traffic doubles and the hit ratio stays at 75%. What happens to the database’s load?',
+      choices: ['It stays the same: the cache absorbs the extra traffic', 'It doubles: a quarter of twice the traffic is twice the load', 'It goes up by a quarter', 'It halves: more traffic keeps the cache warmer'],
+      answer: 1,
+      hint: 'The database only sees the misses. What share of requests miss, and out of how many?',
+      explain: 'The database serves the misses, a quarter of the traffic, so twice the traffic means twice the misses. A cache divides the load by a constant factor; it doesn’t cap it.',
+    },
+    quiz: [
+      { id: 'caching-q1', prompt: 'Requests are spread evenly over a million keys, and the cache holds a thousand. Roughly what hit ratio should you expect?', choices: ['About 90%', 'About 50%', 'About 0.1%', 'It depends on the eviction policy'], answer: 2, explain: 'With no repetition to exploit, the chance that a key is cached is about a thousand in a million. Caching pays off when a few keys get most of the requests; uniform traffic is when not to cache.' },
+      { id: 'caching-q2', prompt: 'A batch job reads every key once each night, and the hit ratio collapses while it runs. Which change helps most?', choices: ['LRU → LFU, so entries used once can’t push out the popular ones', 'LFU → LRU', 'A longer TTL', 'More database replicas'], answer: 0, explain: 'Under LRU every scanned key counts as recently used, so the scan evicts the hot set. LFU ranks entries by how often they’re used, and each scanned key is used once.' },
+      { id: 'caching-q3', prompt: 'Which write strategy can lose writes that were already confirmed, if the cache node crashes?', choices: ['Write-through', 'Write-around', 'Write-back', 'None of them'], answer: 2, explain: 'Write-back confirms a write once the cache has it, and copies it to the database later. Anything not yet flushed is lost in a crash, unless it was replicated first.' },
+      { id: 'caching-q4', prompt: 'After every write, the app updates the database and leaves the cache alone. What do readers see?', choices: ['The new value, straight away', 'The old value, until the entry is evicted or its TTL runs out', 'An error', 'The new value: writes clear the cache automatically'], answer: 1, explain: 'Nothing told the cache the data changed, so hits keep returning the old copy: stale reads. Deleting the key on write (write-around) or updating it (write-through) fixes this, and a TTL limits how long it can last.' },
+      { id: 'caching-q5', prompt: 'A popular key expires and 200 requests for it miss in the same second. What stops all 200 reaching the database?', choices: ['A bigger cache', 'LFU eviction', 'Request coalescing: one fetch per key while the rest wait for it', 'Write-through'], answer: 2, explain: 'That’s a cache stampede. Coalescing (also called single-flight) sends one fetch and parks the rest. Refresh-ahead avoids the expiry in the first place, and TTL jitter stops many keys expiring together.' },
+      { id: 'caching-q6', prompt: 'Three app servers each keep their own cache. What does switching to one shared cache fix, and what does it cost?', choices: ['It fixes stale reads, and costs nothing', 'Each hot key is stored once instead of three times; but the shared cache is a network hop away and, unless it’s distributed, a single point of failure', 'It makes writes faster', 'It removes the need for eviction'], answer: 1, explain: 'Per-server caches duplicate the same hot keys and each miss them separately. A shared cache pools the memory, at the cost of a network hop, and a single shared node takes every key with it when it fails.' },
+    ],
+    recap: [
+      'A cache helps in proportion to its hit ratio, and the hit ratio comes from repetition: skewed traffic caches well, uniform traffic doesn’t.',
+      'Eviction policies are bets. LRU bets on recency and LFU on frequency: scans beat LRU, popularity shifts beat LFU, and loops beat both.',
+      'Writes make copies stale. Write-around and write-through keep reads fresh; write-back is fastest but can lose writes unless they’re replicated.',
+      'Cache close to the user to cut latency, and in front of the database to cut load. Watch for stampedes: coalesce misses and refresh hot keys before they expire.',
+    ],
+    sourceReferences: sources('#caching', 'Caching', '#cache', 'Cache'),
+    missions: MISSIONS.map(({ id, title }) => ({ id, title })),
   },
 ];
 
