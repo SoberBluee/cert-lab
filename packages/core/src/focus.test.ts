@@ -60,7 +60,7 @@ describe('questionTopics', () => {
 
   it('matches a handwritten question on its own tags, within its group', () => {
     const helm = scenario({ id: 'h', domain: 'cluster-architecture', tags: ['helm', 'daemonset'], tasks: [task('q1', {})] });
-    assert.deepEqual(questionTopics(helm, helm.tasks![0]), ['create-helm']);
+    assert.deepEqual(questionTopics(helm, helm.tasks![0]), ['create-helm', 'create-workload-controllers']);
     // A troubleshooting lab about a Service counts toward troubleshooting topics only.
     const svc = scenario({ id: 's', domain: 'troubleshooting', tags: ['troubleshooting', 'service', 'logs'], tasks: [task('q1', {})] });
     assert.deepEqual(questionTopics(svc, svc.tasks![0]), ['trouble-services']);

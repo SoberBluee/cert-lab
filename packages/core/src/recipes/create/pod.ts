@@ -1,5 +1,6 @@
 import { bare, createNs, nameField, nsField, numberField, selectField, type RecipeCheck } from '../types';
 import { envAddon, imagePair, kexec, kget, resourcesAddon, SOURCES } from './shared';
+import { courseDir } from './tasks';
 import type { Addon, Builder, CreateCtx, FollowUp, Manifest } from './types';
 
 const LOG = '/data/out.log';
@@ -435,6 +436,105 @@ const configVolume: Addon = {
   },
 };
 
+const secretTypes: Addon = {
+  id: 'secret-types',
+  key: 'SECRETS',
+  name: 'TLS and registry Secrets',
+  description: 'A TLS Secret made from files on controlplane is mounted, and a docker-registry Secret becomes an image pull secret.',
+  points: 4,
+  fields: [
+    selectField('REGISTRY', 'Private registry', ['registry.lab.internal:5000', 'harbor.lab.internal', 'images.lab.internal:5000', 'docker.lab.internal:8443'], {
+      randomizeByDefault: true,
+    }),
+    {
+      key: 'USER',
+      label: 'Registry user',
+      type: 'text',
+      default: 'ci-puller',
+      pattern: '^[a-z][a-z0-9-]*$',
+      pool: ['ci-puller', 'deploy-bot', 'image-reader', 'release-bot', 'robot-pull'],
+      randomizeByDefault: true,
+    },
+    {
+      key: 'PASSWORD',
+      label: 'Registry password',
+      type: 'text',
+      default: 'pull-7f3a91',
+      pattern: '^[A-Za-z0-9._-]+$',
+      pool: ['pull-7f3a91', 'reg-91bc04', 'img-4d2e77', 'harb-0c6f3e', 'robot-58aa12'],
+      randomizeByDefault: true,
+    },
+  ],
+  apply(ctx, { REGISTRY, USER, PASSWORD }) {
+    const { NAME } = ctx.v;
+    const tls = `${NAME}-tls`;
+    const pull = `${NAME}-pull`;
+    const dir = `/opt/course/certs/${NAME}`;
+    const host = `${NAME}.${ctx.ns}.svc`;
+    ctx.setup.push(`${courseDir(`certs/${NAME}`)}
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=${host}" -keyout "${dir}/tls.key" -out "${dir}/tls.crt" 2>/dev/null
+chown -R ubuntu:ubuntu /opt/course`);
+    // Only the credentials go into a manifest: the certificate exists once setup has made it. The kubelet retries
+    // the Secret volume until the Secret is created.
+    ctx.manifests.unshift({
+      apiVersion: 'v1',
+      kind: 'Secret',
+      type: 'kubernetes.io/dockerconfigjson',
+      metadata: { name: pull, namespace: ctx.ns },
+      stringData: { '.dockerconfigjson': `{"auths":{"${REGISTRY}":{"username":"${USER}","password":"${PASSWORD}"}}}` },
+    });
+    ctx.solution.unshift(`kubectl -n "${ctx.ns}" create secret tls "${tls}" --cert="${dir}/tls.crt" --key="${dir}/tls.key"`);
+    const spec = ctx.podSpec();
+    spec.imagePullSecrets = [...(spec.imagePullSecrets ?? []), { name: pull }];
+    spec.volumes = [...(spec.volumes ?? []), { name: 'tls', secret: { secretName: tls } }];
+    const c = ctx.container();
+    c.volumeMounts = [...(c.volumeMounts ?? []), { name: 'tls', mountPath: '/etc/tls', readOnly: true }];
+    ctx.bullets.push(
+      `Create a TLS Secret \`${tls}\` from the certificate and key in \`${dir}/\` on \`controlplane\`, and mount it read-only at \`/etc/tls\`.`,
+      `The Pod must be able to pull images from the private registry \`${REGISTRY}\` as user \`${USER}\` with password \`${PASSWORD}\`: keep these credentials in Secret \`${pull}\` and make the Pod use it for its image pulls.`,
+    );
+    ctx.checks.push(
+      {
+        id: 'tls-secret',
+        description: `${tls} is a TLS Secret holding the certificate from ${dir}`,
+        type: 'kubectl',
+        run: `[ "$(kubectl -n ${ctx.ns} get secret ${tls} -o jsonpath='{.type}')" = kubernetes.io/tls ] && [ "$(kubectl -n ${ctx.ns} get secret ${tls} -o jsonpath='{.data.tls\\.crt}' | base64 -d | openssl x509 -noout -fingerprint -sha256 2>/dev/null)" = "$(openssl x509 -in ${dir}/tls.crt -noout -fingerprint -sha256)" ] && echo match || echo differs`,
+        expect: { equals: 'match' },
+        weight: 1,
+      },
+      {
+        id: 'tls-mounted',
+        description: `/etc/tls/tls.crt in the container is the certificate for ${host}`,
+        type: 'kubectl',
+        run: `${kexec(ctx, 'cat /etc/tls/tls.crt')} | openssl x509 -noout -subject 2>/dev/null`,
+        expect: { contains: host },
+        weight: 1,
+        retrySeconds: 30,
+      },
+      {
+        id: 'pull-secret',
+        description: `${pull} is a docker-registry Secret for ${REGISTRY} with the given user and password`,
+        type: 'kubectl',
+        run: `echo "$(kubectl -n ${ctx.ns} get secret ${pull} -o jsonpath='{.type}') $(kubectl -n ${ctx.ns} get secret ${pull} -o jsonpath='{.data.\\.dockerconfigjson}' | base64 -d | jq -r '.auths["${REGISTRY}"] | "\\(.username):\\(.password)"')"`,
+        expect: { equals: `kubernetes.io/dockerconfigjson ${USER}:${PASSWORD}` },
+        weight: 1,
+      },
+      {
+        id: 'pull-used',
+        description: `the Pod pulls its images with ${pull}`,
+        type: 'kubectl',
+        run: kget(ctx, '{%.imagePullSecrets[*].name}'),
+        expect: { contains: pull },
+        weight: 1,
+      },
+    );
+    ctx.hints.push(
+      `kubectl -n ${ctx.ns} create secret tls ${tls} --cert=... --key=...; mount it with a secret volume.`,
+      `kubectl -n ${ctx.ns} create secret docker-registry ${pull} --docker-server=... --docker-username=... --docker-password=...; then spec.imagePullSecrets: [{name: ${pull}}].`,
+    );
+  },
+};
+
 const capabilities: Addon = {
   id: 'capabilities',
   key: 'CAPS',
@@ -706,7 +806,7 @@ export const podBuilder: Builder = {
     ]),
     selectField('IMAGE', 'Image', ['busybox:1.36', 'busybox:1.37', 'nginx:1.28-alpine', 'httpd:2.4-alpine', 'alpine:3.20']),
   ],
-  addons: [command, sidecar, envAddon, security, resourcesAddon, pvcMount, initContainer, configVolume, capabilities, execProbe, placement],
+  addons: [command, sidecar, envAddon, security, resourcesAddon, pvcMount, initContainer, configVolume, secretTypes, capabilities, execProbe, placement],
   followUps: [labelFollowUp('label'), labelFollowUp('annotate'), updatePodImage, resizePod, saveLogs, copyOut],
   build(v) {
     const { NS, NAME, IMAGE } = v;

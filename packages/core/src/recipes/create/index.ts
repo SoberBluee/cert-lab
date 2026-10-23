@@ -1,6 +1,8 @@
 import type { BuilderSummary, PartSummary } from '@cka/schema';
 import { hpaBuilder, vpaBuilder } from './autoscaling';
 import { certificatesBuilder, etcdBackupBuilder, etcdRestoreBuilder, installClusterBuilder } from './cluster';
+import { clusterInfoBuilder } from './clusterinfo';
+import { workloadControllersBuilder } from './controllers';
 import { cronJobBuilder } from './cronjob';
 import { crdsBuilder } from './crds';
 import { dynamicStorageBuilder } from './dynamicstorage';
@@ -47,6 +49,8 @@ export const BUILDERS: Builder[] = [
   netopsBuilder,
   workloadOpsBuilder,
   gatewayBuilder,
+  clusterInfoBuilder,
+  workloadControllersBuilder,
 ];
 
 export const getBuilder = (id: string): Builder | undefined => BUILDERS.find((b) => b.id === id);

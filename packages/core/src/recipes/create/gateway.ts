@@ -9,7 +9,8 @@ const HTTPS_PORT = 8443;
 const NODEPORT = 30443;
 const CP_IP = `$(getent hosts controlplane | awk '{print $1}')`;
 
-const httpsGet = (host: string, path = '/') => `curl -sk -m 5 --resolve ${host}:${NODEPORT}:${CP_IP} https://${host}:${NODEPORT}${path}`;
+const httpsGet = (host: string, path = '/', header = '') =>
+  `curl -sk -m 5${header ? ` -H '${header}'` : ''} --resolve ${host}:${NODEPORT}:${CP_IP} https://${host}:${NODEPORT}${path}`;
 
 /** Subject of the certificate Traefik presents for `host`. */
 const servedCert = (host: string) =>
@@ -48,18 +49,46 @@ spec:
   selector: { app: api }
   ports: [{ port: 80 }]`;
 
+/** busybox httpd that answers `text` on port 80, with a Service of the same name. */
+const textDeployment = (ns: string, name: string, text: string) => `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${name}
+  namespace: ${ns}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ${name} }
+  template:
+    metadata:
+      labels: { app: ${name} }
+    spec:
+      containers:
+        - name: web
+          image: busybox:1.36
+          command: ["sh", "-c", "mkdir -p /www && echo ${text} > /www/index.html && httpd -f -p 80 -h /www"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${name}
+  namespace: ${ns}
+spec:
+  selector: { app: ${name} }
+  ports: [{ port: 80 }]`;
+
 const web = (ns: string) => `kubectl -n "${ns}" create deployment web --image=nginx:1.27-alpine --port=80 --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "${ns}" expose deployment web --port=80 --dry-run=client -o yaml | kubectl apply -f - >/dev/null`;
 
 export const gatewayBuilder = taskBuilder({
   id: 'gateway',
   name: 'Gateway API with TLS',
-  description: 'Create your own Gateway with an HTTPS listener and a TLS Secret, or migrate a TLS Ingress to Gateway API.',
+  description: 'Create your own Gateway with an HTTPS listener and a TLS Secret, migrate a TLS Ingress to Gateway API, or route a canary by request header.',
   domain: 'services-networking',
   difficulty: 3,
   minutes: 12,
   points: 6,
-  tags: ['gateway-api', 'httproute', 'tls', 'ingress', 'migration'],
+  tags: ['gateway-api', 'httproute', 'tls', 'ingress', 'migration', 'header-match'],
   fields: [nsField(['shop', 'store', 'portal', 'checkout', 'accounts', 'tickets', 'docs-site', 'payments', 'support', 'members'])],
   tasks: {
     https: {
@@ -296,6 +325,119 @@ kubectl -n ${NS} delete ingress shop`,
             'kubectl -n <ns> get ingress shop -o yaml shows every host, path, backend and the TLS Secret to carry over.',
             'An Ingress path with pathType Prefix becomes an HTTPRoute match with path type PathPrefix; TLS moves to the Gateway listener.',
             'kubectl describe httproute shows whether the route is Accepted by its parent and whether its backends resolve.',
+          ],
+        };
+      },
+    },
+    canary: {
+      label: 'Route a canary by request header over HTTPS',
+      make: ({ NS }) => {
+        const host = `app.${NS}.lab`;
+        return {
+          title: 'Canary by request header',
+          text: `In namespace \`${NS}\`, Gateway \`app-gw\` serves \`${host}\` over HTTPS on its listener \`https\`, and HTTPRoute \`web\` sends every request to Service \`web\`. A canary release runs behind Service \`web-canary\` (port \`80\`).
+
+Change HTTPRoute \`web\` so that requests carrying the header \`X-Canary: always\` go to \`web-canary\`, and all other requests still go to \`web\`. Do not create another HTTPRoute.
+
+Traefik serves the listener on NodePort \`${NODEPORT}\` of every node:
+
+\`\`\`bash
+curl -k --resolve ${host}:${NODEPORT}:$(getent hosts controlplane | awk '{print $1}') -H 'X-Canary: always' https://${host}:${NODEPORT}/
+\`\`\``,
+          setup: [
+            `${requireIngress}
+mkdir -p /opt/course
+${makeCert(`/root/.cka-tls-${NS}-app`, host)}
+${createNs(NS)}
+${web(NS)}
+kubectl apply -f - <<EOF >/dev/null
+${textDeployment(NS, 'web-canary', `canary ${NS}`)}
+EOF
+kubectl -n "${NS}" create secret tls app-tls --cert=/root/.cka-tls-${NS}-app/tls.crt --key=/root/.cka-tls-${NS}-app/tls.key --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "${NS}" delete httproute web --ignore-not-found >/dev/null
+kubectl apply -f - <<EOF >/dev/null
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: app-gw
+  namespace: ${NS}
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: ${HTTPS_PORT}
+      hostname: ${host}
+      tls:
+        mode: Terminate
+        certificateRefs: [{ kind: Secret, name: app-tls }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+  namespace: ${NS}
+spec:
+  parentRefs: [{ name: app-gw, sectionName: https }]
+  hostnames: [${host}]
+  rules:
+    - backendRefs: [{ name: web, port: 80 }]
+EOF
+kubectl -n "${NS}" rollout status deployment/web --timeout=180s >/dev/null
+kubectl -n "${NS}" rollout status deployment/web-canary --timeout=180s >/dev/null
+for _ in $(seq 1 30); do
+  ${httpsGet(host)} | grep -q 'Welcome to nginx' && break
+  sleep 2
+done`,
+          ],
+          checks: [
+            {
+              id: 'canary',
+              description: `requests to ${host} with X-Canary: always reach web-canary`,
+              type: 'kubectl',
+              run: httpsGet(host, '/', 'X-Canary: always'),
+              expect: { contains: `canary ${NS}` },
+              weight: 3,
+              retrySeconds: 60,
+            },
+            {
+              id: 'default',
+              description: `requests without that header, or with another value, still reach web`,
+              type: 'kubectl',
+              run: `${httpsGet(host)} | grep -q 'Welcome to nginx' && ${httpsGet(host, '/', 'X-Canary: never')} | grep -q 'Welcome to nginx' && echo ok || echo fail`,
+              expect: { equals: 'ok' },
+              weight: 2,
+              retrySeconds: 60,
+            },
+            {
+              id: 'route',
+              description: 'HTTPRoute web is the only route in the namespace, still on app-gw, and matches header X-Canary',
+              type: 'kubectl',
+              run: `kubectl -n ${NS} get httproute -o json | jq -r '"\\(.items | length) \\(.items[0].spec.parentRefs[0].name) \\([.items[0].spec.rules[].matches[]?.headers[]? | select((.name | ascii_downcase) == "x-canary") | .value] | join(","))"'`,
+              expect: { equals: '1 app-gw always' },
+              weight: 1,
+            },
+          ],
+          solution: [
+            `kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+  namespace: ${NS}
+spec:
+  parentRefs: [{ name: app-gw, sectionName: https }]
+  hostnames: [${host}]
+  rules:
+    - matches: [{ headers: [{ name: X-Canary, value: always }] }]
+      backendRefs: [{ name: web-canary, port: 80 }]
+    - backendRefs: [{ name: web, port: 80 }]
+EOF`,
+          ],
+          hints: [
+            'An HTTPRoute rule can match on headers: matches: [{ headers: [{ name: X-Canary, value: always }] }]. A rule without matches takes every other request.',
+            `Keep parentRefs and hostnames as they are: kubectl -n ${NS} edit httproute web, or apply the whole route again.`,
+            'kubectl describe httproute web shows whether the route is still Accepted and its backends resolve.',
           ],
         };
       },

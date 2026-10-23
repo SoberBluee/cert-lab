@@ -8,12 +8,12 @@ const toMi = `awk '{v=$1; if (v ~ /Ki$/) {sub(/Ki$/,"",v); print int(v/1024)} el
 export const workloadOpsBuilder = taskBuilder({
   id: 'workload-ops',
   name: 'Workload operations',
-  description: 'Size requests from a node\'s capacity, configure a Job\'s completions and clean-up, rank a PriorityClass, and issue a short-lived ServiceAccount token.',
+  description: 'Size requests from a node\'s capacity, configure a Job\'s completions and clean-up, rank a PriorityClass, issue a short-lived ServiceAccount token, and call the API from inside a Pod.',
   domain: 'workloads',
   difficulty: 2,
   minutes: 8,
   points: 6,
-  tags: ['resources', 'job', 'priorityclass', 'serviceaccount-token'],
+  tags: ['resources', 'job', 'priorityclass', 'serviceaccount-token', 'in-cluster-api'],
   fields: [
     nsField(['blog', 'cms', 'batch-jobs', 'build', 'ops', 'pipeline', 'release', 'platform-ops', 'ci', 'media-jobs']),
     selectField('NODE', 'Worker', ['worker-1', 'worker-2'], { randomizeByDefault: true }),
@@ -268,6 +268,73 @@ kubectl -n "${NS}" create serviceaccount ci >/dev/null`,
           'kubectl create token <serviceaccount> prints a fresh, time-limited token.',
           'Its --duration flag sets how long it is valid (for example 1h).',
           'A token is a JWT: its middle part, base64-decoded, holds iat and exp.',
+        ],
+      }),
+    },
+    'api-call': {
+      label: 'Call the API from inside a Pod with its ServiceAccount token',
+      make: ({ NS }) => ({
+        title: 'Query the API from a Pod',
+        text: `ServiceAccount \`secret-reader\` in namespace \`${NS}\` may read the Secrets of that namespace.
+
+1. Create Pod \`api-contact\` in \`${NS}\` with image \`alpine:3.21\` that runs as \`secret-reader\` and keeps running.
+2. From inside that Pod, query the Kubernetes API for the Secrets of namespace \`${NS}\`, authenticated with the Pod's ServiceAccount token. Write the raw JSON response to \`/opt/course/api-call/result.json\` on \`controlplane\`.`,
+        setup: [
+          `${courseDir('api-call')}
+${createNs(NS)}
+kubectl -n "${NS}" delete pod api-contact --ignore-not-found --wait=true >/dev/null
+kubectl -n "${NS}" create serviceaccount secret-reader --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "${NS}" create role secret-reader --verb=get,list --resource=secrets --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "${NS}" create rolebinding secret-reader --role=secret-reader --serviceaccount="${NS}:secret-reader" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+key=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \\n')
+kubectl -n "${NS}" create secret generic app-credentials --from-literal=api-key="$key" --dry-run=client -o yaml | kubectl apply -f - >/dev/null`,
+        ],
+        checks: [
+          {
+            id: 'pod',
+            description: 'api-contact runs alpine:3.21 as ServiceAccount secret-reader',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} get pod api-contact -o jsonpath='{.status.phase} {.spec.serviceAccountName} {.spec.containers[0].image}'`,
+            expect: { equals: 'Running secret-reader alpine:3.21' },
+            weight: 2,
+            retrySeconds: 30,
+          },
+          onCp({
+            id: 'list',
+            description: `result.json is the API's SecretList for ${NS}`,
+            run: `jq -r '"\\(.kind) \\([.items[]?.metadata.namespace] | unique | join(","))"' /opt/course/api-call/result.json 2>/dev/null`,
+            expect: { equals: `SecretList ${NS}` },
+            weight: 2,
+          }),
+          onCp({
+            id: 'secret',
+            description: 'result.json holds Secret app-credentials with its current data',
+            run: `[ -n "$(kubectl -n ${NS} get secret app-credentials -o jsonpath='{.data.api-key}')" ] && [ "$(jq -r '.items[]? | select(.metadata.name == "app-credentials") | .data["api-key"]' /opt/course/api-call/result.json 2>/dev/null)" = "$(kubectl -n ${NS} get secret app-credentials -o jsonpath='{.data.api-key}')" ] && echo yes || echo no`,
+            expect: { equals: 'yes' },
+            weight: 2,
+          }),
+        ],
+        solution: [
+          `kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-contact
+  namespace: ${NS}
+spec:
+  serviceAccountName: secret-reader
+  containers:
+    - name: api-contact
+      image: alpine:3.21
+      command: ["sleep", "infinity"]
+EOF
+kubectl -n ${NS} wait --for=condition=Ready pod/api-contact --timeout=120s
+kubectl -n ${NS} exec api-contact -- sh -c 'D=/var/run/secrets/kubernetes.io/serviceaccount; wget -qO- --no-check-certificate --header "Authorization: Bearer $(cat $D/token)" "https://kubernetes.default.svc/api/v1/namespaces/$(cat $D/namespace)/secrets"' > /opt/course/api-call/result.json`,
+        ],
+        hints: [
+          'A Pod\'s ServiceAccount token, the cluster CA and the namespace are mounted under /var/run/secrets/kubernetes.io/serviceaccount/.',
+          'Inside the cluster the API server is https://kubernetes.default.svc; Secrets of a namespace are at /api/v1/namespaces/<namespace>/secrets.',
+          'Send the token as the header "Authorization: Bearer <token>". alpine has wget: wget -qO- --header "..." --no-check-certificate <url>, run with kubectl exec and redirected on controlplane.',
         ],
       }),
     },
