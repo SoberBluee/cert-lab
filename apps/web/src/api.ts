@@ -4,6 +4,7 @@ import type {
   BlueprintSummary,
   CreateScenarioRequest,
   FlociStatus,
+  FocusMode,
   FocusReport,
   GradeResult,
   LessonSummary,
@@ -76,7 +77,7 @@ export const api = {
   solution: () => request<SessionView>('POST', '/sessions/current/solution'),
   end: () => request<SessionView>('DELETE', '/sessions/current'),
   history: () => request<{ attempts: AttemptRecord[] }>('GET', '/history'),
-  topicScores: () => request<FocusReport>('GET', '/focus'),
+  topicScores: (mode: FocusMode = 'all') => request<FocusReport>('GET', `/focus${mode === 'exam' ? '?mode=exam' : ''}`),
   lessons: (track?: LessonTrack) =>
     request<{ lessons: LessonSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/lessons${track ? `?track=${track}` : ''}`),
   startLesson: (id: string) => request<SessionView>('POST', `/lessons/${encodeURIComponent(id)}/start`),

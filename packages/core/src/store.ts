@@ -318,12 +318,26 @@ export class Store {
     }));
   }
 
-  /** Graded attempts, oldest first, with their check results and the variables their session rolled. */
-  gradedAttempts(): { id: number; scenarioId: string; startedAt: string; vars: Vars; checks: { id: string; passed: boolean; weight: number; output: string }[] }[] {
+  /**
+   * Graded attempts, oldest first, with their check results, the variables their session rolled, whether
+   * the learner used help, and the seconds each question was open.
+   */
+  gradedAttempts(): {
+    id: number;
+    scenarioId: string;
+    mode: Mode;
+    startedAt: string;
+    vars: Vars;
+    hintsUsed: number;
+    solutionViewed: boolean;
+    taskSeconds: Record<string, number>;
+    checks: { id: string; passed: boolean; weight: number; output: string }[];
+  }[] {
     const graded = `mode IN ${USER_MODES} AND score IS NOT NULL`;
     const attempts = this.db
       .prepare(
-        `SELECT id, scenario_id, started_at, (SELECT vars FROM sessions WHERE attempt_id = attempts.id LIMIT 1) AS vars
+        `SELECT id, scenario_id, mode, started_at, hints_used, solution_viewed, task_times,
+                (SELECT vars FROM sessions WHERE attempt_id = attempts.id LIMIT 1) AS vars
          FROM attempts WHERE ${graded} ORDER BY started_at ASC`,
       )
       .all() as Row[];
@@ -342,8 +356,12 @@ export class Store {
     return attempts.map((r) => ({
       id: Number(r.id),
       scenarioId: r.scenario_id as string,
+      mode: r.mode as Mode,
       startedAt: r.started_at as string,
       vars: json<Vars>(r.vars) ?? {},
+      hintsUsed: Number(r.hints_used),
+      solutionViewed: Boolean(r.solution_viewed),
+      taskSeconds: Object.fromEntries((json<TaskTime[]>(r.task_times) ?? []).map((t) => [t.id, t.seconds])),
       checks: checks.get(Number(r.id)) ?? [],
     }));
   }

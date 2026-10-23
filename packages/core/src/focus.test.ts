@@ -58,12 +58,33 @@ describe('questionTopics', () => {
     assert.deepEqual(questionTopics(def, q2, { Q2_FAULT: apiserverFault }), ['trouble-apiserver', 'trouble-controlplane']);
   });
 
-  it('matches a handwritten question on its own tags, within its group', () => {
+  it('counts a create question toward topics that list one of its parts, whatever the builder', () => {
+    const pod = scenario({ id: 'p', domain: 'workloads', tasks: [task('q1', { recipe: { builder: 'pod', parts: ['config-volume'] } })] });
+    assert.deepEqual(questionTopics(pod, pod.tasks![0]), ['create-pod', 'create-config']);
+    const tolerating = scenario({ id: 'd', domain: 'workloads', tasks: [task('q1', { recipe: { builder: 'deployment', parts: ['toleration'] } })] });
+    assert.deepEqual(questionTopics(tolerating, tolerating.tasks![0]), ['create-deployment', 'create-placement']);
+  });
+
+  it('counts a pool that spans several fault subsets toward each of them, until an attempt rolls one', () => {
+    const def = scenario({
+      id: 'i',
+      domain: 'services-networking',
+      variables: { Q1_FAULT: { oneOf: ['ingress-class', 'route-parent'], hidden: true } },
+      tasks: [task('q1', { recipe: { category: 'ingress' } })],
+    });
+    assert.deepEqual(questionTopics(def, def.tasks![0]), ['trouble-ingress', 'trouble-httproute']);
+    assert.deepEqual(questionTopics(def, def.tasks![0], { Q1_FAULT: 'route-parent' }), ['trouble-httproute']);
+  });
+
+  it('matches a handwritten question on its own tags, within its group first', () => {
     const helm = scenario({ id: 'h', domain: 'cluster-architecture', tags: ['helm', 'daemonset'], tasks: [task('q1', {})] });
     assert.deepEqual(questionTopics(helm, helm.tasks![0]), ['create-helm']);
     // A troubleshooting lab about a Service counts toward troubleshooting topics only.
     const svc = scenario({ id: 's', domain: 'troubleshooting', tags: ['troubleshooting', 'service', 'logs'], tasks: [task('q1', {})] });
     assert.deepEqual(questionTopics(svc, svc.tasks![0]), ['trouble-services']);
+    // No create topic is about CoreDNS, so a lab that configures it counts toward DNS troubleshooting.
+    const dns = scenario({ id: 'k', domain: 'cluster-architecture', tags: ['coredns', 'dns'], tasks: [task('q1', {})] });
+    assert.deepEqual(questionTopics(dns, dns.tasks![0]), ['trouble-dns']);
     // Question tags win over the scenario's, which cover every question.
     const mixed = scenario({
       id: 'm',
@@ -124,5 +145,35 @@ describe('focusReport', () => {
     assert.equal(helm.questions, 7);
     assert.equal(helm.recentPercent, 100);
     assert.equal(helm.weakest?.title, 'Deployment api');
+  });
+});
+
+describe('focusReport with help, exam mode and time', () => {
+  const store = new Store(join(root, 'help.db'));
+
+  /** An attempt of mixed-lab that graded only q2 (the Helm question), open for `seconds`. */
+  function attempt(mode: Mode, passed: string[], help: { hintsUsed?: number; solutionViewed?: boolean } = {}, seconds = 0) {
+    const id = store.createAttempt({ scenarioId: 'mixed-lab', sessionId: `s${Math.random()}`, mode, ...help });
+    store.createSession({ id: `s-${id}`, scenarioId: 'mixed-lab', mode, base: 'cluster', attemptId: id, vars: { Q1_FAULT: apiserverFault, Q2_APP: 'web' } });
+    store.updateAttempt(id, { score: passed.length, maxScore: 3, tasks: [{ id: 'q2', title: 'Deployment web', seconds }] });
+    store.replaceCheckResults(id, [
+      ...['q2-a', 'q2-b', 'q2-c'].map((c) => ({ checkId: c, passed: passed.includes(c), weight: 1, output: 'exit=0' })),
+      ...['q1-a', 'q1-b', 'q3-a', 'q3-b'].map((c) => ({ checkId: c, passed: false, weight: 1, output: NOT_ATTEMPTED })),
+    ]);
+  }
+
+  it('scores clean questions apart, filters exam mode, and averages the minutes per question', () => {
+    attempt('practice', ['q2-a', 'q2-b', 'q2-c'], { hintsUsed: 2 }, 600);
+    attempt('practice', ['q2-a'], {}, 240);
+    attempt('mock', ['q2-a', 'q2-b']);
+    const library = new ScenarioLibrary(root);
+    const helm = (mode?: 'exam') => focusReport(store, library, undefined, mode).topics.find((t) => t.topicId === 'create-helm')!;
+
+    const all = helm();
+    assert.deepEqual([all.questions, all.recentPercent, all.cleanQuestions, all.cleanPercent, all.recentMinutes], [3, 67, 2, 50, 7]);
+    // Exam mode has no hints, so every question counts as clean; this one recorded no time.
+    const exam = helm('exam');
+    assert.deepEqual([exam.questions, exam.recentPercent, exam.cleanQuestions, exam.cleanPercent, exam.recentMinutes], [1, 67, 1, 67, undefined]);
+    assert.equal(focusReport(store, library, undefined, 'exam').mode, 'exam');
   });
 });
