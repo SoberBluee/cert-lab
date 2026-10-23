@@ -1,7 +1,8 @@
 import { Sim, type Req, type Tone } from '../stage/engine';
 import type { Pt } from '../stage/geometry';
 import type { StageLayout, StageNode, StageWire } from '../stage/layout';
-import { Timeline } from '../stage/metrics';
+import { percentile, Timeline } from '../stage/metrics';
+import { Server, type ServerState } from '../stage/server';
 import { sampleCdf, zipfCdf } from '../stage/rng';
 import { Cache, type EvictionPolicy } from './cache';
 
@@ -189,11 +190,56 @@ export interface Marker {
   label: string;
 }
 
-export interface DbState {
-  busy: number;
-  workers: number;
-  queue: number;
-  maxQueue: number;
+export type DbState = ServerState;
+
+/** What the caching instruments and missions read over a window of whole seconds. */
+export interface WindowStats {
+  seconds: number;
+  reads: number;
+  hits: number;
+  hitRatio: number;
+  userHitRatio: number;
+  writes: number;
+  dbRate: number;
+  peakDbRate: number;
+  failed: number;
+  stale: number;
+  lost: number;
+  readP50: number;
+  readP95: number;
+  readMean: number;
+  writeP95: number;
+}
+
+/** The scene's per-second history, with the caching lesson's view of a window. */
+export class CachingTimeline extends Timeline {
+  latency(ms: number, kind: 'read' | 'write', value: number): void {
+    this.sample(ms, kind, value);
+  }
+
+  window(fromSec: number, toSec: number): WindowStats {
+    const sum = (k: string) => this.sum(fromSec, toSec, k);
+    const reads = sum('reads');
+    const userReads = sum('userReads');
+    const readMs = this.values(fromSec, toSec, 'read');
+    return {
+      seconds: this.seconds(fromSec, toSec),
+      reads,
+      hits: sum('hits'),
+      hitRatio: reads ? sum('hits') / reads : 0,
+      userHitRatio: userReads ? sum('userHits') / userReads : 0,
+      writes: sum('writes'),
+      dbRate: sum('dbOps') / this.seconds(fromSec, toSec),
+      peakDbRate: this.peak(fromSec, toSec, 'dbOps'),
+      failed: sum('failed'),
+      stale: sum('stale'),
+      lost: sum('lost'),
+      readP50: percentile(readMs, 50),
+      readP95: percentile(readMs, 95),
+      readMean: readMs.length ? readMs.reduce((a, b) => a + b, 0) / readMs.length : 0,
+      writeP95: percentile(this.values(fromSec, toSec, 'write'), 95),
+    };
+  }
 }
 
 const hash = (s: string) => {
@@ -206,7 +252,7 @@ const hash = (s: string) => {
 export class CachingScene {
   readonly sim: Sim;
   readonly layout: StageLayout;
-  readonly timeline = new Timeline();
+  readonly timeline = new CachingTimeline();
   readonly caches = new Map<string, Cache>();
   readonly markers: Marker[] = [];
   /** Hits and misses per cache node. */
@@ -231,8 +277,7 @@ export class CachingScene {
   private issued = new Map<string, number>();
   private acked = new Map<string, number>();
   private dbVersion = new Map<string, number>();
-  private dbBusy = 0;
-  private dbQueue: (() => void)[] = [];
+  private database: Server;
   private inflight = new Map<string, CReq[]>();
   private refreshing = new Set<string>();
   private flushing = false;
@@ -242,6 +287,7 @@ export class CachingScene {
   constructor(cfg: CachingConfig, seed = 1) {
     this.cfg = { ...cfg, layers: { ...cfg.layers } };
     this.sim = new Sim(seed);
+    this.database = new Server(this.sim, { name: 'Database', workers: DB_WORKERS, maxQueue: DB_MAX_QUEUE, modeledMs: DB_QUERY_MS, capacity: () => this.cfg.dbCapacity });
     this.layout = layoutFor(this.cfg);
     for (const w of this.layout.wires) this.wires.set(`${w.from}>${w.to}`, w);
     for (const n of this.layout.nodes) {
@@ -290,7 +336,7 @@ export class CachingScene {
   }
 
   get db(): DbState {
-    return { busy: this.dbBusy, workers: DB_WORKERS, queue: this.dbQueue.length, maxQueue: DB_MAX_QUEUE };
+    return this.database.state;
   }
 
   /** Requests parked at a cache node, waiting for a fetch already in flight (coalescing). */
@@ -749,23 +795,7 @@ export class CachingScene {
 
   private dbSubmit(req: CReq, done: () => void, rejected: () => void): void {
     this.timeline.count(this.sim.now, 'dbOps');
-    const service = 1000 / (this.cfg.dbCapacity / DB_WORKERS);
-    const queuedAt = this.sim.now;
-    const run = () => {
-      this.dbBusy++;
-      const waited = this.sim.now - queuedAt;
-      if (waited > 0) this.sim.hop(req, 'Database: queued', (waited / service) * DB_QUERY_MS);
-      this.sim.after(service, () => {
-        this.sim.hop(req, `Database: ${req.kind === 'read' || req.kind === 'refresh' ? 'query' : 'write'}`, DB_QUERY_MS);
-        this.dbBusy--;
-        done();
-        const next = this.dbQueue.shift();
-        if (next) next();
-      });
-    };
-    if (this.dbBusy < DB_WORKERS) run();
-    else if (this.dbQueue.length < DB_MAX_QUEUE) this.dbQueue.push(run);
-    else rejected();
+    this.database.submit(req, req.kind === 'read' || req.kind === 'refresh' ? 'query' : 'write', done, rejected);
   }
 
   // ---- results ----

@@ -30,12 +30,15 @@ export function FreezePrompt({
   prompt,
   choices,
   answered,
+  onStage,
   onChoose,
   onContinue,
 }: {
   prompt: string;
   /** Empty for a note that only needs Continue. */
   choices: { id: string; label: string }[];
+  /** The answer can also be clicked on the stage (a node or slot), not only picked from the choices. */
+  onStage: boolean;
   answered: { correct: boolean; explain: string } | null;
   onChoose: (id: string) => void;
   onContinue: () => void;
@@ -51,7 +54,7 @@ export function FreezePrompt({
       <p className="mt-0.5 text-sm text-zinc-100">{prompt}</p>
       {!answered && choices.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-zinc-400">Click it on the stage, or:</span>
+          {onStage && <span className="text-xs text-zinc-400">Click it on the stage, or:</span>}
           {choices.map((c) => (
             <button key={c.id} type="button" className="rounded-md border border-sky-800 bg-sky-950 px-2 py-1 text-xs text-sky-100 hover:border-sky-500" onClick={() => onChoose(c.id)}>
               {c.label}

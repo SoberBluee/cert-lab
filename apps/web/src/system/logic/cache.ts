@@ -28,7 +28,10 @@ export interface CacheEntry {
   pending: number;
 }
 
-export type Lookup = { hit: true; entry: CacheEntry; slot: number } | { hit: false; reason: 'absent' | 'expired'; slot: number };
+export type Lookup =
+  | { hit: true; entry: CacheEntry; slot: number }
+  /** `entry` is set for an expired entry kept for revalidation. */
+  | { hit: false; reason: 'absent' | 'expired'; slot: number; entry?: CacheEntry };
 
 export interface Placed {
   slot: number;
@@ -75,12 +78,16 @@ export class Cache {
     return this.find(key) >= 0;
   }
 
-  /** A read: counts as a use on a hit; drops the entry if its TTL has run out. */
-  lookup(key: string, now: number): Lookup {
+  /**
+   * A read: counts as a use on a hit. An entry whose TTL has run out is dropped, unless
+   * `keepExpired` asks to keep it so the caller can revalidate it with the origin.
+   */
+  lookup(key: string, now: number, opts: { keepExpired?: boolean } = {}): Lookup {
     const slot = this.find(key);
     const entry = slot >= 0 ? this.slots[slot]! : null;
     if (!entry) return { hit: false, reason: 'absent', slot: -1 };
     if (entry.expiresAt !== null && entry.expiresAt <= now && !entry.dirty) {
+      if (opts.keepExpired) return { hit: false, reason: 'expired', slot, entry };
       this.slots[slot] = null;
       return { hit: false, reason: 'expired', slot };
     }

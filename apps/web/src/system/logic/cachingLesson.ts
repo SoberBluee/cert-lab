@@ -1,3 +1,4 @@
+import * as lesson from '../stage/lesson';
 import { POLICIES } from './cache';
 import { CachingScene, DEFAULT_CONFIG, type CachingConfig, type Moment } from './caching';
 
@@ -24,17 +25,10 @@ export type FaultId = 'flush' | 'crash' | 'spike' | 'scan' | 'shift';
 
 export type ChapterId = 'hit-miss' | 'eviction' | 'writes' | 'where' | 'sandbox';
 
-export interface Chapter {
-  id: ChapterId;
-  title: string;
-  /** Two or three sentences shown above the stage. */
-  concept: string;
-  base: Partial<CachingConfig>;
-  controls: ControlId[];
-  faults: FaultId[];
-  /** What to try first, shown under the concept. */
-  tryThis: string;
-}
+export type Chapter = lesson.Chapter<CachingConfig, ChapterId, ControlId, FaultId>;
+export type Mission = lesson.Mission<CachingScene, CachingConfig, ChapterId, ControlId>;
+export type FreezeFrame = lesson.FreezeFrame<CachingScene, Moment, ChapterId>;
+export type { MissionResult } from '../stage/lesson';
 
 export const CHAPTERS: Chapter[] = [
   {
@@ -90,35 +84,6 @@ export const CHAPTERS: Chapter[] = [
 ];
 
 export const CHAPTER_MAP = new Map(CHAPTERS.map((c) => [c.id, c]));
-
-export interface MissionResult {
-  pass: boolean;
-  /** What happened, in numbers. */
-  detail: string;
-}
-
-export interface Mission {
-  id: string;
-  chapter: ChapterId;
-  title: string;
-  /** The situation. */
-  brief: string;
-  /** The pass condition, in one line. */
-  goal: string;
-  setup: Partial<CachingConfig>;
-  /** What the learner may change before running. */
-  controls: ControlId[];
-  seconds: number;
-  script?: { at: number; label: string; run: (s: CachingScene) => void }[];
-  check: (s: CachingScene) => MissionResult;
-  /** A configuration that passes (kept passing by the tests). */
-  solution: Partial<CachingConfig>;
-  /** The tempting wrong answer (kept failing by the tests). */
-  naive: Partial<CachingConfig>;
-  hint: string;
-  /** Why the solution works, shown after a pass. */
-  debrief: string;
-}
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
@@ -314,42 +279,19 @@ const CONTROL_KEYS: Record<ControlId, (keyof CachingConfig)[]> = {
   fleetMode: ['fleetMode'],
 };
 
+export const MISSION_SEED = lesson.MISSION_SEED;
+
 /** The config a chapter starts from. */
-export const chapterConfig = (id: ChapterId): CachingConfig => ({ ...DEFAULT_CONFIG, ...CHAPTER_MAP.get(id)!.base });
+export const chapterConfig = (id: ChapterId): CachingConfig => lesson.chapterConfig(CACHING, id);
 
 /** A mission's config: its setup, plus the learner's choices for the controls it allows. */
-export function missionConfig(m: Mission, choices: Partial<CachingConfig> = {}): CachingConfig {
-  const allowed = new Set(m.controls.flatMap((c) => CONTROL_KEYS[c]));
-  const picked = Object.fromEntries(Object.entries(choices).filter(([k]) => allowed.has(k as keyof CachingConfig)));
-  return { ...chapterConfig(m.chapter), ...m.setup, ...picked };
-}
-
-export const MISSION_SEED = 1;
+export const missionConfig = (m: Mission, choices: Partial<CachingConfig> = {}): CachingConfig => lesson.missionConfig(CACHING, m, choices);
 
 /** A fresh scene for a mission run, with its script scheduled. */
-export function startMission(m: Mission, choices: Partial<CachingConfig> = {}, seed = MISSION_SEED): CachingScene {
-  const s = new CachingScene(missionConfig(m, choices), seed);
-  for (const step of m.script ?? []) s.sim.at(step.at * 1000, () => step.run(s));
-  return s;
-}
+export const startMission = (m: Mission, choices: Partial<CachingConfig> = {}, seed = MISSION_SEED): CachingScene => lesson.startMission(CACHING, m, choices, seed);
 
 /** Run a mission headless to the end. The live run in the browser gives the same result. */
-export function runMission(m: Mission, choices: Partial<CachingConfig> = {}, seed = MISSION_SEED): MissionResult {
-  const s = startMission(m, choices, seed);
-  s.sim.advance(m.seconds * 1000);
-  return m.check(s);
-}
-
-/** A pause that asks the learner to predict by pointing at the stage. */
-export interface FreezeFrame {
-  id: string;
-  chapter: ChapterId;
-  when: (m: Moment, s: CachingScene) => boolean;
-  prompt: (m: Moment, s: CachingScene) => string;
-  /** node: click a component; slot: click a cache slot; note: just read and continue. */
-  answer: { kind: 'node'; node: string } | { kind: 'slot' } | { kind: 'note' };
-  explain: (m: Moment, s: CachingScene) => string;
-}
+export const runMission = (m: Mission, choices: Partial<CachingConfig> = {}, seed = MISSION_SEED): lesson.MissionResult => lesson.runMission(CACHING, m, choices, seed);
 
 const policyOf = (s: CachingScene) => POLICIES.find((p) => p.id === s.cfg.policy)!;
 
@@ -359,7 +301,7 @@ export const FREEZE_FRAMES: FreezeFrame[] = [
     chapter: 'hit-miss',
     when: (m, s) => m.kind === 'lookup' && m.node === 'cache' && !m.present && s.sim.now > 3000,
     prompt: (m) => `${m.kind === 'lookup' ? m.key : 'This key'} isn't in the cache. Click the component that will answer this request.`,
-    answer: { kind: 'node', node: 'db' },
+    answer: { kind: 'node', correct: () => 'db' },
     explain: (m) =>
       `A miss: the request carries on to the database. On the way back, the answer is stored in a slot, so the next request for ${m.kind === 'lookup' ? m.key : 'it'} will be a hit.`,
   },
@@ -368,7 +310,7 @@ export const FREEZE_FRAMES: FreezeFrame[] = [
     chapter: 'hit-miss',
     when: (m) => m.kind === 'lookup' && m.node === 'cache' && m.present && !m.stale,
     prompt: (m) => `${m.kind === 'lookup' ? m.key : 'This key'} is already in a slot. Click the component that will answer this request.`,
-    answer: { kind: 'node', node: 'cache' },
+    answer: { kind: 'node', correct: () => 'cache' },
     explain: () => 'A hit: the cache answers in about a millisecond, and the database never hears about it. Every hit is one less query for the database.',
   },
   {
@@ -380,7 +322,7 @@ export const FREEZE_FRAMES: FreezeFrame[] = [
       const corner = p.id === 'lru' || p.id === 'mru' ? ' Each slot’s corner shows how long ago it was last used.' : p.id === 'fifo' || p.id === 'lifo' ? ' Each slot’s corner shows how long ago it was stored.' : p.id === 'lfu' ? ' Each slot’s corner shows its hit count.' : '';
       return `The cache is full and ${m.kind === 'evict' ? m.key : 'a new key'} needs a slot. Under ${p.label}, which slot gets emptied? Click it.${corner}`;
     },
-    answer: { kind: 'slot' },
+    answer: { kind: 'slot', correct: (m) => (m.kind === 'evict' ? `slot:${m.slot}` : '') },
     explain: (m, s) => (m.kind === 'evict' ? `${policyOf(s).label} evicts ${policyOf(s).evicts}: that's ${m.victim}, in slot ${m.slot + 1}.` : ''),
   },
   {
@@ -388,7 +330,7 @@ export const FREEZE_FRAMES: FreezeFrame[] = [
     chapter: 'writes',
     when: (m) => m.kind === 'lookup' && m.node === 'cache' && m.present && m.stale,
     prompt: (m) => `${m.kind === 'lookup' ? m.key : 'This key'} was just changed in the database, but this slot still holds the old version. Click the component that will answer.`,
-    answer: { kind: 'node', node: 'cache' },
+    answer: { kind: 'node', correct: () => 'cache' },
     explain: () =>
       'The cache answers, with the old value: a stale read. Nothing told the cache the database had changed. Write-around (delete the cached copy) or write-through (update it too) fixes this.',
   },
@@ -402,3 +344,14 @@ export const FREEZE_FRAMES: FreezeFrame[] = [
       'Write-back confirmed those writes as soon as the cache had them, and they are gone now. The database still has the old values, so later reads will be stale as well. A replica that confirms each write before the answer would have kept them.',
   },
 ];
+
+/** The whole caching lesson, for the lesson runner. */
+export const CACHING: lesson.Lesson<CachingScene, CachingConfig, Moment, ChapterId, ControlId, FaultId> = {
+  chapters: CHAPTERS,
+  missions: MISSIONS,
+  freezeFrames: FREEZE_FRAMES,
+  defaults: DEFAULT_CONFIG,
+  controlKeys: CONTROL_KEYS,
+  makeScene: (cfg, seed) => new CachingScene(cfg, seed),
+  needsRebuild: (p) => p.topology !== undefined || p.fleetMode !== undefined,
+};

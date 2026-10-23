@@ -1,4 +1,6 @@
-import { MISSIONS } from './logic/cachingLesson';
+import { MISSIONS as CACHING_MISSIONS } from './logic/cachingLesson';
+import { MISSIONS as CDN_MISSIONS } from './logic/cdnLesson';
+import { MISSIONS as PROXY_MISSIONS } from './logic/proxyLesson';
 import type { SystemTopic } from './types';
 
 const KARAN = 'https://github.com/karanpratapsingh/system-design';
@@ -215,7 +217,101 @@ export const TOPICS: SystemTopic[] = [
       'Cache close to the user to cut latency, and in front of the database to cut load. Watch for stampedes: coalesce misses and refresh hot keys before they expire.',
     ],
     sourceReferences: sources('#caching', 'Caching', '#cache', 'Cache'),
-    missions: MISSIONS.map(({ id, title }) => ({ id, title })),
+    missions: CACHING_MISSIONS.map(({ id, title }) => ({ id, title })),
+  },
+  {
+    id: 'cdn',
+    group: 'building-blocks',
+    title: 'CDN — serving from the edge',
+    short: 'A world map of users, edges and one origin: distance, TTLs, deploys, leaks and outages.',
+    level: 'intermediate',
+    estimatedMinutes: 35,
+    learningObjectives: [
+      'Explain why distance puts a floor under latency, and how edges near users get below it',
+      'Keep the origin’s load down with TTLs, revalidation and an origin shield',
+      'Ship changes without serving stale files, and choose between push and pull for a site',
+      'Spot what must never be cached, and predict what users see when an edge fails',
+    ],
+    prerequisites: ['Caching', 'DNS', 'TCP and UDP (helpful)'],
+    introduction:
+      'A content delivery network is a cache spread across the world. Instead of every user crossing an ocean to reach your servers, copies of your files sit in edge locations near them. It’s the caching lesson again with distance added, plus everything that goes wrong when one cache has to live in many places at once.',
+    concepts: [
+      { title: 'Distance is a floor', body: 'Light in fibre covers about 200 km per millisecond, and real routes are longer than the straight line. Sydney to Virginia and back takes about a quarter of a second, whatever your servers do. The only fix is to be closer.' },
+      { title: 'Edges are caches', body: 'An edge answers from its copy (a hit) or fetches from the origin (a miss) and keeps it for a TTL. Pull CDNs fetch on demand; push CDNs are handed every file up front.' },
+      { title: 'Edges know nothing', body: 'An edge can’t tell that the origin changed, or that a page belongs to one user. Deploys need purges or new file names, and per-user pages must never be cached by URL.' },
+    ],
+    prediction: {
+      id: 'cdn-predict',
+      prompt: 'A user in Sydney asks for logo.png. The Sydney edge has never been asked for it. Compared with going straight to the origin in Virginia, this first request is…',
+      choices: ['Much faster: the edge is next door', 'About as slow, or a little slower: the edge has to fetch the file from Virginia first', 'A failure: the edge doesn’t have the file', 'Instant: CDNs preload every file'],
+      answer: 1,
+      hint: 'What does an edge do when it doesn’t have the file?',
+      explain: 'It’s a miss: the edge fetches the file from Virginia, so the long trip still happens, plus the short hop to the edge. Every later request from Sydney is fast, because the edge kept a copy.',
+    },
+    quiz: [
+      { id: 'cdn-q1', prompt: 'Your users are nearly all in Brazil, and so is your origin. Your CDN’s nearest edge is in Miami. What does turning the CDN on do for those users?', choices: ['Speeds them up: CDNs always help', 'Slows them down: their requests now detour to Miami', 'Nothing: nearby users skip the CDN', 'Only helps their video'], answer: 1, explain: 'A CDN only helps if its edges are nearer your users than your origin is. Here the "edge" is about 110 ms away, while the origin is in town.' },
+      { id: 'cdn-q2', prompt: 'You deploy a new app.js, but users keep getting the old one for an hour: edges cache it with a one-hour TTL. Which fix keeps the long TTL?', choices: ['Set the TTL to 1 second', 'Give each version its own file name, such as app.3f2a.js', 'Turn the CDN off during deploys', 'Restart the origin'], answer: 1, explain: 'A new name is a new URL, so no edge has a stale copy of it, and every file can keep a long TTL. Purging the edges on each deploy works too.' },
+      { id: 'cdn-q3', prompt: 'A docs site of 20 small pages that rarely change gets light traffic from every continent. Push or pull?', choices: ['Pull: first visits will be fast anyway', 'Push: upload once, so nobody waits on a first-visit miss, and the storage is tiny', 'Neither: docs don’t belong on a CDN', 'Pull, with a 1-second TTL'], answer: 1, explain: 'With light traffic, a pull CDN keeps missing on first visits. Pushing 20 small pages everywhere costs almost nothing. A huge library with a long tail is the opposite case.' },
+      { id: 'cdn-q4', prompt: 'You set the CDN to cache everything, and shoppers start seeing other people’s carts. Why?', choices: ['The CDN has been hacked', 'Edges cache by URL, and /cart is the same URL for every shopper', 'The TTL is too short', 'The origin sends the wrong cart'], answer: 1, explain: 'A page that differs per user must never be shared from a cache: mark it Cache-Control: private, or cache static files only.' },
+      { id: 'cdn-q5', prompt: 'Eight edges each fetch the same file from your origin every time their copies expire. What cuts that to about one fetch?', choices: ['A shorter TTL', 'An origin shield: one shared cache in front of the origin', 'More edges', 'Counting handshakes'], answer: 1, explain: 'With a shield, the edges’ misses meet in one cache before reaching the origin. Revalidation then makes the expiries that do reach the origin cheap: a 304 instead of the whole file.' },
+      { id: 'cdn-q6', prompt: 'An edge dies. Users who found it through DNS, with a 60-second TTL, keep failing for up to a minute. Why, and what helps?', choices: ['The edge reboots slowly', 'Each user cached the DNS answer and keeps using it until it expires; anycast, or a shorter TTL, moves them sooner', 'The origin is down too', 'Browsers don’t allow failover'], answer: 1, explain: 'A cached DNS answer is used until it expires, dead edge or not. Anycast reroutes in the network itself within seconds; a shorter DNS TTL means more lookups.' },
+    ],
+    recap: [
+      'Distance puts a floor under latency; a CDN gets below it by answering from edges near users, if it has edges near them.',
+      'An edge is a cache: misses still go to the origin, and every edge misses separately unless an origin shield sits in front.',
+      'Long TTLs, revalidation and a shield keep the origin quiet; versioned file names (or purges) keep long TTLs safe across deploys.',
+      'Push suits small sets of files that rarely change; pull suits big libraries with a long tail.',
+      'Never cache per-user pages by URL, and remember that DNS-steered users keep a dead edge’s address until their TTL runs out.',
+    ],
+    sourceReferences: sources('#content-delivery-network-cdn', 'Content Delivery Network (CDN)', '#content-delivery-network', 'Content delivery network'),
+    missions: CDN_MISSIONS.map(({ id, title }) => ({ id, title })),
+  },
+  {
+    id: 'proxy',
+    group: 'building-blocks',
+    title: 'Proxy — speaking for clients and servers',
+    short: 'An office behind a forward proxy and a shop behind a reverse one: who learns what, offloading, rate limits and failover.',
+    level: 'intermediate',
+    estimatedMinutes: 35,
+    learningObjectives: [
+      'Tell a forward proxy from a reverse proxy by whose side it’s on, and say what each one is for',
+      'Predict what a website or a backend learns about a client, including through X-Forwarded-For',
+      'Move TLS, compression, caching and static files off the app servers, and know when passing TLS through rules that out',
+      'Rate limit without throttling people who share an address, and stop the proxy being a single point of failure',
+    ],
+    prerequisites: ['IP', 'DNS', 'Load balancing', 'Caching (helpful)'],
+    introduction:
+      'A proxy is a middleman that makes requests on someone else’s behalf, and whose behalf decides what it’s for. A forward proxy works for clients: websites see the proxy instead of them. A reverse proxy works for servers: clients see one front door instead of the machines behind it. This lesson puts both on one stage, so you can follow a single request through each and see exactly who learns what.',
+    concepts: [
+      { title: 'Whose side it’s on', body: 'A forward proxy is chosen by the client, or its office, and stands in for the client. A reverse proxy is run by the site and stands in for its servers. The same software can do either job; what differs is who runs it and who it speaks for.' },
+      { title: 'Envelopes get rewritten', body: 'Each proxy opens a new connection, so the source address changes at every proxy. A header such as X-Forwarded-For can carry the original address along on purpose: servers behind a reverse proxy need it, and a privacy proxy must strip it.' },
+      { title: 'Reading the request', body: 'Routing by path, caching and compression all need the proxy to read the request, so it has to end TLS. A proxy that passes TLS straight through sees only addresses: it can share out connections and limit them, and nothing more.' },
+    ],
+    prediction: {
+      id: 'proxy-predict',
+      prompt: 'Alice’s office sends all its web traffic through a forward proxy. Alice visits news.example. Which address does news.example see as the source of her request?',
+      choices: ['Alice’s laptop’s address', 'The forward proxy’s address', 'news.example’s own address', 'None: proxied requests carry no address'],
+      answer: 1,
+      hint: 'Who actually opens the connection to news.example?',
+      explain: 'The proxy makes the request itself, from its own address, so that’s the source news.example sees. Whether Alice really stays hidden depends on what else the proxy puts in the request, as the first chapter shows.',
+    },
+    quiz: [
+      { id: 'proxy-q1', prompt: 'An office’s forward proxy adds X-Forwarded-For to every request. What can a website learn about the office’s staff?', choices: ['Nothing: the source address is the proxy’s', 'Each laptop’s own address, from the header', 'Only which country they’re in', 'Their names'], answer: 1, explain: 'The header carries each laptop’s address along with the request, so any site that reads it knows who asked. A proxy meant for privacy has to strip it.' },
+      { id: 'proxy-q2', prompt: 'video.example only serves UK addresses. Your office is in Germany, behind a forward proxy. What makes it work for everyone?', choices: ['Turning the proxy off', 'Having the proxy exit from a UK address', 'Adding X-Forwarded-For', 'A reverse proxy in front of video.example'], answer: 1, explain: 'A geo restriction goes by the source address the site sees, and through a proxy that’s the proxy’s. A UK exit makes every request from the office look British.' },
+      { id: 'proxy-q3', prompt: 'Without a reverse proxy, shop.example’s DNS lists all three app servers. What changes for clients when a reverse proxy goes in front?', choices: ['They connect to the proxy’s one address, and the app servers need only private ones', 'Nothing: it only helps the servers', 'They get four addresses instead of three', 'Each client must be configured to use it'], answer: 0, explain: 'The proxy becomes the shop’s only public address. App servers can be added, moved or replaced behind it without clients noticing, and nobody outside can reach them directly.' },
+      { id: 'proxy-q4', prompt: 'Your reverse proxy passes TLS straight through to the app servers. Which of these can it still do?', choices: ['Cache /api/catalog', 'Send /static/* to a file store', 'Gzip responses', 'Rate limit each client address'], answer: 3, explain: 'Without decrypting, the proxy sees addresses but not paths, headers or bodies. Limits and blocks by address still work; routing, caching and compression don’t.' },
+      { id: 'proxy-q5', prompt: 'You limit your shop to 2 requests a second per address. A whole office now gets 429s, though each person sends far fewer. Why?', choices: ['They’re all scrapers', 'They all arrive from one address, through the office’s proxy', 'The limit counts per country', 'Their requests are bigger'], answer: 1, explain: 'A per-address limit can’t tell apart the people behind one address. Offices, universities and mobile networks put many people behind one. Limit per account or API key where you can, or set the limit with shared addresses in mind.' },
+      { id: 'proxy-q6', prompt: 'Your only reverse proxy dies, but every app server behind it is healthy. What do customers see, and what fixes it?', choices: ['Nothing: they connect to the app servers instead', 'Every request fails; a standby that takes over the proxy’s address fixes it', 'Slower pages until it restarts', 'Only cached pages still work'], answer: 1, explain: 'Clients only know the proxy’s address, so a dead proxy is a dead shop. A standby with a health check takes over the address; how quickly depends on how often it checks.' },
+    ],
+    recap: [
+      'A forward proxy works for clients and stands in for them; a reverse proxy works for servers and stands in for them. Same machinery, opposite sides.',
+      'Every proxy rewrites the source address. X-Forwarded-For carries the original along on purpose: needed behind a reverse proxy, a leak in a privacy proxy.',
+      'A reverse proxy gives a site one front door. It can route by path, end TLS, compress and cache, sparing the app servers, as long as it can read the request.',
+      'Rate limiting by address treats everyone behind one office proxy as one client.',
+      'The front door is a single point of failure until a standby can take over its address, and failover takes as long as the health check.',
+    ],
+    sourceReferences: sources('#proxy', 'Proxy', '#reverse-proxy-web-server', 'Reverse proxy (web server)'),
+    missions: PROXY_MISSIONS.map(({ id, title }) => ({ id, title })),
   },
 ];
 

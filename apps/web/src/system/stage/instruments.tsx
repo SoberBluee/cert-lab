@@ -132,3 +132,47 @@ export function Timeline({ bars, ratio, markers, barMax, seconds }: { bars: numb
     </svg>
   );
 }
+
+/** One row per item: a bar to its median and a tick at its p95, coloured by how fast it is. */
+export function LatencyBars({ rows, max }: { rows: { label: string; p50: number; p95: number }[]; max?: number }) {
+  if (!rows.length) return <p className="text-xs text-zinc-500">No answers yet.</p>;
+  const top = max ?? Math.max(100, ...rows.map((r) => r.p95));
+  const tone = (ms: number) => (ms < 50 ? 'bg-emerald-400' : ms < 150 ? 'bg-amber-400' : 'bg-red-400');
+  return (
+    <ul className="space-y-1.5">
+      {rows.map((r) => (
+        <li key={r.label} className="grid grid-cols-[84px_minmax(0,1fr)_48px] items-center gap-2 text-xs">
+          <span className="truncate text-zinc-300">{r.label}</span>
+          <span className="relative h-2 rounded-full bg-zinc-800" aria-hidden>
+            <span className={`absolute inset-y-0 left-0 rounded-full ${tone(r.p50)}`} style={{ width: `${Math.min(100, (r.p50 / top) * 100)}%` }} />
+            <span className="absolute top-[-2px] h-3 w-0.5 bg-zinc-300" style={{ left: `${Math.min(100, (r.p95 / top) * 100)}%` }} title={`p95 ${fmtMs(r.p95)}`} />
+          </span>
+          <span className="text-right font-mono text-zinc-200">{Math.round(r.p50)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** A bar split into labelled parts, with the total. */
+export function StackBar({ parts, unit }: { parts: { label: string; value: number; color: string }[]; unit: string }) {
+  const total = parts.reduce((n, p) => n + p.value, 0);
+  return (
+    <div>
+      <p className="font-mono text-sm font-semibold text-zinc-100">
+        {total.toFixed(total < 10 ? 2 : 1)}
+        <span className="text-xs font-normal text-zinc-500"> {unit}</span>
+      </p>
+      <div className="mt-1.5 flex h-2.5 overflow-hidden rounded-full bg-zinc-800" aria-hidden>
+        {total > 0 && parts.map((p) => <div key={p.label} style={{ width: `${(p.value / total) * 100}%`, background: p.color }} />)}
+      </div>
+      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-zinc-400">
+        {parts.map((p) => (
+          <li key={p.label} className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-sm" style={{ background: p.color }} /> {p.label} {p.value.toFixed(p.value < 10 ? 2 : 1)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

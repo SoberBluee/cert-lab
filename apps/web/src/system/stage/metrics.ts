@@ -17,45 +17,15 @@ export function histogram(values: readonly number[], bounds: readonly number[] =
   return counts;
 }
 
-/** Counters a scene records, bucketed per second of stage time. */
+/** What a scene recorded in one second of stage time: named counters and named sample series. */
 export interface Bucket {
-  reads: number;
-  hits: number;
-  /** Reads from the simulated users only (excludes batch jobs), for hit-ratio goals. */
-  userReads: number;
-  userHits: number;
-  writes: number;
-  dbOps: number;
-  failed: number;
-  stale: number;
-  lost: number;
-  readMs: number[];
-  writeMs: number[];
+  counts: Record<string, number>;
+  samples: Record<string, number[]>;
 }
 
-const emptyBucket = (): Bucket => ({ reads: 0, hits: 0, userReads: 0, userHits: 0, writes: 0, dbOps: 0, failed: 0, stale: 0, lost: 0, readMs: [], writeMs: [] });
+const emptyBucket = (): Bucket => ({ counts: {}, samples: {} });
 
-export interface WindowStats {
-  seconds: number;
-  reads: number;
-  hits: number;
-  hitRatio: number;
-  userHitRatio: number;
-  writes: number;
-  dbRate: number;
-  peakDbRate: number;
-  failed: number;
-  stale: number;
-  lost: number;
-  readP50: number;
-  readP95: number;
-  readMean: number;
-  writeP95: number;
-}
-
-type CountKey = Exclude<keyof Bucket, 'readMs' | 'writeMs'>;
-
-/** Per-second history of a run: drives the timeline instrument and mission checks alike. */
+/** Per-second history of a run: drives timeline instruments and mission checks alike. */
 export class Timeline {
   private buckets: Bucket[] = [];
 
@@ -65,12 +35,14 @@ export class Timeline {
     return this.buckets[i]!;
   }
 
-  count(ms: number, key: CountKey, n = 1): void {
-    this.at(ms)[key] += n;
+  count(ms: number, key: string, n = 1): void {
+    const b = this.at(ms);
+    b.counts[key] = (b.counts[key] ?? 0) + n;
   }
 
-  latency(ms: number, kind: 'read' | 'write', value: number): void {
-    (kind === 'read' ? this.at(ms).readMs : this.at(ms).writeMs).push(value);
+  sample(ms: number, series: string, value: number): void {
+    const b = this.at(ms);
+    (b.samples[series] ??= []).push(value);
   }
 
   /** Bucket for second `i`, or an empty one. */
@@ -82,54 +54,32 @@ export class Timeline {
     return this.buckets.length;
   }
 
-  /** Raw latency samples over whole seconds [fromSec, toSec). */
-  samples(fromSec: number, toSec: number, kind: 'read' | 'write'): number[] {
-    const out: number[] = [];
-    for (let i = Math.max(0, Math.floor(fromSec)); i < Math.floor(toSec); i++) out.push(...(kind === 'read' ? this.second(i).readMs : this.second(i).writeMs));
-    return out;
-  }
-
-  /** Aggregate over whole seconds [fromSec, toSec). */
-  window(fromSec: number, toSec: number): WindowStats {
+  /** Whole seconds in [fromSec, toSec). */
+  protected range(fromSec: number, toSec: number): number[] {
     const from = Math.max(0, Math.floor(fromSec));
     const to = Math.max(from, Math.floor(toSec));
-    let reads = 0, hits = 0, userReads = 0, userHits = 0, writes = 0, db = 0, peak = 0, failed = 0, stale = 0, lost = 0;
-    const readMs: number[] = [];
-    const writeMs: number[] = [];
-    for (let i = from; i < to; i++) {
-      const b = this.second(i);
-      reads += b.reads;
-      hits += b.hits;
-      userReads += b.userReads;
-      userHits += b.userHits;
-      writes += b.writes;
-      db += b.dbOps;
-      peak = Math.max(peak, b.dbOps);
-      failed += b.failed;
-      stale += b.stale;
-      lost += b.lost;
-      readMs.push(...b.readMs);
-      writeMs.push(...b.writeMs);
-    }
-    readMs.sort((a, b) => a - b);
-    writeMs.sort((a, b) => a - b);
-    const seconds = to - from || 1;
-    return {
-      seconds,
-      reads,
-      hits,
-      hitRatio: reads ? hits / reads : 0,
-      userHitRatio: userReads ? userHits / userReads : 0,
-      writes,
-      dbRate: db / seconds,
-      peakDbRate: peak,
-      failed,
-      stale,
-      lost,
-      readP50: percentile(readMs, 50),
-      readP95: percentile(readMs, 95),
-      readMean: readMs.length ? readMs.reduce((a, b) => a + b, 0) / readMs.length : 0,
-      writeP95: percentile(writeMs, 95),
-    };
+    return Array.from({ length: to - from }, (_, i) => from + i);
+  }
+
+  /** Total of a counter over whole seconds [fromSec, toSec). */
+  sum(fromSec: number, toSec: number, key: string): number {
+    return this.range(fromSec, toSec).reduce((n, i) => n + (this.second(i).counts[key] ?? 0), 0);
+  }
+
+  /** The busiest single second for a counter. */
+  peak(fromSec: number, toSec: number, key: string): number {
+    return this.range(fromSec, toSec).reduce((n, i) => Math.max(n, this.second(i).counts[key] ?? 0), 0);
+  }
+
+  /** All samples of a series, sorted ascending. */
+  values(fromSec: number, toSec: number, series: string): number[] {
+    return this.range(fromSec, toSec)
+      .flatMap((i) => this.second(i).samples[series] ?? [])
+      .sort((a, b) => a - b);
+  }
+
+  /** Seconds in the window (at least 1, for rates). */
+  seconds(fromSec: number, toSec: number): number {
+    return this.range(fromSec, toSec).length || 1;
   }
 }
