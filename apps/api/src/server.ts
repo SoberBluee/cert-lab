@@ -202,7 +202,7 @@ app.get('/api/sessions/current/kubeconfig', async (_req, reply) => {
 });
 
 // Per-topic scores from every graded question, for the Focus page.
-app.get('/api/focus', async () => focusReport(store, library));
+app.get<{ Querystring: { mode?: string } }>('/api/focus', async (req) => focusReport(store, library, undefined, req.query.mode === 'exam' ? 'exam' : 'all'));
 
 app.get<{ Querystring: { scenarioId?: string; domain?: string; limit?: string } }>('/api/history', async (req) => {
   const attempts: AttemptRecord[] = store
