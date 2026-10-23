@@ -13,10 +13,13 @@ export interface SourceRef {
   url: string;
 }
 
-export type SystemTopicId = 'ip' | 'osi' | 'tcp-udp' | 'dns' | 'load-balancing';
+export type SystemTopicId = 'ip' | 'osi' | 'tcp-udp' | 'dns' | 'load-balancing' | 'caching';
+
+export type TopicGroup = 'networking' | 'building-blocks';
 
 export interface SystemTopic {
   id: SystemTopicId;
+  group: TopicGroup;
   title: string;
   short: string;
   level: 'beginner' | 'intermediate';
@@ -29,4 +32,6 @@ export interface SystemTopic {
   quiz: QuizQuestion[];
   recap: string[];
   sourceReferences: SourceRef[];
+  /** Stage lessons: their missions. Passing half of them (and the quiz) completes the topic. */
+  missions?: { id: string; title: string }[];
 }

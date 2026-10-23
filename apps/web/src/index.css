@@ -73,3 +73,55 @@ kbd {
 .md-inline strong {
   @apply text-zinc-100;
 }
+
+/* System Labs stage: node frames are opaque so dots disappear into the component they reach. */
+.stage-frame {
+  fill: #18181b;
+  stroke: #3f3f46;
+  stroke-width: 1;
+}
+.stage-frame.tone-cache {
+  fill: #0b1f1e;
+  stroke: #0f766e;
+}
+.stage-frame.tone-db {
+  fill: #16143a;
+  stroke: #4f46e5;
+}
+.stage-frame.tone-replica {
+  fill: #1a1430;
+  stroke: #6d28d9;
+}
+.stage-frame.is-down {
+  fill: #2a0d0d;
+  stroke: #ef4444;
+}
+.stage-frame.is-focus {
+  stroke: #38bdf8;
+  stroke-width: 2;
+}
+.stage-pick:hover .stage-frame,
+.stage-pick-slot:hover rect {
+  stroke: #38bdf8;
+  stroke-width: 2.5;
+}
+.stage-pick {
+  cursor: crosshair;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .stage-pulse {
+    animation: stage-pulse 1.2s ease-out infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+}
+@keyframes stage-pulse {
+  from {
+    opacity: 1;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2);
+  }
+}
