@@ -60,7 +60,8 @@ export function LinuxApp() {
             </Suspense>
           }
         />
-        <Route path="*" element={<Navigate to="learn" replace />} />
+        {/* Absolute: in a catch-all route a relative path resolves against the unknown URL itself, and loops. */}
+        <Route path="*" element={<Navigate to="/linux/learn" replace />} />
       </Routes>
     </Shell>
   );
