@@ -280,7 +280,7 @@ The recipe catalog powers both Quick Create and Quick lab. Each recipe produces:
 | Builder | Add-ons | Follow-ups |
 | --- | --- | --- |
 | **Deployment** | Service, Ingress, HTTPRoute, requests/limits, probes, env from ConfigMap/Secret, nodeSelector, toleration, ConfigMap-served page, init container, spread across workers, own ServiceAccount without token, PriorityClass, revision history and minReadySeconds | Rolling update, scale, maxSurge/maxUnavailable, rollback, change cause, add env var, restart rollout, `kubectl set resources`, autoscale on CPU |
-| **Pod** | Command, sidecar, env from ConfigMap/Secret, security context, requests/limits, PVC mount, init container, ConfigMap/Secret as files, capabilities, exec liveness probe, run on a given worker | Label, annotate, change image, resize CPU in place, save logs, copy a file out |
+| **Pod** | Command, sidecar, env from ConfigMap/Secret, security context, requests/limits, PVC mount, init container, ConfigMap/Secret as files, TLS Secret mount and docker-registry `imagePullSecrets`, capabilities, exec liveness probe, run on a given worker | Label, annotate, change image, resize CPU in place, save logs, copy a file out |
 | **ServiceAccount + RBAC** | ClusterRole scope, extra write verb | |
 | **CronJob** | backoffLimit and activeDeadlineSeconds | Trigger a run now, suspend |
 | **PersistentVolumeClaim** | Bind by selector, bind to a named PV, mount in a Pod | Delete the claim and keep the volume, rebind the released volume |
@@ -307,12 +307,14 @@ These builders hold several single-purpose tasks on one topic. Each start of a Q
 | **Cluster upgrade** | Upgrade the control plane from 1.36 to 1.37.1; upgrade a worker (drain, `kubeadm upgrade node`, kubelet); prepare an upgrade and read `kubeadm upgrade plan`. Built from the `bare` image at setup, offline; the only question of its lab |
 | **Kustomize** | Write a production overlay; repair a kustomization that no longer builds; install a component with a patch so it runs on the control plane |
 | **CRDs and operators** | Inspect the CRDs of an API group (scope, storage version); read a field with `kubectl explain` and create a custom object; install an operator chart without its CRDs |
-| **Resource usage and logs** | Busiest Pods by memory and CPU (`kubectl top`); busiest node and a script for it; the ERROR lines and exit code of a crashed container (`logs --previous`); Pods by creation time and phase |
+| **Resource usage and logs** | Busiest Pods by memory and CPU (`kubectl top`); busiest node and a script for it; the ERROR lines and exit code of a crashed container (`logs --previous`); Pods by creation time and phase; the Pods killed first under memory pressure, and a Deployment made Guaranteed (QoS); a container's ID, runtime type and logs with `crictl`; a script for cluster events by time, and the events a Pod deletion caused; namespaced resource types and the namespace with the most Roles (`api-resources`) |
 | **Dynamic provisioning** | A StorageClass for the local-path provisioner, made the only default, and a claim provisioned on the Pod's node |
 | **Node infrastructure** | Persist kernel settings and `br_netfilter`; install a `.deb` and enable its service; join a node that was `kubeadm reset` |
 | **Service types and policies** | A LoadBalancer Service with a fixed node port and `externalTrafficPolicy: Local`; a selector-less Service with an EndpointSlice to a host outside the cluster; the least permissive of three NetworkPolicy files |
-| **Workload operations** | Split a node's allocatable capacity across replicas; a Job with completions, parallelism, backoffLimit and TTL; a PriorityClass one below the highest; a 1-hour ServiceAccount token |
-| **Gateway API with TLS** | Your own Gateway with an HTTPS listener and a TLS Secret; migrate a TLS Ingress with two paths to Gateway API |
+| **Workload operations** | Split a node's allocatable capacity across replicas; a Job with completions, parallelism, backoffLimit and TTL; a PriorityClass one below the highest; a 1-hour ServiceAccount token; list Secrets through the API from inside a Pod with its ServiceAccount token |
+| **Gateway API with TLS** | Your own Gateway with an HTTPS listener and a TLS Secret; migrate a TLS Ingress with two paths to Gateway API; send a canary by request header on an HTTPS route |
+| **Kubeconfig and cluster facts** | List contexts, script the current one without `kubectl`, decode a user's client certificate; map contexts to API servers and decode the cluster CA and its expiry; Pod and Service CIDRs, DNS IP, kube-proxy mode and the CNI; how each control plane component runs, and the file behind a static Pod on a worker |
+| **StatefulSets and DaemonSets** | Make a StatefulSet's Service headless for per-Pod DNS, then scale it; a StatefulSet with a headless Service and parallel Pods; a DaemonSet on every node, the control plane included |
 
 ### Troubleshooting categories
 
