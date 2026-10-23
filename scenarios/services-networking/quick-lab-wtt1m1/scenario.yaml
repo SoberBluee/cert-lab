@@ -1,0 +1,54 @@
+id: quick-lab-wtt1m1
+title: "Quick lab: Gateway API with TLS"
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 12
+points: 6
+tags: [ gateway-api, httproute, tls, ingress, migration ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ shop, store, portal, checkout, accounts, tickets, docs-site, payments, support, members ] }
+tasks:
+  - id: q1
+    title: HTTPS Gateway
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-secret
+        description: web-tls is a TLS Secret holding the certificate for secure.${Q1_NS}.lab
+        type: kubectl
+        run: echo "$(kubectl -n ${Q1_NS} get secret web-tls -o jsonpath='{.type}') $(kubectl -n ${Q1_NS} get secret web-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject 2>/dev/null | grep -o 'secure.${Q1_NS}.lab')"
+        expect: { equals: "kubernetes.io/tls secure.${Q1_NS}.lab" }
+        weight: 1
+      - id: q1-listener
+        description: web-gw has an HTTPS listener on 8443 for secure.${Q1_NS}.lab using web-tls
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get gateway web-gw -o jsonpath='{.spec.gatewayClassName} {.spec.listeners[?(@.name=="https")].protocol} {.spec.listeners[?(@.name=="https")].port} {.spec.listeners[?(@.name=="https")].hostname} {.spec.listeners[?(@.name=="https")].tls.certificateRefs[0].name}'
+        expect: { equals: "traefik HTTPS 8443 secure.${Q1_NS}.lab web-tls" }
+        weight: 1
+      - id: q1-serves
+        description: https://secure.${Q1_NS}.lab:30443/ returns the nginx page with the secure.${Q1_NS}.lab certificate
+        type: kubectl
+        run: curl -sk -m 5 --resolve secure.${Q1_NS}.lab:30443:$(getent hosts controlplane | awk '{print $1}') https://secure.${Q1_NS}.lab:30443/ | grep -q 'Welcome to nginx' && echo | openssl s_client -connect $(getent hosts controlplane | awk '{print $1}'):30443 -servername secure.${Q1_NS}.lab 2>/dev/null | openssl x509 -noout -subject 2>/dev/null | grep -q 'secure.${Q1_NS}.lab' && echo ok || echo fail
+        expect: { equals: ok }
+        weight: 3
+        retrySeconds: 60
+      - id: q1-route
+        description: HTTPRoute web is accepted by the listener
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get httproute web -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 30
+    hints:
+      - kubectl create secret tls <name> --cert=... --key=... creates a Secret of type kubernetes.io/tls.
+      - "The Gateway API docs (gateway-api.sigs.k8s.io, allowed in the exam) have an HTTPS listener example: protocol HTTPS, tls.mode Terminate, tls.certificateRefs."
+      - kubectl describe gateway and kubectl describe httproute show the Accepted, Programmed and ResolvedRefs conditions.
+    recipe: { builder: gateway, parts: [] }
