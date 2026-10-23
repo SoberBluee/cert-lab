@@ -10,6 +10,8 @@ export interface Hop {
   label: string;
   /** Modeled latency of this step, in real milliseconds. */
   ms: number;
+  /** The request's envelope after this step, for lessons that track one. */
+  fields?: Readonly<Record<string, string>>;
 }
 
 export interface Req {
@@ -29,6 +31,12 @@ export interface Req {
   done?: boolean;
   /** Writes carried by a batched flush. */
   count?: number;
+  /** Payload size in bytes; dots draw bigger for bigger payloads. */
+  size?: number;
+  /** Encrypted on the wire (drawn with a ring). */
+  encrypted?: boolean;
+  /** Its current envelope (addresses and headers), if the lesson tracks one; each hop records a copy. */
+  fields?: Record<string, string>;
 }
 
 /** A dot in flight along a wire. */
@@ -107,7 +115,7 @@ export class Sim {
 
   /** Record a step that happened inside a node (a lookup, a queue wait, a query). */
   hop(req: Req, label: string, ms = 0): void {
-    req.trail.push({ at: this.now, label, ms });
+    req.trail.push(req.fields ? { at: this.now, label, ms, fields: { ...req.fields } } : { at: this.now, label, ms });
     req.modeledMs += ms;
   }
 

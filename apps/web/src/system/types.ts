@@ -13,7 +13,7 @@ export interface SourceRef {
   url: string;
 }
 
-export type SystemTopicId = 'ip' | 'osi' | 'tcp-udp' | 'dns' | 'load-balancing' | 'caching';
+export type SystemTopicId = 'ip' | 'osi' | 'tcp-udp' | 'dns' | 'load-balancing' | 'caching' | 'cdn' | 'proxy';
 
 export type TopicGroup = 'networking' | 'building-blocks';
 

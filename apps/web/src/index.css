@@ -125,3 +125,10 @@ kbd {
     transform: scale(2);
   }
 }
+.stage-frame.tone-proxy {
+  fill: #1c1408;
+  stroke: #b45309;
+}
+.stage-frame.is-faded {
+  opacity: 0.18;
+}

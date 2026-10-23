@@ -4,10 +4,12 @@ import { Shell, type NavItem } from '../components/Shell';
 import { SimShell, card } from './components';
 import { loadProgress, revisitIds } from './progress';
 import { CachingLab } from './sims/CachingLab';
+import { CdnLab } from './sims/CdnLab';
 import { DnsSim } from './sims/DnsSim';
 import { IpSim } from './sims/IpSim';
 import { LbSim } from './sims/LbSim';
 import { OsiSim } from './sims/OsiSim';
+import { ProxyLab } from './sims/ProxyLab';
 import { TcpUdpSim } from './sims/TcpUdpSim';
 import { TOPIC_MAP, TOPICS } from './topics';
 import type { SystemTopicId, TopicGroup } from './types';
@@ -19,14 +21,24 @@ const SIMS: Record<SystemTopicId, ComponentType> = {
   dns: DnsSim,
   'load-balancing': LbSim,
   caching: CachingLab,
+  cdn: CdnLab,
+  proxy: ProxyLab,
 };
 
 const GROUPS: { id: TopicGroup; title: string; blurb: string }[] = [
   { id: 'networking', title: 'Networking', blurb: 'How a request finds its way: addresses, layers, transports and names.' },
-  { id: 'building-blocks', title: 'Building blocks', blurb: 'The parts large systems are made of. Caching is a live stage: watch every request, break things, and pass missions.' },
+  { id: 'building-blocks', title: 'Building blocks', blurb: 'The parts large systems are made of. Caching, CDN and Proxy are live stages: watch every request, break things, and pass missions.' },
 ];
 
 const NAV: NavItem[] = [{ to: '/system/learn', label: 'Learn' }];
+
+/**
+ * Lessons being built, previewed by the dev server only. Add one as `{ id, title, blurb, Page:
+ * lazy(() => import(…)) }` inside an `import.meta.env.DEV ? [...] : []`, which is false in
+ * production builds, so the preview and its code are dropped.
+ */
+const PREVIEWS: { id: string; title: string; blurb: string; Page: ComponentType }[] = [];
+
 
 function TopicIndex() {
   return (
@@ -84,6 +96,21 @@ function TopicIndex() {
           </div>
         </section>
       ))}
+      {import.meta.env.DEV && PREVIEWS.length > 0 && (
+        <section aria-label="In progress" className="space-y-2">
+          <div>
+            <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">In progress</h2>
+            <p className="text-xs text-zinc-500">Previews of lessons being built. Only shown by the dev server.</p>
+          </div>
+          {PREVIEWS.map((p) => (
+            <Link key={p.id} to={`/system/preview/${p.id}`} className={`${card} group block border-dashed transition hover:border-indigo-700`}>
+              <div className="text-xs tracking-wide text-amber-400 uppercase">Preview · visual check-in</div>
+              <div className="mt-1 font-semibold text-zinc-100 group-hover:text-indigo-200">{p.title}</div>
+              <p className="mt-1 text-sm text-zinc-400">{p.blurb}</p>
+            </Link>
+          ))}
+        </section>
+      )}
     </div>
   );
 }
@@ -113,6 +140,9 @@ export function SystemApp() {
         <Route index element={<Navigate to="learn" replace />} />
         <Route path="learn" element={<TopicIndex />} />
         <Route path="learn/:topicId" element={<TopicPage />} />
+        {PREVIEWS.map((p) => (
+          <Route key={p.id} path={`preview/${p.id}`} element={<p.Page />} />
+        ))}
         <Route path="*" element={<Navigate to="learn" replace />} />
       </Routes>
     </Shell>

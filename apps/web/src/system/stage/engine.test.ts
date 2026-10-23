@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Sim } from './engine';
+import { Server } from './server';
 import { offsetPolyline, pointAt, toPath } from './geometry';
 import { histogram, percentile, Timeline } from './metrics';
 import { mulberry32, sampleCdf, zipfCdf } from './rng';
@@ -63,6 +64,29 @@ describe('stage engine', () => {
     assert.deepEqual(order, [1, 2, 3]);
   });
 
+  it('records the envelope as it was after each hop', () => {
+    const sim = new Sim(1);
+    const req = sim.req('read', 'alice', '/');
+    req.fields = { src: '192.0.2.12' };
+    sim.send(req, 'a-b', { stageMs: 10, tone: 'request', label: 'alice → proxy' }, () => {
+      req.fields!.src = '203.0.113.5';
+      sim.hop(req, 'proxy: rewrite source');
+    });
+    sim.advance(20);
+    assert.deepEqual(req.trail.map((h) => h.fields?.src), ['192.0.2.12', '203.0.113.5']);
+  });
+
+  it('serves heavier work more slowly, and reports the work done', () => {
+    const sim = new Sim(1);
+    let work = 0;
+    const server = new Server(sim, { name: 'App', workers: 1, maxQueue: 5, modeledMs: 10, capacity: () => 10, onWork: (ms) => (work += ms) });
+    const done: number[] = [];
+    server.submit(sim.req('read', 'x'), 'serve', () => done.push(sim.now), () => {}, 2);
+    sim.advance(1000);
+    assert.deepEqual(done, [200]);
+    assert.equal(work, 200);
+  });
+
   it('steps to the next scheduled moment', () => {
     const sim = new Sim(1);
     sim.after(40, () => {});
@@ -97,17 +121,18 @@ describe('stage rng and metrics', () => {
     assert.deepEqual(histogram([0.5, 1, 40, 900]), [2, 0, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
 
-  it('aggregates per-second buckets over a window', () => {
+  it('aggregates named counters and samples over a window', () => {
     const t = new Timeline();
     t.count(500, 'reads', 4);
-    t.count(500, 'hits', 3);
     t.count(1500, 'dbOps', 6);
-    t.latency(1500, 'read', 40);
-    const w = t.window(0, 2);
-    assert.equal(w.hitRatio, 0.75);
-    assert.equal(w.dbRate, 3);
-    assert.equal(w.peakDbRate, 6);
-    assert.equal(w.readP95, 40);
+    t.count(1700, 'dbOps', 2);
+    t.sample(1500, 'read', 40);
+    t.sample(200, 'read', 3);
+    assert.equal(t.sum(0, 2, 'reads'), 4);
+    assert.equal(t.sum(0, 2, 'dbOps') / t.seconds(0, 2), 4);
+    assert.equal(t.peak(0, 2, 'dbOps'), 8);
+    assert.deepEqual(t.values(0, 2, 'read'), [3, 40]);
+    assert.equal(t.sum(1, 2, 'reads'), 0);
   });
 
   it('offsets wires into lanes and walks along them', () => {
