@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { AttemptReview, FocusMode, LabTopic, ReviewQuestion } from '@cka/schema';
+import type { FocusMode, LabTopic } from '@cka/schema';
 import { api, studioApi } from '../api';
+import { AttemptReviewView } from '../components/AttemptReviewView';
 import { Button, Card, ErrorBanner } from '../components/ui';
 import { DOMAINS, domainSections, minutesOver, recommendations, SLOW_POINTS, topicRows, type TopicRow } from '../focusTopics';
 import { useHiddenTopics } from '../hooks';
@@ -54,38 +55,13 @@ function StatBadge({ row, mode, pace }: { row: TopicRow; mode: FocusMode; pace: 
   );
 }
 
-/** The CKA pass mark, in percent. */
-const PASS_PERCENT = 66;
-
-const minutesClass = (minutes: number | undefined, pace: number) =>
-  minutes === undefined ? 'text-zinc-500' : minutes > 2 * pace ? 'text-red-400' : minutes > pace ? 'text-amber-300' : 'text-zinc-400';
-
-/** Why a reviewed question needs another look, or undefined when it scored full marks within pace. */
-function reviewNote(q: ReviewQuestion, pace: number): string | undefined {
-  if (!q.attempted) return 'never opened';
-  const notes = [];
-  if (q.score < q.maxScore) notes.push(q.score === 0 && q.minutes !== undefined && q.minutes < 2 ? 'no points in under 2 minutes: skipped or left early' : `lost ${q.maxScore - q.score} pt`);
-  if (q.minutes !== undefined && q.minutes > pace) notes.push(`${Math.round((q.minutes - pace) * 10) / 10} min over pace`);
-  return notes.length ? notes.join(' · ') : undefined;
-}
-
-/** Feedback on one graded attempt of several questions: what was missed and where the time went, with links to practise. */
+/** The latest mock, or another attempt picked from the menu, question by question. */
 function ExamReview({ topics }: { topics: LabTopic[] }) {
   const [attemptId, setAttemptId] = useState<number>();
   const review = useQuery({ queryKey: ['review', attemptId], queryFn: () => api.review(attemptId) });
-  const r: AttemptReview | undefined = review.data?.review;
+  const r = review.data?.review;
   if (review.error) return <ErrorBanner error={review.error} />;
   if (!r) return null;
-  const pace = r.paceMinutes;
-  const percent = r.maxScore ? Math.round((r.score / r.maxScore) * 100) : 0;
-  const notes = r.questions.map((q) => reviewNote(q, pace));
-  const flagged = r.questions.map((q, i) => ({ q, i, note: notes[i] })).filter((x) => x.note);
-  // The costliest first: the most points lost, then the most minutes over pace.
-  const lost = (q: ReviewQuestion) => q.maxScore - q.score;
-  const over = (q: ReviewQuestion) => Math.max(0, (q.minutes ?? 0) - pace);
-  flagged.sort((a, b) => lost(b.q) - lost(a.q) || over(b.q) - over(a.q));
-  const slow = r.questions.filter((q) => q.minutes !== undefined && q.minutes > pace);
-  const label = (id: string) => topics.find((t) => t.id === id)?.label ?? id;
   const attempts = review.data?.attempts ?? [];
   return (
     <Card
@@ -108,67 +84,10 @@ function ExamReview({ topics }: { topics: LabTopic[] }) {
         )
       }
     >
-      <p className="text-sm text-zinc-300">
-        {r.scenarioTitle}, {new Date(r.startedAt).toLocaleString()}:{' '}
-        <span className={percentClass(percent)}>
-          {r.score}/{r.maxScore} ({percent}%)
-        </span>
-        {r.mode === 'mock' && <> · pass mark {PASS_PERCENT}%, {percent >= PASS_PERCENT ? 'passed' : 'not passed'}</>}
-        {' · '}
-        {plural(r.questions.filter((q) => lost(q) > 0).length, 'question')} lost {r.maxScore - r.score} pt
-        {slow.length > 0 && (
-          <>
-            {' · '}
-            {plural(slow.length, 'question')} over the {pace}-minute pace took {Math.round(slow.reduce((n, q) => n + (q.minutes ?? 0), 0))} min
-          </>
-        )}
-      </p>
-      <p className="mt-1 text-xs text-zinc-500">
+      <AttemptReviewView review={r} topics={topics} />
+      <p className="mt-2 text-xs text-zinc-500">
         These questions count toward their topics below: misses lower a topic's score, and time over pace raises its place in Work on next.
       </p>
-      {flagged.length === 0 ? (
-        <p className="mt-3 text-sm text-emerald-400">Full marks on every question, each within {pace} minutes.</p>
-      ) : (
-        <ul className="mt-3 divide-y divide-zinc-800 overflow-hidden rounded-lg border border-zinc-800">
-          {flagged.map(({ q, i, note }) => (
-            <li key={q.taskId} className="px-4 py-2.5">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="font-medium text-zinc-100">
-                  Q{i + 1}. {q.title}
-                </span>
-                <span className={`text-sm ${q.score === q.maxScore ? 'text-emerald-400' : q.score === 0 ? 'text-red-400' : 'text-amber-300'}`}>
-                  {q.score}/{q.maxScore} pt
-                </span>
-                <span className={`font-mono text-sm ${minutesClass(q.minutes, pace)}`}>{q.minutes === undefined ? 'no time' : `${q.minutes} min`}</span>
-                <span className="text-xs text-zinc-500">{note}</span>
-              </div>
-              {q.missed.length > 0 && (
-                <ul className="mt-1 space-y-0.5 text-xs text-zinc-400">
-                  {q.missed.map((c) => (
-                    <li key={c.id}>
-                      <span className="font-mono text-red-400/80">−{c.weight}</span> {c.description}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {q.topics.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
-                  {q.topics.map((id) => (
-                    <Link key={id} to={`/?topic=${id}`} className="text-sky-400 hover:text-sky-300">
-                      Practice {label(id)} →
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {flagged.length < r.questions.length && (
-        <p className="mt-2 text-xs text-zinc-500">
-          {plural(r.questions.length - flagged.length, 'other question')} scored full marks within {pace} minutes.
-        </p>
-      )}
     </Card>
   );
 }

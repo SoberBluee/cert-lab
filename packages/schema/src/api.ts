@@ -423,13 +423,17 @@ export interface ReviewQuestion {
   minutes?: number;
   /** False when the question was never opened. */
   attempted: boolean;
+  /** The task text as it was set, variables filled in. */
+  text: string;
+  /** The question's part of solution.md, for the faults it rolled; none when solution.md has no part for it. */
+  solution?: string;
   /** The checks that failed, heaviest first. */
   missed: ReviewCheck[];
   /** Focus topics the question counts toward. */
   topics: string[];
 }
 
-/** A graded attempt question by question, for feedback after a mock. */
+/** A graded attempt that has ended, question by question, for feedback after a mock. */
 export interface AttemptReview {
   attemptId: number;
   scenarioId: string;
@@ -454,9 +458,12 @@ export interface ReviewSummary {
 }
 
 export interface ReviewResponse {
-  /** The attempt asked for, or else the latest graded exam-mode attempt; none when there is none. */
+  /**
+   * The attempt asked for, or else the latest graded exam-mode attempt; none when there is none. Only attempts
+   * that have ended are reviewed: the review shows solutions.
+   */
   review?: AttemptReview;
-  /** Recent graded attempts with more than one question, newest first, to pick another. */
+  /** Recent ended, graded attempts with more than one question, newest first, to pick another. */
   attempts: ReviewSummary[];
 }
 

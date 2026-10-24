@@ -16,6 +16,7 @@ import { NOT_ATTEMPTED } from './grader';
 import { labTopics } from './recipes/topics';
 import type { LoadedScenario, ScenarioLibrary } from './scenarios';
 import type { Store } from './store';
+import { renderScenario } from './vars';
 
 /** How many of a topic's most recent questions its score averages. */
 export const FOCUS_RECENT = 5;
@@ -146,13 +147,45 @@ export function focusReport(store: Store, library: ScenarioLibrary, topics = all
 
 const REVIEW_LIST = 10;
 
+/** A heading that opens one question's part of solution.md: "### Question 2: ..." or "## q2 — ...". */
+const QUESTION_HEADING = /^#{2,3} +(?:Question +(\d+)\b|q(\d+)\b)/i;
+
 /**
- * A graded attempt question by question: its score, the minutes it was open and the checks it missed, with the
- * Focus topics it counts toward. Without `attemptId`, the latest graded exam-mode attempt of several questions,
- * else the latest of several questions in any mode. `attempts` lists recent attempts of several questions to pick from.
+ * solution.md split into each question's part, by task id: question N is task qN, else the Nth task. A
+ * scenario of one question gets the whole file; questions without a heading of their own get nothing.
+ */
+export function questionSolutions(md: string, taskIds: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  let current: string | undefined;
+  let lines: string[] = [];
+  let fenced = false;
+  const flush = () => {
+    if (current && lines.join('').trim()) out[current] = lines.join('\n').trim();
+  };
+  for (const line of md.split('\n')) {
+    if (line.startsWith('```')) fenced = !fenced;
+    const m = fenced ? null : QUESTION_HEADING.exec(line);
+    if (m) {
+      flush();
+      const n = Number(m[1] ?? m[2]);
+      current = taskIds.includes(`q${n}`) ? `q${n}` : taskIds[n - 1];
+      lines = [];
+    } else if (current) lines.push(line);
+  }
+  flush();
+  if (!Object.keys(out).length && taskIds.length === 1 && md.trim()) out[taskIds[0]] = md.replace(/^## Solution\s*\n/, '').trim();
+  return out;
+}
+
+/**
+ * A graded attempt that has ended, question by question: its score, the minutes it was open, the checks it
+ * missed and its solution, with the Focus topics it counts toward. Without `attemptId`, the latest exam-mode
+ * attempt of several questions, else the latest of several questions in any mode. `attempts` lists recent
+ * attempts of several questions to pick from. An attempt still running is never reviewed: the review shows
+ * its solutions.
  */
 export function attemptReview(store: Store, library: ScenarioLibrary, attemptId?: number, topics = allTopics()): ReviewResponse {
-  const all = store.gradedAttempts();
+  const all = store.gradedAttempts().filter((a) => a.endedAt);
   const graded = all.filter((a) => (library.get(a.scenarioId)?.tasks.length ?? 0) > 1).reverse();
   const pick = attemptId === undefined ? (graded.find((a) => a.mode === 'mock') ?? graded[0]) : all.find((a) => a.id === attemptId);
   const reviews = new Map<number, AttemptReview>();
@@ -161,20 +194,23 @@ export function attemptReview(store: Store, library: ScenarioLibrary, attemptId?
     if (!s) return undefined;
     if (reviews.has(a.id)) return reviews.get(a.id);
     const results = new Map(a.checks.map((c) => [c.id, c]));
-    const questions = s.tasks.map((raw): ReviewQuestion => {
-      const task = resolveTask(raw, a.vars);
+    const rendered = renderScenario(s, a.vars);
+    const solutions = questionSolutions(rendered.solutionMd ?? '', rendered.tasks.map((t) => t.id));
+    const questions = rendered.tasks.map((task): ReviewQuestion => {
       const checks = task.checks.flatMap((c) => {
         const r = results.get(c.id);
-        return r ? [{ ...r, description: render(c.description, a.vars) }] : [];
+        return r ? [{ ...r, description: c.description }] : [];
       });
       const seconds = a.taskSeconds[task.id];
       return {
         taskId: task.id,
-        title: render(task.title, a.vars).replace(/\$\{\w+\}/g, '…'),
+        title: task.title.replace(/\$\{\w+\}/g, '…'),
         score: checks.reduce((n, c) => n + (c.passed ? c.weight : 0), 0),
         maxScore: checks.reduce((n, c) => n + c.weight, 0),
         ...(seconds ? { minutes: Math.round((seconds / 60) * 10) / 10 } : {}),
         attempted: !checks.some((c) => c.output.startsWith(NOT_ATTEMPTED)),
+        text: task.markdown,
+        ...(solutions[task.id] ? { solution: solutions[task.id] } : {}),
         missed: checks
           .filter((c) => !c.passed)
           .sort((x, y) => y.weight - x.weight)
