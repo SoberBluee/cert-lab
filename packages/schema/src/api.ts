@@ -1,6 +1,6 @@
 import type { ConnectionInfo } from './driver';
 import type { LessonTopic, LessonTrack } from './lesson';
-import type { Base, Domain } from './scenario';
+import type { Base, CkaDomain, Domain } from './scenario';
 
 export type SessionState = 'provisioning' | 'running' | 'grading' | 'completed' | 'failed';
 export type Mode = 'practice' | 'drill' | 'mock' | 'dry-run' | 'verify' | 'playground' | 'learn';
@@ -346,13 +346,20 @@ export interface LabTopic {
   id: string;
   label: string;
   group: 'create' | 'troubleshoot';
+  /** The curriculum domain the topic is scored in: its builder's or first category's, unless the catalog says otherwise. */
+  domain: CkaDomain;
   builderId?: string;
   /** When set, a create question contains exactly these add-ons, prerequisites first. */
   addons?: string[];
+  /** Generated create questions of any builder that have one of these parts count toward the topic too. */
+  anyParts?: string[];
   categories?: LabTopicCategory[];
   /** Tags that put a handwritten question in this topic; generated questions name their recipe instead. */
   tags: string[];
 }
+
+/** Which attempts the Focus report scores: every practice and exam attempt, or exam mode only. */
+export type FocusMode = 'all' | 'exam';
 
 /** One graded question of an attempt, in a topic. */
 export interface FocusQuestion {
@@ -362,6 +369,10 @@ export interface FocusQuestion {
   title: string;
   percent: number;
   at: string;
+  /** No hint was revealed and the solution was not viewed during the attempt. */
+  clean: boolean;
+  /** Minutes the question was open on screen, when the attempt recorded it. */
+  minutes?: number;
 }
 
 export interface FocusTopicStat {
@@ -373,11 +384,20 @@ export interface FocusTopicStat {
   /** The weakest of those recent questions. */
   weakest?: FocusQuestion;
   lastAt?: string;
+  /** Graded questions answered without hints or the solution. */
+  cleanQuestions: number;
+  /** Mean percent of the most recent clean questions (at most FOCUS_RECENT). */
+  cleanPercent?: number;
+  /** Mean minutes per question over the recent questions that recorded a time. */
+  recentMinutes?: number;
 }
 
 export interface FocusReport {
   /** How many recent questions recentPercent averages. */
   recent: number;
+  mode: FocusMode;
+  /** Minutes per question that keep exam pace: 120 minutes for about 17 tasks. */
+  paceMinutes: number;
   topics: FocusTopicStat[];
 }
 

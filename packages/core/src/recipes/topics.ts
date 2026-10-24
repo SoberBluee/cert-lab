@@ -1,6 +1,19 @@
-import type { LabTopic } from '@cka/schema';
+import type { CkaDomain, LabTopic } from '@cka/schema';
 import { BUILDERS } from './create';
 import { CATEGORIES, faultList } from './troubleshoot';
+
+/** A topic before the catalog gives it its curriculum domain. */
+type TopicDraft = Omit<LabTopic, 'domain'>;
+
+/**
+ * Topics scored in another domain than their builder's: publishing an app is a networking task,
+ * although the Deployment builder is a workloads builder.
+ */
+const DOMAIN_OF: Record<string, CkaDomain> = {
+  'create-service': 'services-networking',
+  'create-ingress': 'services-networking',
+  'create-httproute': 'services-networking',
+};
 
 const faultsStarting = (categoryId: string, prefix: string): string[] => {
   const category = CATEGORIES.find((c) => c.id === categoryId);
@@ -10,16 +23,17 @@ const faultsStarting = (categoryId: string, prefix: string): string[] => {
   return ids;
 };
 
-const create = (id: string, label: string, builderId: string, tags: string[], addons?: string[]): LabTopic => ({
+const create = (id: string, label: string, builderId: string, tags: string[], addons?: string[], anyParts?: string[]): TopicDraft => ({
   id,
   label,
   group: 'create',
   builderId,
   ...(addons ? { addons } : {}),
+  ...(anyParts ? { anyParts } : {}),
   tags,
 });
 
-const trouble = (id: string, label: string, categories: LabTopic['categories'], tags: string[]): LabTopic => ({
+const trouble = (id: string, label: string, categories: LabTopic['categories'], tags: string[]): TopicDraft => ({
   id,
   label,
   group: 'troubleshoot',
@@ -29,7 +43,7 @@ const trouble = (id: string, label: string, categories: LabTopic['categories'], 
 
 /** Topics the Quick lab category dropdown offers. Fault subsets follow the recipe pools. */
 export const labTopics = (): LabTopic[] => {
-  const topics: LabTopic[] = [
+  const topics: TopicDraft[] = [
     create('create-deployment', 'Deployment', 'deployment', ['deployment', 'rollout', 'rollback', 'scale']),
     create('create-service', 'Service', 'deployment', ['service', 'expose'], ['expose']),
     create('create-ingress', 'Ingress', 'deployment', ['ingress'], ['expose', 'ingress']),
@@ -43,6 +57,16 @@ export const labTopics = (): LabTopic[] => {
     create('create-storageclass', 'StorageClass', 'storageclass', ['storageclass']),
     create('create-hpa', 'HorizontalPodAutoscaler', 'hpa', ['hpa']),
     create('create-vpa', 'VerticalPodAutoscaler', 'vpa', ['vpa']),
+    // Quick lab practises these with one Deployment add-on; questions of either workload builder with a matching part count.
+    create('create-config', 'ConfigMaps and Secrets', 'deployment', ['configmap', 'secret', 'env', 'envfrom'], ['env'], ['env', 'html-configmap', 'config-volume']),
+    create(
+      'create-placement',
+      'Scheduling and placement',
+      'deployment',
+      ['scheduling', 'taints', 'tolerations', 'nodeSelector', 'nodeselector', 'affinity', 'node-affinity', 'anti-affinity', 'topology-spread', 'static-pod', 'manual-scheduling'],
+      ['toleration'],
+      ['node-selector', 'toleration', 'spread', 'priority-class', 'placement'],
+    ),
     create('create-helm', 'Helm', 'helm', ['helm']),
     create('create-etcd-backup', 'etcd backup', 'etcd-backup', ['backup', 'snapshot']),
     create('create-etcd-restore', 'etcd restore', 'etcd-restore', ['restore']),
@@ -95,21 +119,28 @@ export const labTopics = (): LabTopic[] => {
     trouble('trouble-provisioning', 'Dynamic provisioning', [{ id: 'provisioning' }], ['dynamic-provisioning', 'local-path']),
     trouble('trouble-gateway', 'Gateway across namespaces', [{ id: 'gateway' }], ['referencegrant']),
   ];
-  for (const topic of topics) {
+  const everyPart = new Set(BUILDERS.flatMap((b) => [...b.addons, ...b.followUps].map((p) => p.id)));
+  return topics.map((topic): LabTopic => {
+    // Recipes are CKA content, so their domain is always a CKA domain.
+    let domain: CkaDomain | undefined;
     if (topic.group === 'create') {
       const builder = BUILDERS.find((b) => b.id === topic.builderId);
       if (!builder) throw new Error(`Topic "${topic.id}" names unknown builder "${topic.builderId}".`);
       const parts = new Set([...builder.addons, ...builder.followUps].map((p) => p.id));
       for (const id of topic.addons ?? []) if (!parts.has(id)) throw new Error(`Topic "${topic.id}" names unknown add-on "${id}".`);
+      for (const id of topic.anyParts ?? []) if (!everyPart.has(id)) throw new Error(`Topic "${topic.id}" names unknown part "${id}".`);
+      domain = builder.domain as CkaDomain;
     } else {
       for (const source of topic.categories ?? []) {
         const category = CATEGORIES.find((c) => c.id === source.id);
         if (!category) throw new Error(`Topic "${topic.id}" names unknown category "${source.id}".`);
+        domain ??= category.domain as CkaDomain;
         if (!source.faults) continue;
         const known = new Set(faultList(category).map((f) => f.id));
         for (const id of source.faults) if (!known.has(id)) throw new Error(`Topic "${topic.id}" names unknown fault "${id}".`);
       }
     }
-  }
-  return topics;
+    if (!domain) throw new Error(`Topic "${topic.id}" has no builder or category.`);
+    return { ...topic, domain: DOMAIN_OF[topic.id] ?? domain };
+  });
 };
