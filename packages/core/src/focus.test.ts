@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { stringify } from 'yaml';
 import { ScenarioSchema, type Mode } from '@cka/schema';
-import { attemptReview, focusReport, questionTopics, scenarioTopicIds } from './focus';
+import { attemptReview, focusReport, questionSolutions, questionTopics, scenarioTopicIds } from './focus';
 import { NOT_ATTEMPTED } from './grader';
 import { CATEGORIES, faultList } from './recipes';
 import { ScenarioLibrary } from './scenarios';
@@ -181,8 +181,8 @@ describe('focusReport with help, exam mode and time', () => {
 describe('speed and the attempt review', () => {
   const store = new Store(join(root, 'review.db'));
 
-  /** An attempt of mixed-lab: q1 and q2 graded with the given results, q3 never opened. */
-  function attempt(mode: Mode, results: [string, boolean, number][], seconds: Record<string, number>, help: { hintsUsed?: number } = {}) {
+  /** An attempt of mixed-lab: q1 and q2 graded with the given results, q3 never opened. Ended unless `running`. */
+  function attempt(mode: Mode, results: [string, boolean, number][], seconds: Record<string, number>, help: { hintsUsed?: number } = {}, running = false) {
     const id = store.createAttempt({ scenarioId: 'mixed-lab', sessionId: `s${Math.random()}`, mode, ...help });
     store.createSession({ id: `s-${id}`, scenarioId: 'mixed-lab', mode, base: 'cluster', attemptId: id, vars: { Q1_FAULT: apiserverFault, Q2_APP: 'web' } });
     const passed = results.filter(([, ok]) => ok).reduce((n, [, , w]) => n + w, 0);
@@ -190,6 +190,7 @@ describe('speed and the attempt review', () => {
       score: passed,
       maxScore: 9,
       tasks: Object.entries(seconds).map(([task, s]) => ({ id: task, title: task, seconds: s })),
+      ...(running ? {} : { endedAt: new Date().toISOString() }),
     });
     store.replaceCheckResults(id, [
       ...results.map(([c, ok, weight]) => ({ checkId: c, passed: ok, weight, output: 'exit=0' })),
@@ -217,7 +218,29 @@ describe('speed and the attempt review', () => {
     assert.equal(stat('create-helm').recentMinutes, 6);
   });
 
-  it('reviews the latest exam-mode attempt question by question, heaviest misses first', () => {
+  it('reviews the latest exam-mode attempt question by question, heaviest misses first, with its solutions', () => {
+    writeFileSync(
+      join(root, 'troubleshooting', 'mixed-lab', 'solution.md'),
+      [
+        '## Solution',
+        '',
+        '### Question 1: Control plane',
+        '',
+        `<!-- fault Q1_FAULT=${apiserverFault} -->`,
+        'Fix the API server flag.',
+        '<!-- /fault -->',
+        `<!-- fault Q1_FAULT=${etcdFaults[0]} -->`,
+        'Fix etcd.',
+        '<!-- /fault -->',
+        '',
+        '### Question 2: Deployment ${Q2_APP}',
+        '',
+        '```bash',
+        '# Question 3 is not a heading inside a code block',
+        'helm upgrade ${Q2_APP}',
+        '```',
+      ].join('\n'),
+    );
     const mock = attempt(
       'mock',
       [
@@ -229,8 +252,9 @@ describe('speed and the attempt review', () => {
       ],
       { q1: 300, q2: 900 },
     );
-    // A later practice attempt: the review still defaults to the exam.
+    // A later practice attempt: the review still defaults to the exam. One still running is never reviewed.
     attempt('practice', all, { q1: 60 });
+    const running = attempt('practice', all, { q1: 60 }, {}, true);
     const library = new ScenarioLibrary(root);
     const { review, attempts } = attemptReview(store, library);
 
@@ -243,10 +267,30 @@ describe('speed and the attempt review', () => {
     assert.deepEqual(q2.missed.map((c) => [c.id, c.weight]), [['q2-c', 3], ['q2-a', 1]]);
     assert.deepEqual(q2.topics, ['create-helm']);
     assert.equal(q3.attempted, false);
+    // Each question's part of solution.md, for the fault it rolled, variables filled in.
+    assert.equal(q1.solution, 'Fix the API server flag.');
+    assert.match(q2.solution!, /helm upgrade web/);
+    assert.match(q2.solution!, /Question 3 is not a heading/);
+    assert.equal(q3.solution, undefined);
+    assert.equal(q2.text, 'Do it.\n');
+    assert.ok(!attempts.some((a) => a.attemptId === running));
+    assert.equal(attemptReview(store, library, running).review, undefined);
     assert.equal(attempts[0].mode, 'practice');
     assert.ok(attempts.some((a) => a.attemptId === mock));
 
     // Asked for by id, any graded attempt can be reviewed.
     assert.equal(attemptReview(store, library, attempts[0].attemptId).review?.mode, 'practice');
+  });
+});
+
+describe('questionSolutions', () => {
+  it('splits solution.md at each question heading, by task id', () => {
+    const md = '## Solution\n\n### Question 1: A\n\none\n\n### Question 2: B\n\ntwo\n';
+    assert.deepEqual(questionSolutions(md, ['q1', 'q2']), { q1: 'one', q2: 'two' });
+    // Older handwritten mocks head each part "## qN".
+    assert.deepEqual(questionSolutions('# Mock\n## q1 — Helm\nhelm\n## q2 — etcd\netcd', ['q1', 'q2']), { q1: 'helm', q2: 'etcd' });
+    // One question gets the whole file; a question without a part gets nothing.
+    assert.deepEqual(questionSolutions('## Solution\n\nkubectl apply\n', ['main']), { main: 'kubectl apply' });
+    assert.deepEqual(questionSolutions('### Question 2: B\n\ntwo', ['q1', 'q2']), { q2: 'two' });
   });
 });

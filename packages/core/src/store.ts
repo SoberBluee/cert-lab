@@ -327,6 +327,7 @@ export class Store {
     scenarioId: string;
     mode: Mode;
     startedAt: string;
+    endedAt?: string;
     vars: Vars;
     hintsUsed: number;
     solutionViewed: boolean;
@@ -336,7 +337,7 @@ export class Store {
     const graded = `mode IN ${USER_MODES} AND score IS NOT NULL`;
     const attempts = this.db
       .prepare(
-        `SELECT id, scenario_id, mode, started_at, hints_used, solution_viewed, task_times,
+        `SELECT id, scenario_id, mode, started_at, ended_at, hints_used, solution_viewed, task_times,
                 (SELECT vars FROM sessions WHERE attempt_id = attempts.id LIMIT 1) AS vars
          FROM attempts WHERE ${graded} ORDER BY started_at ASC`,
       )
@@ -358,6 +359,7 @@ export class Store {
       scenarioId: r.scenario_id as string,
       mode: r.mode as Mode,
       startedAt: r.started_at as string,
+      endedAt: opt(r.ended_at),
       vars: json<Vars>(r.vars) ?? {},
       hintsUsed: Number(r.hints_used),
       solutionViewed: Boolean(r.solution_viewed),

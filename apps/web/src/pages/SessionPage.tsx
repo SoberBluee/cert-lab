@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { SessionView } from '@cka/schema';
-import { api } from '../api';
+import { api, studioApi } from '../api';
+import { AttemptReviewView } from '../components/AttemptReviewView';
 import { ConnectionPanel } from '../components/ConnectionPanel';
 import { GradeResultView } from '../components/GradeResultView';
 import { LessonPane } from '../components/LessonPane';
@@ -235,6 +236,9 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
   const playground = ended.mode === 'playground';
   const exam = ended.mode === 'mock';
   const lesson = ended.mode === 'learn' ? ended.lesson : undefined;
+  // After an exam, the report: each question that lost points or time, with what it took to get it right.
+  const report = useQuery({ queryKey: ['review', ended.attemptId], queryFn: () => api.review(ended.attemptId), enabled: exam && Boolean(ended.lastGrade) });
+  const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity, enabled: exam });
   const retry = useMutation({
     mutationFn: () =>
       playground ? api.startPlayground() : lesson ? api.startLesson(lesson.id) : api.start(ended.scenarioId, exam ? 'mock' : 'practice'),
@@ -255,7 +259,19 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
           </p>
         ) : (
           <>
-            {ended.lastGrade ? (
+            {exam && report.data?.review?.attemptId === ended.attemptId ? (
+              <>
+                <AttemptReviewView review={report.data.review} topics={catalog.data?.topics ?? []} />
+                {ended.lastGrade && (
+                  <details className="mt-4">
+                    <summary className="cursor-pointer text-sm font-medium text-zinc-400 hover:text-zinc-200">Every check</summary>
+                    <div className="mt-3">
+                      <GradeResultView result={ended.lastGrade} />
+                    </div>
+                  </details>
+                )}
+              </>
+            ) : ended.lastGrade ? (
               <GradeResultView result={ended.lastGrade} />
             ) : (
               <p className="text-sm text-zinc-400">{exam ? 'The exam ended without being submitted.' : 'The session ended without being graded.'}</p>
@@ -283,6 +299,11 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
           {lesson?.track !== 'linux' && (
             <Link to={aws ? '/aws/history' : '/history'} className={buttonClass('ghost')}>
               History
+            </Link>
+          )}
+          {exam && !aws && (
+            <Link to="/focus" className={buttonClass('ghost')}>
+              Focus
             </Link>
           )}
         </div>
