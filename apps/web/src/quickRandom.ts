@@ -260,6 +260,38 @@ export function pickItems(
   return out;
 }
 
+/** The Quick lab topic choice, and Focus link, for a lab drawn from the Focus "Work on next" topics. */
+export const WEAK_SPOTS = 'weak-spots';
+
+/**
+ * `n` items from the Focus topics that need work, most needed first: one item per topic in turn, then round
+ * again, so a short list is practised more than once. No solo builder unless n is 1, at most one item that
+ * breaks the API.
+ */
+export function pickWeakItems(catalog: RecipeCatalog, topics: LabTopic[], n: number, kind: LabKind = 'random', layers: Depth = 1): Item[] {
+  const lists = topics.map((t) => shuffle(itemPool(catalog, n, kind, t, layers))).filter((l) => l.length > 0);
+  const out: Item[] = [];
+  let apiTaken = false;
+  for (let round = 0; out.length < n && round < n; round++) {
+    const before = out.length;
+    for (const list of lists) {
+      if (out.length >= n) break;
+      const item = list[round % list.length];
+      const x = info(item);
+      if (x.breaksApi && apiTaken) continue;
+      apiTaken ||= x.breaksApi;
+      out.push(item);
+    }
+    if (out.length === before) break;
+  }
+  return out;
+}
+
+/** A lab of `n` questions on the Focus topics that need work; see pickWeakItems. */
+export async function weakSpotsLab(catalog: RecipeCatalog, topics: LabTopic[], n: number, kind: LabKind = 'random', layers: Depth = 1): Promise<Question[]> {
+  return Promise.all(pickWeakItems(catalog, topics, n, kind, layers).map((item) => validRandomQuestion(item, layers)));
+}
+
 /** Rolls a question until the server accepts it; after a few rejected rolls, the plain question. */
 async function validRandomQuestion(item: Item, layers: Depth): Promise<Question> {
   for (let i = 0; i < RANDOM_TRIES; i++) {

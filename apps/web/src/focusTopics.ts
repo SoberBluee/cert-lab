@@ -36,26 +36,53 @@ export function domainSections(rows: TopicRow[]): { domain: (typeof DOMAINS)[num
   return DOMAINS.map((domain) => ({ domain, rows: rows.filter((r) => r.topic.domain === domain.id) })).filter((s) => s.rows.length > 0);
 }
 
+/** Exam pace in minutes per question, until the report says otherwise. */
+export const PACE_MINUTES = 7;
+
 /**
- * A topic is done once it has a clean 100% over `needed` clean questions, a whole scoring window: one
- * perfect question is not enough evidence.
+ * In the recommendations, each minute per question over exam pace weighs as much as this many points of score.
+ * A minute is a seventh of the next question's time, about 14 points of it; time costs points only when the
+ * clock runs out, so it counts half.
  */
-export const isDone = (stat: FocusTopicStat, needed: number) => stat.cleanPercent === 100 && stat.cleanQuestions >= needed;
+export const SLOW_POINTS = 7;
+
+/** Minutes per question over exam pace, on the topic's recent clean questions; 0 on pace or without a time. */
+export const minutesOver = (stat: FocusTopicStat, pace = PACE_MINUTES) => Math.max(0, Math.round(((stat.cleanMinutes ?? 0) - pace) * 10) / 10);
+
+/**
+ * How much a topic needs work: the points its readiness is short of 100, plus SLOW_POINTS for every minute
+ * over exam pace. A topic at 100% that takes twice the pace needs about as much work as one at 50% on pace.
+ */
+export const need = (stat: FocusTopicStat, pace = PACE_MINUTES) => 100 - (readiness(stat) ?? 0) + SLOW_POINTS * minutesOver(stat, pace);
+
+/**
+ * A topic is done once it has a clean 100% over `needed` clean questions, a whole scoring window, within
+ * exam pace: one perfect question is not enough evidence, and a right answer that takes too long still costs
+ * the exam.
+ */
+export const isDone = (stat: FocusTopicStat, needed: number, pace = PACE_MINUTES) =>
+  stat.cleanPercent === 100 && stat.cleanQuestions >= needed && minutesOver(stat, pace) === 0;
 
 export interface Recommendations {
-  /** Practised topics that are not done yet, weakest first, then those with the least clean evidence (max 5). */
+  /**
+   * Practised topics that are not done yet, the most points missed and minutes over pace first, then those with
+   * the least clean evidence (max 5).
+   */
   workOn: TopicRow[];
   /** Topics without a graded question yet, heaviest domain first. Quick lab can generate every topic, so all of them count. */
   blindSpots: TopicRow[];
 }
 
-/** `needed` is how many clean questions a topic needs at 100% to be done: the report's scoring window. */
-export function recommendations(rows: TopicRow[], needed = 5): Recommendations {
+/**
+ * `needed` is how many clean questions a topic needs at 100% to be done: the report's scoring window. `pace` is
+ * the report's minutes per question.
+ */
+export function recommendations(rows: TopicRow[], needed = 5, pace = PACE_MINUTES): Recommendations {
   const workOn = rows
-    .filter((r) => r.stat.questions > 0 && !isDone(r.stat, needed))
+    .filter((r) => r.stat.questions > 0 && !isDone(r.stat, needed, pace))
     .sort(
       (a, b) =>
-        readiness(a.stat)! - readiness(b.stat)! ||
+        need(b.stat, pace) - need(a.stat, pace) ||
         // Then the least clean evidence, the heavier domain, and the longest unpractised.
         a.stat.cleanQuestions - b.stat.cleanQuestions ||
         weightOf(b.topic) - weightOf(a.topic) ||

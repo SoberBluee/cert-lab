@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { stringify } from 'yaml';
 import { ScenarioSchema, type Mode } from '@cka/schema';
-import { focusReport, questionTopics, scenarioTopicIds } from './focus';
+import { attemptReview, focusReport, questionTopics, scenarioTopicIds } from './focus';
 import { NOT_ATTEMPTED } from './grader';
 import { CATEGORIES, faultList } from './recipes';
 import { ScenarioLibrary } from './scenarios';
@@ -175,5 +175,78 @@ describe('focusReport with help, exam mode and time', () => {
     const exam = helm('exam');
     assert.deepEqual([exam.questions, exam.recentPercent, exam.cleanQuestions, exam.cleanPercent, exam.recentMinutes], [1, 67, 1, 67, undefined]);
     assert.equal(focusReport(store, library, undefined, 'exam').mode, 'exam');
+  });
+});
+
+describe('speed and the attempt review', () => {
+  const store = new Store(join(root, 'review.db'));
+
+  /** An attempt of mixed-lab: q1 and q2 graded with the given results, q3 never opened. */
+  function attempt(mode: Mode, results: [string, boolean, number][], seconds: Record<string, number>, help: { hintsUsed?: number } = {}) {
+    const id = store.createAttempt({ scenarioId: 'mixed-lab', sessionId: `s${Math.random()}`, mode, ...help });
+    store.createSession({ id: `s-${id}`, scenarioId: 'mixed-lab', mode, base: 'cluster', attemptId: id, vars: { Q1_FAULT: apiserverFault, Q2_APP: 'web' } });
+    const passed = results.filter(([, ok]) => ok).reduce((n, [, , w]) => n + w, 0);
+    store.updateAttempt(id, {
+      score: passed,
+      maxScore: 9,
+      tasks: Object.entries(seconds).map(([task, s]) => ({ id: task, title: task, seconds: s })),
+    });
+    store.replaceCheckResults(id, [
+      ...results.map(([c, ok, weight]) => ({ checkId: c, passed: ok, weight, output: 'exit=0' })),
+      ...['q3-a', 'q3-b'].map((c) => ({ checkId: c, passed: false, weight: 1, output: NOT_ATTEMPTED })),
+    ]);
+    return id;
+  }
+
+  const all: [string, boolean, number][] = [
+    ['q1-a', true, 1],
+    ['q1-b', true, 1],
+    ['q2-a', true, 1],
+    ['q2-b', true, 1],
+    ['q2-c', true, 1],
+  ];
+
+  it('judges speed on clean questions, capping a question left open too long', () => {
+    attempt('practice', all, { q1: 3600, q2: 600 });
+    attempt('practice', all, { q1: 120, q2: 120 }, { hintsUsed: 1 });
+    const library = new ScenarioLibrary(root);
+    const stat = (id: string) => focusReport(store, library).topics.find((t) => t.topicId === id)!;
+    // 60 minutes counts as 30; the attempt with a hint does not count toward speed.
+    assert.equal(stat('trouble-apiserver').cleanMinutes, 30);
+    assert.equal(stat('create-helm').cleanMinutes, 10);
+    assert.equal(stat('create-helm').recentMinutes, 6);
+  });
+
+  it('reviews the latest exam-mode attempt question by question, heaviest misses first', () => {
+    const mock = attempt(
+      'mock',
+      [
+        ['q1-a', true, 1],
+        ['q1-b', true, 1],
+        ['q2-a', false, 1],
+        ['q2-b', true, 1],
+        ['q2-c', false, 3],
+      ],
+      { q1: 300, q2: 900 },
+    );
+    // A later practice attempt: the review still defaults to the exam.
+    attempt('practice', all, { q1: 60 });
+    const library = new ScenarioLibrary(root);
+    const { review, attempts } = attemptReview(store, library);
+
+    assert.equal(review?.attemptId, mock);
+    assert.deepEqual([review?.score, review?.maxScore, review?.mode, review?.paceMinutes], [3, 9, 'mock', 7]);
+    const [q1, q2, q3] = review!.questions;
+    assert.deepEqual([q1.score, q1.maxScore, q1.minutes, q1.missed], [2, 2, 5, []]);
+    assert.equal(q2.title, 'Deployment web');
+    assert.deepEqual([q2.score, q2.maxScore, q2.minutes], [1, 5, 15]);
+    assert.deepEqual(q2.missed.map((c) => [c.id, c.weight]), [['q2-c', 3], ['q2-a', 1]]);
+    assert.deepEqual(q2.topics, ['create-helm']);
+    assert.equal(q3.attempted, false);
+    assert.equal(attempts[0].mode, 'practice');
+    assert.ok(attempts.some((a) => a.attemptId === mock));
+
+    // Asked for by id, any graded attempt can be reviewed.
+    assert.equal(attemptReview(store, library, attempts[0].attemptId).review?.mode, 'practice');
   });
 });

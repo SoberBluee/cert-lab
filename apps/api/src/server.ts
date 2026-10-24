@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyError } from 'fastify';
-import { createOrchestrator, focusReport, gradeQuiz, OrchestratorError, repoRoot, Studio, toLessonSummary, toQuizSummary, toQuizView, toSummary } from '@cka/core';
+import { attemptReview, createOrchestrator, focusReport, gradeQuiz, OrchestratorError, repoRoot, Studio, toLessonSummary, toQuizSummary, toQuizView, toSummary } from '@cka/core';
 import type { AttemptRecord, Mode, ScenarioDetail, ScenarioSummary } from '@cka/schema';
 import { registerStudio } from './studio';
 import { registerTerminal } from './terminal';
@@ -203,6 +203,11 @@ app.get('/api/sessions/current/kubeconfig', async (_req, reply) => {
 
 // Per-topic scores from every graded question, for the Focus page.
 app.get<{ Querystring: { mode?: string } }>('/api/focus', async (req) => focusReport(store, library, undefined, req.query.mode === 'exam' ? 'exam' : 'all'));
+
+// One graded attempt question by question, for feedback after a mock: the latest exam-mode one unless asked.
+app.get<{ Querystring: { attempt?: string } }>('/api/review', async (req) =>
+  attemptReview(store, library, req.query.attempt && /^\d+$/.test(req.query.attempt) ? Number(req.query.attempt) : undefined),
+);
 
 app.get<{ Querystring: { scenarioId?: string; domain?: string; limit?: string } }>('/api/history', async (req) => {
   const attempts: AttemptRecord[] = store

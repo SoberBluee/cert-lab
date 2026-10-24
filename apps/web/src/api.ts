@@ -15,6 +15,7 @@ import type {
   QuizSummary,
   QuizView,
   RecipeCatalog,
+  ReviewResponse,
   ScenarioBundle,
   ScenarioDetail,
   ScenarioSummary,
@@ -78,6 +79,7 @@ export const api = {
   end: () => request<SessionView>('DELETE', '/sessions/current'),
   history: () => request<{ attempts: AttemptRecord[] }>('GET', '/history'),
   topicScores: (mode: FocusMode = 'all') => request<FocusReport>('GET', `/focus${mode === 'exam' ? '?mode=exam' : ''}`),
+  review: (attemptId?: number) => request<ReviewResponse>('GET', `/review${attemptId ? `?attempt=${attemptId}` : ''}`),
   lessons: (track?: LessonTrack) =>
     request<{ lessons: LessonSummary[]; errors: { file: string; messages: string[] }[] }>('GET', `/lessons${track ? `?track=${track}` : ''}`),
   startLesson: (id: string) => request<SessionView>('POST', `/lessons/${encodeURIComponent(id)}/start`),

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { FocusReport, LabTopic, ScenarioSummary } from '@cka/schema';
-import { domainSections, isDone, recommendations, topicRows } from '../focusTopics';
+import { domainSections, isDone, minutesOver, need, recommendations, topicRows } from '../focusTopics';
 
 const topics: LabTopic[] = [
   { id: 'trouble-dns', label: 'DNS', group: 'troubleshoot', domain: 'services-networking', categories: [{ id: 'dns' }], tags: ['dns'] },
@@ -82,6 +82,28 @@ describe('focusTopics', () => {
     assert.deepEqual(recommendations(topicRows(topics, done, [])).workOn.map((r) => r.topic.id), ['create-helm']);
     // With a window of 3, Helm's three clean questions are enough.
     assert.deepEqual(recommendations(topicRows(topics, done, []), 3).workOn, []);
+  });
+
+  it('counts time over exam pace as work still to do, even at a clean 100%', () => {
+    const done = { topicId: 't', questions: 5, cleanQuestions: 5, cleanPercent: 100 };
+    assert.equal(isDone({ ...done, cleanMinutes: 6.5 }, 5), true);
+    assert.equal(isDone({ ...done, cleanMinutes: 19.5 }, 5), false);
+    assert.equal(minutesOver({ ...done, cleanMinutes: 19.5 }), 12.5);
+    // 12.5 minutes over pace weigh like 87.5 points: more than a topic at 50% on pace.
+    assert.equal(need({ ...done, cleanMinutes: 19.5 }), 87.5);
+    const timed: FocusReport = {
+      ...report,
+      topics: [
+        { topicId: 'create-vpa', questions: 5, recentPercent: 100, cleanQuestions: 5, cleanPercent: 100, cleanMinutes: 19.5 },
+        { topicId: 'create-helm', questions: 5, recentPercent: 50, cleanQuestions: 5, cleanPercent: 50, cleanMinutes: 4 },
+        { topicId: 'trouble-dns', questions: 5, recentPercent: 80, cleanQuestions: 5, cleanPercent: 80, cleanMinutes: 9 },
+      ],
+    };
+    assert.deepEqual(recommendations(topicRows(topics, timed, [])).workOn.map((r) => r.topic.id), ['create-vpa', 'create-helm', 'trouble-dns']);
+    // At a 12-minute pace VPA's time weighs 52.5, just ahead of Helm's 50 missed points, and DNS's 9 minutes are on pace.
+    assert.deepEqual(recommendations(topicRows(topics, timed, []), 5, 12).workOn.map((r) => r.topic.id), ['create-vpa', 'create-helm', 'trouble-dns']);
+    assert.equal(need(timed.topics[0], 12), 52.5);
+    assert.equal(need(timed.topics[2], 12), 20);
   });
 
   it('lists every topic without a graded question as a blind spot, heaviest domain first', () => {

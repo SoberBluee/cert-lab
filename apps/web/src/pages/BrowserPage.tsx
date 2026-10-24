@@ -5,8 +5,9 @@ import type { LabTopic, LessonTrack, ScenarioSummary } from '@cka/schema';
 import { AWS_DOMAINS, DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
+import { recommendations, topicRows } from '../focusTopics';
 import { isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
-import { fullMock, MOCK_MINUTES, MOCK_QUESTIONS, RANDOM_MAX, randomLab, toRequest, type Depth, type LabKind } from '../quickRandom';
+import { fullMock, MOCK_MINUTES, MOCK_QUESTIONS, RANDOM_MAX, randomLab, toRequest, WEAK_SPOTS, weakSpotsLab, type Depth, type LabKind } from '../quickRandom';
 import { SECTIONS } from '../section';
 
 const KIND_LABELS: Record<LabKind, string> = { create: 'Create', troubleshoot: 'Troubleshoot', random: 'Random' };
@@ -79,16 +80,33 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   const [hiddenTopics] = useHiddenTopics();
   const [searchParams, setSearchParams] = useSearchParams();
   const focusTopic = searchParams.get('topic');
-  const focusLabel = focusTopic ? catalog.data?.topics.find((t) => t.id === focusTopic)?.label : undefined;
+  // The Focus "Work on next" topics, most needed first: what a Weak spots lab practises.
+  const focus = useQuery({ queryKey: ['focus', 'all'], queryFn: () => api.topicScores('all'), enabled: recipesReady });
+  const weakTopics = useMemo(
+    () =>
+      catalog.data && focus.data
+        ? recommendations(topicRows(catalog.data.topics, focus.data, []), focus.data.recent, focus.data.paceMinutes).workOn.map((r) => r.topic)
+        : [],
+    [catalog.data, focus.data],
+  );
+  const weakFocus = focusTopic === WEAK_SPOTS;
+  const focusLabel = weakFocus
+    ? `Weak spots (${weakTopics.map((t) => t.label).join(', ') || 'none yet'})`
+    : focusTopic
+      ? catalog.data?.topics.find((t) => t.id === focusTopic)?.label
+      : undefined;
 
   // Focus page preferences: a practised topic shows only its scenarios; otherwise hidden topics are dropped.
   const visibleScenarios = useMemo(() => {
     const list = filtered.data?.scenarios ?? [];
-    if (focusTopic) return list.filter((s) => s.topics.includes(focusTopic));
+    if (focusTopic) {
+      const ids = new Set(weakFocus ? weakTopics.map((t) => t.id) : [focusTopic]);
+      return list.filter((s) => s.topics.some((id) => ids.has(id)));
+    }
     if (!hiddenTopics.length) return list;
     const hidden = new Set(hiddenTopics);
     return list.filter((s) => !s.topics.some((id) => hidden.has(id)));
-  }, [filtered.data, focusTopic, hiddenTopics]);
+  }, [filtered.data, focusTopic, weakFocus, weakTopics, hiddenTopics]);
   const [labKind, setLabKind] = useState<LabKind>('random');
   const [labTopic, setLabTopic] = useState('any');
   const [labCount, setLabCount] = useState('1');
@@ -99,12 +117,30 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   const topicChoices = topics.filter((t) => labKind === 'random' || t.group === labKind);
   const chosenTopic = topicChoices.find((t) => t.id === labTopic);
   const topicIds = topicChoices.map((t) => t.id).join('\n');
+  const weakChoices = weakTopics.filter((t) => labKind === 'random' || t.group === labKind);
+  const weakChosen = labTopic === WEAK_SPOTS && weakChoices.length > 0;
   const quickStart = useMutation({
-    mutationFn: async ({ kind, n, topic, layers, contexts }: { kind: LabKind; n: number; topic?: LabTopic; layers: Depth; contexts: boolean }) => {
+    mutationFn: async ({
+      kind,
+      n,
+      topic,
+      weak,
+      layers,
+      contexts,
+    }: {
+      kind: LabKind;
+      n: number;
+      topic?: LabTopic;
+      /** The Focus topics to practise, most needed first, instead of one topic. */
+      weak?: LabTopic[];
+      layers: Depth;
+      contexts: boolean;
+    }) => {
       setLabPhase('generating');
-      const questions = await randomLab(catalog.data!, n, kind, topic, layers);
+      const questions = weak ? await weakSpotsLab(catalog.data!, weak, n, kind, layers) : await randomLab(catalog.data!, n, kind, topic, layers);
       const id = `quick-lab-${Math.random().toString(36).slice(2, 8).padEnd(6, '0')}`;
-      await studioApi.quickCreate({ ...toRequest(questions, id, `Quick lab: ${topic?.label ?? KIND_LABELS[kind]}`, { contexts }), dryRun: false });
+      const title = `Quick lab: ${weak ? 'Weak spots' : (topic?.label ?? KIND_LABELS[kind])}`;
+      await studioApi.quickCreate({ ...toRequest(questions, id, title, { contexts }), dryRun: false });
       setLabPhase('starting');
       qc.invalidateQueries({ queryKey: ['scenarios'] });
       try {
@@ -143,16 +179,27 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   });
 
   useEffect(() => {
-    if (labTopic !== 'any' && !topicIds.split('\n').includes(labTopic)) setLabTopic('any');
-  }, [labTopic, topicIds]);
+    if (labTopic === WEAK_SPOTS) {
+      // Only once Focus has answered: until then there is no list to judge.
+      if (focus.data && !weakChoices.length) setLabTopic('any');
+    } else if (labTopic !== 'any' && !topicIds.split('\n').includes(labTopic)) setLabTopic('any');
+  }, [labTopic, topicIds, focus.data, weakChoices.length]);
 
-  // Practising a topic from Focus also points the Quick lab at it, for topics with few or no scenarios.
+  // Practising a topic from Focus also points the Quick lab at it, for topics with few or no scenarios. The weak
+  // spots link asks for one question per topic that needs work.
   useEffect(() => {
+    if (focusTopic === WEAK_SPOTS) {
+      if (!weakTopics.length) return;
+      setLabKind('random');
+      setLabTopic(WEAK_SPOTS);
+      setLabCount(String(weakTopics.length));
+      return;
+    }
     const topic = focusTopic ? catalog.data?.topics.find((t) => t.id === focusTopic) : undefined;
     if (!topic) return;
     setLabKind(topic.group);
     setLabTopic(topic.id);
-  }, [focusTopic, catalog.data]);
+  }, [focusTopic, catalog.data, weakTopics.length]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -289,11 +336,12 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
           </select>
           <select
             className={select}
-            value={chosenTopic?.id ?? 'any'}
+            value={weakChosen ? WEAK_SPOTS : (chosenTopic?.id ?? 'any')}
             onChange={(e) => setLabTopic(e.target.value)}
             disabled={quickStart.isPending || !catalog.data || !recipesReady}
           >
             <option value="any">Any</option>
+            {weakChoices.length > 0 && <option value={WEAK_SPOTS}>Weak spots from Focus ({weakChoices.length})</option>}
             {labKind === 'random' ? (
               <>
                 <optgroup label="Create">{topicOptions(topicChoices.filter((t) => t.group === 'create'))}</optgroup>
@@ -347,7 +395,14 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
                     : undefined
             }
             onClick={() =>
-              quickStart.mutate({ kind: labKind, n: labN, topic: chosenTopic, layers: labKind === 'create' ? 1 : labLayers === 'mix' ? 'mix' : Number(labLayers), contexts: labContexts })
+              quickStart.mutate({
+                kind: labKind,
+                n: labN,
+                topic: weakChosen ? undefined : chosenTopic,
+                weak: weakChosen ? weakChoices : undefined,
+                layers: labKind === 'create' ? 1 : labLayers === 'mix' ? 'mix' : Number(labLayers),
+                contexts: labContexts,
+              })
             }
           >
             {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
@@ -362,8 +417,10 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
           <span className="text-xs text-zinc-500">
             {!recipesReady
               ? 'Linux Quick lab recipes are not available yet.'
-              : chosenTopic
-                ? `Questions from ${chosenTopic.label}, saved as a hidden draft.`
+              : weakChosen
+                ? `Questions on what Focus says needs work, most needed first: ${weakChoices.map((t) => t.label).join(', ')}.`
+                : chosenTopic
+                  ? `Questions from ${chosenTopic.label}, saved as a hidden draft.`
                 : 'A random lab from the recipe catalog, saved as a hidden draft.'}
           </span>
         </div>
