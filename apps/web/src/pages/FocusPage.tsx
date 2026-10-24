@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { FocusMode, LabTopic } from '@cka/schema';
+import type { AttemptReview, FocusMode, LabTopic, ReviewQuestion } from '@cka/schema';
 import { api, studioApi } from '../api';
 import { Button, Card, ErrorBanner } from '../components/ui';
-import { DOMAINS, domainSections, recommendations, topicRows, type TopicRow } from '../focusTopics';
+import { DOMAINS, domainSections, minutesOver, recommendations, SLOW_POINTS, topicRows, type TopicRow } from '../focusTopics';
 import { useHiddenTopics } from '../hooks';
+import { WEAK_SPOTS } from '../quickRandom';
 
 const percentClass = (pct?: number) =>
   pct === undefined ? 'text-zinc-500' : pct >= 100 ? 'text-emerald-400' : pct >= 66 ? 'text-amber-300' : 'text-red-400';
@@ -50,6 +51,125 @@ function StatBadge({ row, mode, pace }: { row: TopicRow; mode: FocusMode; pace: 
       {plural(stat.questions, 'question')}
       <Pace minutes={stat.recentMinutes} pace={pace} /> · {scenariosNote(row)}
     </span>
+  );
+}
+
+/** The CKA pass mark, in percent. */
+const PASS_PERCENT = 66;
+
+const minutesClass = (minutes: number | undefined, pace: number) =>
+  minutes === undefined ? 'text-zinc-500' : minutes > 2 * pace ? 'text-red-400' : minutes > pace ? 'text-amber-300' : 'text-zinc-400';
+
+/** Why a reviewed question needs another look, or undefined when it scored full marks within pace. */
+function reviewNote(q: ReviewQuestion, pace: number): string | undefined {
+  if (!q.attempted) return 'never opened';
+  const notes = [];
+  if (q.score < q.maxScore) notes.push(q.score === 0 && q.minutes !== undefined && q.minutes < 2 ? 'no points in under 2 minutes: skipped or left early' : `lost ${q.maxScore - q.score} pt`);
+  if (q.minutes !== undefined && q.minutes > pace) notes.push(`${Math.round((q.minutes - pace) * 10) / 10} min over pace`);
+  return notes.length ? notes.join(' · ') : undefined;
+}
+
+/** Feedback on one graded attempt of several questions: what was missed and where the time went, with links to practise. */
+function ExamReview({ topics }: { topics: LabTopic[] }) {
+  const [attemptId, setAttemptId] = useState<number>();
+  const review = useQuery({ queryKey: ['review', attemptId], queryFn: () => api.review(attemptId) });
+  const r: AttemptReview | undefined = review.data?.review;
+  if (review.error) return <ErrorBanner error={review.error} />;
+  if (!r) return null;
+  const pace = r.paceMinutes;
+  const percent = r.maxScore ? Math.round((r.score / r.maxScore) * 100) : 0;
+  const notes = r.questions.map((q) => reviewNote(q, pace));
+  const flagged = r.questions.map((q, i) => ({ q, i, note: notes[i] })).filter((x) => x.note);
+  // The costliest first: the most points lost, then the most minutes over pace.
+  const lost = (q: ReviewQuestion) => q.maxScore - q.score;
+  const over = (q: ReviewQuestion) => Math.max(0, (q.minutes ?? 0) - pace);
+  flagged.sort((a, b) => lost(b.q) - lost(a.q) || over(b.q) - over(a.q));
+  const slow = r.questions.filter((q) => q.minutes !== undefined && q.minutes > pace);
+  const label = (id: string) => topics.find((t) => t.id === id)?.label ?? id;
+  const attempts = review.data?.attempts ?? [];
+  return (
+    <Card
+      title={r.mode === 'mock' ? 'Exam review' : 'Lab review'}
+      actions={
+        attempts.length > 1 && (
+          <select
+            className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-xs text-zinc-300"
+            value={r.attemptId}
+            onChange={(e) => setAttemptId(Number(e.target.value))}
+            aria-label="Attempt to review"
+          >
+            {attempts.map((a) => (
+              <option key={a.attemptId} value={a.attemptId}>
+                {a.scenarioTitle} · {new Date(a.startedAt).toLocaleDateString()} · {a.score}/{a.maxScore}
+                {a.mode === 'mock' ? ' · exam' : ''}
+              </option>
+            ))}
+          </select>
+        )
+      }
+    >
+      <p className="text-sm text-zinc-300">
+        {r.scenarioTitle}, {new Date(r.startedAt).toLocaleString()}:{' '}
+        <span className={percentClass(percent)}>
+          {r.score}/{r.maxScore} ({percent}%)
+        </span>
+        {r.mode === 'mock' && <> · pass mark {PASS_PERCENT}%, {percent >= PASS_PERCENT ? 'passed' : 'not passed'}</>}
+        {' · '}
+        {plural(r.questions.filter((q) => lost(q) > 0).length, 'question')} lost {r.maxScore - r.score} pt
+        {slow.length > 0 && (
+          <>
+            {' · '}
+            {plural(slow.length, 'question')} over the {pace}-minute pace took {Math.round(slow.reduce((n, q) => n + (q.minutes ?? 0), 0))} min
+          </>
+        )}
+      </p>
+      <p className="mt-1 text-xs text-zinc-500">
+        These questions count toward their topics below: misses lower a topic's score, and time over pace raises its place in Work on next.
+      </p>
+      {flagged.length === 0 ? (
+        <p className="mt-3 text-sm text-emerald-400">Full marks on every question, each within {pace} minutes.</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-zinc-800 overflow-hidden rounded-lg border border-zinc-800">
+          {flagged.map(({ q, i, note }) => (
+            <li key={q.taskId} className="px-4 py-2.5">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="font-medium text-zinc-100">
+                  Q{i + 1}. {q.title}
+                </span>
+                <span className={`text-sm ${q.score === q.maxScore ? 'text-emerald-400' : q.score === 0 ? 'text-red-400' : 'text-amber-300'}`}>
+                  {q.score}/{q.maxScore} pt
+                </span>
+                <span className={`font-mono text-sm ${minutesClass(q.minutes, pace)}`}>{q.minutes === undefined ? 'no time' : `${q.minutes} min`}</span>
+                <span className="text-xs text-zinc-500">{note}</span>
+              </div>
+              {q.missed.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-xs text-zinc-400">
+                  {q.missed.map((c) => (
+                    <li key={c.id}>
+                      <span className="font-mono text-red-400/80">−{c.weight}</span> {c.description}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {q.topics.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+                  {q.topics.map((id) => (
+                    <Link key={id} to={`/?topic=${id}`} className="text-sky-400 hover:text-sky-300">
+                      Practice {label(id)} →
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {flagged.length < r.questions.length && (
+        <p className="mt-2 text-xs text-zinc-500">
+          {plural(r.questions.length - flagged.length, 'other question')} scored full marks within {pace} minutes.
+        </p>
+      )}
+    </Card>
   );
 }
 
@@ -105,8 +225,8 @@ export function FocusPage() {
     [catalog.data, scores.data, all.data],
   );
   const recent = scores.data?.recent ?? 5;
-  const recs = useMemo(() => recommendations(rows, recent), [rows, recent]);
   const pace = scores.data?.paceMinutes ?? 7;
+  const recs = useMemo(() => recommendations(rows, recent, pace), [rows, recent, pace]);
 
   const toggle = (id: string, hide: boolean) => setHidden(hide ? [...hidden, id] : hidden.filter((x) => x !== id));
   const shown = rows.filter((r) => r.topic.label.toLowerCase().includes(search.trim().toLowerCase()));
@@ -122,9 +242,12 @@ export function FocusPage() {
         : stat.cleanPercent === undefined
           ? `no clean result yet · ${stat.recentPercent}% with help`
           : `clean ${stat.cleanPercent}% on the last ${plural(Math.min(stat.cleanQuestions, recent), 'question')} · ${stat.recentPercent}% with help`,
-      // A perfect score on too few questions is not done yet: say how many more confirm it.
-      stat.cleanPercent === 100 && stat.cleanQuestions < recent ? `${recent - stat.cleanQuestions} more clean to confirm` : `weakest: ${where} ${w.percent}%`,
     ];
+    const over = minutesOver(stat, pace);
+    if (over > 0) parts.push(`${stat.cleanMinutes} min each, ${over} over pace`);
+    // A perfect score on too few questions is not done yet: say how many more confirm it.
+    if (stat.cleanPercent === 100 && stat.cleanQuestions < recent) parts.push(`${recent - stat.cleanQuestions} more clean to confirm`);
+    else if (w.percent < 100) parts.push(`weakest: ${where} ${w.percent}%`);
     return parts.join(' · ');
   };
 
@@ -136,7 +259,8 @@ export function FocusPage() {
           <p className="mt-1 text-sm text-zinc-400">
             Tick a topic to hide its scenarios from the Scenarios tab, so what is left is what you still need to practise. Each graded question counts toward its own
             topics with its own score, and a topic is scored on its {recent} most recent questions. A clean result is one without hints or the solution: that is
-            the score the recommendations go by, and a topic is only done at a clean 100% on {recent} questions. Exam pace is about {pace} minutes per question.
+            the score the recommendations go by, and a topic is only done at a clean 100% on {recent} questions within exam pace, about {pace} minutes per question.
+            Work on next ranks topics by the points they miss plus {SLOW_POINTS} for each minute over pace.
           </p>
         </div>
         <div className="flex overflow-hidden rounded-md border border-zinc-700" role="radiogroup" aria-label="Attempts to score">
@@ -160,11 +284,24 @@ export function FocusPage() {
       <ErrorBanner error={all.error} />
       <ErrorBanner error={scores.error} />
 
+      <ExamReview topics={catalog.data?.topics ?? []} />
+
       {(recs.workOn.length > 0 || recs.blindSpots.length > 0) && (
         <Card title={mode === 'exam' ? 'Recommended focus, from exam mode' : 'Recommended focus'}>
           <div className="grid gap-5 md:grid-cols-2">
             <div>
-              <h3 className="text-sm font-medium text-zinc-200">Work on next</h3>
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-sm font-medium text-zinc-200">Work on next</h3>
+                {mode === 'all' && recs.workOn.length > 0 && (
+                  <Link
+                    to={`/?topic=${WEAK_SPOTS}`}
+                    className="text-sm font-medium text-sky-400 hover:text-sky-300"
+                    title="A Quick lab with one question on each of these topics"
+                  >
+                    Practise these →
+                  </Link>
+                )}
+              </div>
               {recs.workOn.length === 0 ? (
                 <p className="mt-2 text-sm text-zinc-500">
                   {!rows.some((r) => r.stat.questions > 0)

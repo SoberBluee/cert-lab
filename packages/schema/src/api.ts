@@ -390,6 +390,11 @@ export interface FocusTopicStat {
   cleanPercent?: number;
   /** Mean minutes per question over the recent questions that recorded a time. */
   recentMinutes?: number;
+  /**
+   * Mean minutes per question over the recent clean questions that recorded a time, each capped at
+   * FOCUS_MAX_MINUTES: the speed the recommendations judge, since time spent reading hints is not exam time.
+   */
+  cleanMinutes?: number;
 }
 
 export interface FocusReport {
@@ -399,6 +404,60 @@ export interface FocusReport {
   /** Minutes per question that keep exam pace: 120 minutes for about 17 tasks. */
   paceMinutes: number;
   topics: FocusTopicStat[];
+}
+
+/** A check of a reviewed question that did not pass. */
+export interface ReviewCheck {
+  id: string;
+  description: string;
+  weight: number;
+}
+
+/** One question of a reviewed attempt: what it scored, how long it was open and what it missed. */
+export interface ReviewQuestion {
+  taskId: string;
+  title: string;
+  score: number;
+  maxScore: number;
+  /** Minutes the question was open on screen, when the attempt recorded it. */
+  minutes?: number;
+  /** False when the question was never opened. */
+  attempted: boolean;
+  /** The checks that failed, heaviest first. */
+  missed: ReviewCheck[];
+  /** Focus topics the question counts toward. */
+  topics: string[];
+}
+
+/** A graded attempt question by question, for feedback after a mock. */
+export interface AttemptReview {
+  attemptId: number;
+  scenarioId: string;
+  scenarioTitle: string;
+  mode: Mode;
+  startedAt: string;
+  score: number;
+  maxScore: number;
+  paceMinutes: number;
+  questions: ReviewQuestion[];
+}
+
+/** A graded attempt that can be reviewed. */
+export interface ReviewSummary {
+  attemptId: number;
+  scenarioTitle: string;
+  mode: Mode;
+  startedAt: string;
+  score: number;
+  maxScore: number;
+  questions: number;
+}
+
+export interface ReviewResponse {
+  /** The attempt asked for, or else the latest graded exam-mode attempt; none when there is none. */
+  review?: AttemptReview;
+  /** Recent graded attempts with more than one question, newest first, to pick another. */
+  attempts: ReviewSummary[];
 }
 
 export interface RecipeCatalog {

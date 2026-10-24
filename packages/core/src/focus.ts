@@ -1,10 +1,13 @@
 import {
   render,
   resolveTask,
+  type AttemptReview,
   type FocusMode,
   type FocusQuestion,
   type FocusReport,
   type LabTopic,
+  type ReviewQuestion,
+  type ReviewResponse,
   type Scenario,
   type Task,
   type Vars,
@@ -19,6 +22,9 @@ export const FOCUS_RECENT = 5;
 
 /** Exam pace: 120 minutes for about 17 tasks. */
 export const FOCUS_PACE_MINUTES = 7;
+
+/** A question left open longer than this counts as this long in a topic's speed: past it, the tab was likely idle. */
+export const FOCUS_MAX_MINUTES = 30;
 
 let cachedTopics: LabTopic[] | undefined;
 const allTopics = () => (cachedTopics ??= labTopics());
@@ -120,6 +126,7 @@ export function focusReport(store: Store, library: ScenarioLibrary, topics = all
       const recent = questions.slice(0, FOCUS_RECENT);
       const clean = questions.filter((q) => q.clean);
       const timed = recent.flatMap((q) => (q.minutes === undefined ? [] : [q.minutes]));
+      const cleanTimed = clean.slice(0, FOCUS_RECENT).flatMap((q) => (q.minutes === undefined ? [] : [Math.min(q.minutes, FOCUS_MAX_MINUTES)]));
       return {
         topicId: t.id,
         questions: questions.length,
@@ -131,7 +138,72 @@ export function focusReport(store: Store, library: ScenarioLibrary, topics = all
         }),
         ...(clean.length > 0 && { cleanPercent: Math.round(mean(clean.slice(0, FOCUS_RECENT).map((q) => q.percent))) }),
         ...(timed.length > 0 && { recentMinutes: Math.round(mean(timed) * 10) / 10 }),
+        ...(cleanTimed.length > 0 && { cleanMinutes: Math.round(mean(cleanTimed) * 10) / 10 }),
       };
+    }),
+  };
+}
+
+const REVIEW_LIST = 10;
+
+/**
+ * A graded attempt question by question: its score, the minutes it was open and the checks it missed, with the
+ * Focus topics it counts toward. Without `attemptId`, the latest graded exam-mode attempt of several questions,
+ * else the latest of several questions in any mode. `attempts` lists recent attempts of several questions to pick from.
+ */
+export function attemptReview(store: Store, library: ScenarioLibrary, attemptId?: number, topics = allTopics()): ReviewResponse {
+  const all = store.gradedAttempts();
+  const graded = all.filter((a) => (library.get(a.scenarioId)?.tasks.length ?? 0) > 1).reverse();
+  const pick = attemptId === undefined ? (graded.find((a) => a.mode === 'mock') ?? graded[0]) : all.find((a) => a.id === attemptId);
+  const reviews = new Map<number, AttemptReview>();
+  const review = (a: (typeof graded)[number]): AttemptReview | undefined => {
+    const s = library.get(a.scenarioId);
+    if (!s) return undefined;
+    if (reviews.has(a.id)) return reviews.get(a.id);
+    const results = new Map(a.checks.map((c) => [c.id, c]));
+    const questions = s.tasks.map((raw): ReviewQuestion => {
+      const task = resolveTask(raw, a.vars);
+      const checks = task.checks.flatMap((c) => {
+        const r = results.get(c.id);
+        return r ? [{ ...r, description: render(c.description, a.vars) }] : [];
+      });
+      const seconds = a.taskSeconds[task.id];
+      return {
+        taskId: task.id,
+        title: render(task.title, a.vars).replace(/\$\{\w+\}/g, '…'),
+        score: checks.reduce((n, c) => n + (c.passed ? c.weight : 0), 0),
+        maxScore: checks.reduce((n, c) => n + c.weight, 0),
+        ...(seconds ? { minutes: Math.round((seconds / 60) * 10) / 10 } : {}),
+        attempted: !checks.some((c) => c.output.startsWith(NOT_ATTEMPTED)),
+        missed: checks
+          .filter((c) => !c.passed)
+          .sort((x, y) => y.weight - x.weight)
+          .map((c) => ({ id: c.id, description: c.description, weight: c.weight })),
+        topics: questionTopics(s.def, task, a.vars, topics),
+      };
+    });
+    const out: AttemptReview = {
+      attemptId: a.id,
+      scenarioId: s.def.id,
+      scenarioTitle: s.def.title,
+      mode: a.mode,
+      startedAt: a.startedAt,
+      score: questions.reduce((n, q) => n + q.score, 0),
+      maxScore: questions.reduce((n, q) => n + q.maxScore, 0),
+      paceMinutes: FOCUS_PACE_MINUTES,
+      questions,
+    };
+    reviews.set(a.id, out);
+    return out;
+  };
+  const chosen = pick && review(pick);
+  return {
+    ...(chosen ? { review: chosen } : {}),
+    attempts: graded.slice(0, REVIEW_LIST).flatMap((a) => {
+      const r = review(a);
+      return r
+        ? [{ attemptId: r.attemptId, scenarioTitle: r.scenarioTitle, mode: r.mode, startedAt: r.startedAt, score: r.score, maxScore: r.maxScore, questions: r.questions.length }]
+        : [];
     }),
   };
 }
