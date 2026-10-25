@@ -1,0 +1,75 @@
+id: vpa-recommender-rbac
+title: VPA (recommender RBAC)
+domain: workloads
+difficulty: 3
+estimatedMinutes: 10
+points: 8
+tags: [ troubleshooting, vpa, autoscaling, resources ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 20
+variables:
+  Q1_FAULT: { oneOf: [ recommender-rbac ], hidden: true }
+tasks:
+  - id: q1
+    title: VPA for processor not working
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-vpa-spec
+        description: processor-vpa targets Deployment processor and is allowed to update its Pods
+        type: kubectl
+        run: kubectl -n finops get vpa processor-vpa -o jsonpath='{.spec.targetRef.kind}/{.spec.targetRef.name}/{.spec.updatePolicy.updateMode}'
+        expect: { matches: ^Deployment/processor/(Recreate|Auto|InPlaceOrRecreate)$ }
+        weight: 1
+      - id: q1-vpa-manages-web
+        description: container web is not excluded
+        type: kubectl
+        run: kubectl -n finops get vpa processor-vpa -o jsonpath='{.spec.resourcePolicy.containerPolicies[?(@.containerName=="web")].mode}{.spec.resourcePolicy.containerPolicies[?(@.containerName=="*")].mode}' | grep -q Off && echo excluded || echo managed
+        expect: { equals: managed }
+        weight: 1
+      - id: q1-vpa-recommends
+        description: it recommends resources for container web
+        type: kubectl
+        run: kubectl -n finops get vpa processor-vpa -o jsonpath='{.status.recommendation.containerRecommendations[?(@.containerName=="web")].target.cpu}' | grep -q . && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 180
+      - id: q1-vpa-components
+        description: recommender, updater and admission controller are ready in namespace vpa
+        type: kubectl
+        run: kubectl -n vpa get deploy vpa-recommender vpa-updater vpa-admission-controller -o jsonpath='{range .items[*]}{.status.readyReplicas}{" "}{end}' | xargs
+        expect: { equals: 1 1 1 }
+        weight: 1
+        retrySeconds: 120
+      - id: q1-vpa-applied
+        description: running Pods of processor got their requests from the VPA
+        type: kubectl
+        run: kubectl -n finops get pods -l app=processor --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.annotations.vpaUpdates}{"\n"}{end}' | grep -c 'updated by' || true
+        expect: { gte: 2 }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-ready
+        description: processor has at least 2 ready replicas
+        type: kubectl
+        run: kubectl -n finops get deployment processor -o jsonpath='{.status.readyReplicas}'
+        expect: { gte: 2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-same-deployment
+        description: processor was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n finops get deployment processor -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n finops describe vpa processor-vpa: is there a Recommendation, and what do its Conditions say?"
+      - "kubectl -n vpa get deploy,pods: the recommender computes recommendations, the admission controller writes them into new Pods, the updater evicts Pods that are far off. Which part of that chain is missing?"
+      - "kubectl -n finops get pod <pod> -o yaml: Pods the VPA changed carry a vpaUpdates annotation. Existing Pods only change when they are recreated."
+      - "kubectl -n vpa logs deploy/<component>: errors there point at what a component cannot do."
+    recipe: { category: vpa }
