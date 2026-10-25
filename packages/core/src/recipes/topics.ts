@@ -83,6 +83,7 @@ export const labTopics = (): LabTopic[] => {
     create('create-gateway', 'Gateway API with TLS', 'gateway', ['tls', 'migration', 'header-match']),
     create('create-cluster-info', 'Kubeconfig and cluster facts', 'cluster-info', ['kubeconfig', 'cidr', 'kube-proxy', 'static-pod']),
     create('create-workload-controllers', 'StatefulSets and DaemonSets', 'workload-controllers', ['statefulset', 'daemonset', 'headless']),
+    create('create-coredns', 'CoreDNS configuration', 'coredns', ['coredns', 'corefile']),
     trouble('trouble-services', 'Services', [{ id: 'services' }], ['service', 'endpoints', 'selector', 'targetport', 'named-port', 'externalname', 'headless', 'kube-proxy']),
     // The Ingress faults, and the controller behind every Ingress (its IngressClass, Deployment and NodePort).
     trouble('trouble-ingress', 'Ingress', [{ id: 'ingress', faults: [...faultsStarting('ingress', 'ingress'), ...faultsStarting('ingress', 'controller-')] }], ['ingress']),

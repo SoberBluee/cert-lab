@@ -82,9 +82,12 @@ describe('questionTopics', () => {
     // A troubleshooting lab about a Service counts toward troubleshooting topics only.
     const svc = scenario({ id: 's', domain: 'troubleshooting', tags: ['troubleshooting', 'service', 'logs'], tasks: [task('q1', {})] });
     assert.deepEqual(questionTopics(svc, svc.tasks![0]), ['trouble-services']);
-    // No create topic is about CoreDNS, so a lab that configures it counts toward DNS troubleshooting.
+    // A lab that configures CoreDNS counts toward the create topic, not DNS troubleshooting.
     const dns = scenario({ id: 'k', domain: 'cluster-architecture', tags: ['coredns', 'dns'], tasks: [task('q1', {})] });
-    assert.deepEqual(questionTopics(dns, dns.tasks![0]), ['trouble-dns']);
+    assert.deepEqual(questionTopics(dns, dns.tasks![0]), ['create-coredns']);
+    // No create topic is about endpoints, so a lab tagged only with them counts toward Services troubleshooting.
+    const ep = scenario({ id: 'e', domain: 'services-networking', tags: ['endpoints'], tasks: [task('q1', {})] });
+    assert.deepEqual(questionTopics(ep, ep.tasks![0]), ['trouble-services']);
     // Question tags win over the scenario's, which cover every question.
     const mixed = scenario({
       id: 'm',

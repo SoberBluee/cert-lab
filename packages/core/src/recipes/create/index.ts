@@ -3,6 +3,7 @@ import { hpaBuilder, vpaBuilder } from './autoscaling';
 import { certificatesBuilder, etcdBackupBuilder, etcdRestoreBuilder, installClusterBuilder } from './cluster';
 import { clusterInfoBuilder } from './clusterinfo';
 import { workloadControllersBuilder } from './controllers';
+import { corednsBuilder } from './coredns';
 import { cronJobBuilder } from './cronjob';
 import { crdsBuilder } from './crds';
 import { dynamicStorageBuilder } from './dynamicstorage';
@@ -51,6 +52,7 @@ export const BUILDERS: Builder[] = [
   gatewayBuilder,
   clusterInfoBuilder,
   workloadControllersBuilder,
+  corednsBuilder,
 ];
 
 export const getBuilder = (id: string): Builder | undefined => BUILDERS.find((b) => b.id === id);
