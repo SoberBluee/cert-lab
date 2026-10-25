@@ -823,7 +823,7 @@ describe('Task builders', () => {
   const taskBuilders = BUILDERS.filter((b) => b.fields[0]?.key === 'TASK');
 
   it('cover the curriculum gaps', () => {
-    assert.deepEqual(taskBuilders.map((b) => b.id).sort(), ['cluster-info', 'crds', 'dynamic-storage', 'gateway', 'infra', 'kustomize', 'netops', 'observe', 'upgrade', 'workload-controllers', 'workload-ops']);
+    assert.deepEqual(taskBuilders.map((b) => b.id).sort(), ['cluster-info', 'coredns', 'crds', 'dynamic-storage', 'gateway', 'infra', 'kustomize', 'netops', 'observe', 'upgrade', 'workload-controllers', 'workload-ops']);
   });
 
   for (const b of taskBuilders) {
