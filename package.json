@@ -1,6 +1,7 @@
 {
   "name": "cka-lab",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "workspaces": [
     "packages/*",

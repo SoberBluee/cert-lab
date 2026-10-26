@@ -13,3 +13,7 @@ id_ed25519*
 id_ecdsa*
 *.pem
 *.key
+
+# Labs recreated from third-party paid mock exams: kept on this machine for practice, never published
+scenarios/*/kk2-*/
+scenarios/*/kk-mock2-*/
