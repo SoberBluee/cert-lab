@@ -4,3 +4,12 @@ dist/
 .DS_Store
 .cka-lab/
 *.tsbuildinfo
+
+# SSH keys and certificates: never commit private keys
+github_actions
+github_actions.pub
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.pem
+*.key
