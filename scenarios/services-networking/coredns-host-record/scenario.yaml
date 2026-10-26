@@ -1,0 +1,51 @@
+id: coredns-host-record
+title: "CoreDNS: static host record"
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ coredns, dns, corefile ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ lookup, resolver, names, dns-lab, records, zones, directory, catalog, registry, gateway-ns ] }
+  Q1_HOST: { oneOf: [ legacy-db.internal, old-erp.internal, mainframe.internal, billing-db.internal ] }
+  Q1_IP: { oneOf: [ 198.51.100.20, 198.51.100.37, 198.51.100.54, 198.51.100.71 ] }
+tasks:
+  - id: q1
+    title: DNS record for ${Q1_HOST}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 420
+        lane: q1
+    checks:
+      - id: q1-record
+        description: ${Q1_HOST} resolves to ${Q1_IP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec dns-test -- nslookup ${Q1_HOST} 2>/dev/null | grep -qw '${Q1_IP}' && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 3
+        retrySeconds: 90
+      - id: q1-cluster-local
+        description: web.${Q1_NS}.svc.cluster.local still resolves to the ClusterIP of web
+        type: kubectl
+        run: ip=$(kubectl -n ${Q1_NS} get service web -o jsonpath='{.spec.clusterIP}'); [ -n "$ip" ] && kubectl -n ${Q1_NS} exec dns-test -- nslookup web.${Q1_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 2
+        retrySeconds: 90
+      - id: q1-coredns
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - "The hosts plugin answers from a hosts-file style list inside the .:53 block: hosts { <ip> <name> fallthrough }."
+      - Without fallthrough, hosts answers NXDOMAIN for every name it does not list, and the rest of the cluster stops resolving.
+      - CoreDNS reloads a changed Corefile after a while; kubectl -n kube-system rollout restart deployment/coredns applies it at once, and kubectl -n kube-system logs deploy/coredns shows a Corefile that does not parse.
+    recipe: { builder: coredns, parts: [] }

@@ -1,0 +1,10 @@
+## Solution
+
+### Question 1: DNS domain ${Q1_DOMAIN}
+
+```bash
+kubectl -n kube-system get configmap coredns -o yaml > /opt/course/coredns/coredns-backup.yaml
+kubectl -n kube-system get configmap coredns -o yaml | sed -E "s/^( +kubernetes cluster\.local) /\1 ${Q1_DOMAIN} /" | kubectl replace -f -
+kubectl -n kube-system rollout restart deployment/coredns
+kubectl -n kube-system rollout status deployment/coredns --timeout=240s
+```
