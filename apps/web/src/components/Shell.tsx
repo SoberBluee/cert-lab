@@ -38,7 +38,13 @@ export function Shell({ section, nav, actions, children }: { section: Section; n
                     {session && (
                       <span
                         className={`h-2 w-2 rounded-full ${
-                          session.state === 'failed' ? 'bg-red-500' : isActive(session) ? 'bg-emerald-400' : 'bg-zinc-500'
+                          session.state === 'failed'
+                            ? 'bg-red-500'
+                            : session.pausedAt
+                              ? 'bg-sky-400'
+                              : isActive(session)
+                                ? 'bg-emerald-400'
+                                : 'bg-zinc-500'
                         }`}
                       />
                     )}

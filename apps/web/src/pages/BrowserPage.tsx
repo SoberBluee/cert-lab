@@ -6,7 +6,7 @@ import { AWS_DOMAINS, DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
 import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
 import { recommendations, topicRows } from '../focusTopics';
-import { isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
+import { formatDuration, isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
 import { fullMock, MOCK_MINUTES, MOCK_QUESTIONS, RANDOM_MAX, randomLab, toRequest, WEAK_SPOTS, weakSpotsLab, type Depth, type LabKind } from '../quickRandom';
 import { SECTIONS } from '../section';
 
@@ -222,11 +222,12 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
           <div className="flex items-center gap-3 text-sm">
             <StateBadge state={session.state} />
             <span>
-              Session in progress: <span className="font-medium text-zinc-100">{session.scenarioTitle}</span>
+              {session.pausedAt ? 'Exam paused' : 'Session in progress'}: <span className="font-medium text-zinc-100">{session.scenarioTitle}</span>
+              {session.timeLeftMs !== undefined && <span className="text-zinc-400"> · {formatDuration(session.timeLeftMs / 1000)} left</span>}
             </span>
           </div>
           <Link to={sessionPath} className="text-sm font-medium text-sky-400 hover:text-sky-300">
-            Open session →
+            {session.pausedAt ? 'Resume exam →' : 'Open session →'}
           </Link>
         </div>
       )}

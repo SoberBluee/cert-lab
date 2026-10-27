@@ -526,6 +526,7 @@ describe('Hidden variables', () => {
       progress: [],
       hintsRevealed: {},
       taskTimes: {},
+      pausedMs: 0,
       solutionViewed: false,
       vars: { Q1_NS: 'ops', Q1_FAULT: 'cordoned', Q1_NODE: 'worker-2' },
       updatedAt: '',

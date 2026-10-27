@@ -18,16 +18,66 @@ const TerminalPanel = lazy(() => import('../components/Terminal').then((m) => ({
 const WARN_MS = 15 * 60_000;
 const CRITICAL_MS = 5 * 60_000;
 
-/** Exam mode: time left until the deadline, amber under 15 minutes and red under 5. */
+/** Exam mode: time left until the deadline, amber under 15 minutes and red under 5. Stands still while paused. */
 function Countdown({ session }: { session: SessionView }) {
-  const now = useNow();
-  if (!session.deadlineAt) return <span className="font-mono text-2xl text-zinc-600">--:--</span>;
-  const left = Date.parse(session.deadlineAt) - now;
-  const color = left <= CRITICAL_MS ? 'text-red-400' : left <= WARN_MS ? 'text-amber-300' : 'text-zinc-100';
+  useNow();
+  // The time at render, not at the last tick: a resumed exam goes on from exactly what it showed while paused.
+  const left = session.pausedAt ? session.timeLeftMs : session.deadlineAt ? Date.parse(session.deadlineAt) - Date.now() : undefined;
+  if (left === undefined) return <span className="font-mono text-2xl text-zinc-600">--:--</span>;
+  const color = session.pausedAt ? 'text-zinc-500' : left <= CRITICAL_MS ? 'text-red-400' : left <= WARN_MS ? 'text-amber-300' : 'text-zinc-100';
   return (
-    <span className={`font-mono text-2xl tabular-nums ${color}`} title="Time left; the exam is submitted automatically at 0:00">
+    <span
+      className={`font-mono text-2xl tabular-nums ${color}`}
+      title={session.pausedAt ? 'Time left; the clock is stopped while the exam is paused' : 'Time left; the exam is submitted automatically at 0:00'}
+    >
       {formatDuration(left / 1000)}
     </span>
+  );
+}
+
+const PauseIcon = () => (
+  <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden>
+    <rect x="2" y="1.5" width="3" height="9" rx="0.75" fill="currentColor" />
+    <rect x="7" y="1.5" width="3" height="9" rx="0.75" fill="currentColor" />
+  </svg>
+);
+
+const ResumeIcon = () => (
+  <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden>
+    <path d="M3 1.5v9l7.5-4.5z" fill="currentColor" />
+  </svg>
+);
+
+/** Exam mode, while paused: the time left and the way back. The questions and the terminal stay hidden. */
+function PausedExam({ session, resuming, onResume }: { session: SessionView; resuming: boolean; onResume: () => void }) {
+  const now = useNow();
+  const since = new Date(session.pausedAt!);
+  const at = since.toDateString() === new Date(now).toDateString() ? since.toLocaleTimeString() : since.toLocaleString();
+  return (
+    <Card title="Exam paused" className="border-sky-900/70">
+      <div className="flex flex-col items-center gap-5 py-10 text-center">
+        <div>
+          <div className="font-mono text-5xl text-zinc-100 tabular-nums">{formatDuration((session.timeLeftMs ?? 0) / 1000)}</div>
+          <div className="mt-1 text-sm text-zinc-400">left on the clock</div>
+        </div>
+        <Button variant="primary" className="px-5 py-2 text-base" disabled={resuming || session.state !== 'running'} onClick={onResume}>
+          <ResumeIcon />
+          {resuming ? 'Checking the lab…' : 'Resume exam'}
+        </Button>
+        <div className="space-y-1 text-xs text-zinc-500">
+          <p>
+            Paused at {at}, {formatDuration((now - since.getTime()) / 1000)} ago
+            {session.pausedS ? ` · ${formatDuration(session.pausedS)} in earlier pauses` : ''}
+          </p>
+          <p className="max-w-md">
+            The questions and the terminal are hidden until you resume.{' '}
+            {session.base === 'floci'
+              ? "The lab's AWS resources stay as they are."
+              : 'The lab VMs keep running; on resume they are checked and their clocks synced before the timer restarts.'}
+          </p>
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -170,6 +220,8 @@ function TaskPane(props: {
   onHint: () => void;
   canSubmit: boolean;
   onSubmit: () => void;
+  canPause: boolean;
+  onPause: () => void;
   error: unknown;
   blind: boolean;
 }) {
@@ -186,9 +238,15 @@ function TaskPane(props: {
           {exam && <Countdown session={session} />}
           <div className="ml-auto flex gap-2">
             {exam ? (
-              <Button variant="primary" disabled={!props.canSubmit} onClick={props.onSubmit}>
-                {props.grading ? 'Submitting…' : 'Submit exam'}
-              </Button>
+              <>
+                <Button disabled={!props.canPause} onClick={props.onPause} title="Stop the clock and hide the questions until you resume">
+                  <PauseIcon />
+                  Pause
+                </Button>
+                <Button variant="primary" disabled={!props.canSubmit} onClick={props.onSubmit}>
+                  {props.grading ? 'Submitting…' : 'Submit exam'}
+                </Button>
+              </>
             ) : (
               <>
                 <Button variant="primary" shortcut="g" disabled={!props.canGrade} onClick={props.onGrade}>
@@ -278,7 +336,8 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
             )}
             <div className="mt-3 text-xs text-zinc-500">
               {exam && ended.readyAt && ended.endedAt ? (
-                `exam mode · finished in ${formatDuration((Date.parse(ended.endedAt) - Date.parse(ended.readyAt)) / 1000)}`
+                `exam mode · finished in ${formatDuration((Date.parse(ended.endedAt) - Date.parse(ended.readyAt)) / 1000 - (ended.pausedS ?? 0))}` +
+                (ended.pausedS ? ` · paused for ${formatDuration(ended.pausedS)}, not counted` : '')
               ) : (
                 <>
                   {ended.hintsRevealed.length} hint{ended.hintsRevealed.length === 1 ? '' : 's'} used
@@ -346,10 +405,12 @@ export function SessionPage() {
       setSession(null);
     },
   });
+  const pause = useMutation({ mutationFn: api.pause, onSuccess: setSession });
+  const resume = useMutation({ mutationFn: api.resume, onSuccess: setSession });
   const openTask = useMutation({ mutationFn: api.openTask, onSuccess: setSession });
   const skip = useMutation({ mutationFn: api.skipStep, onSuccess: setSession });
   const answer = useMutation({ mutationFn: api.answerStep, onSuccess: setSession });
-  const mutations = [grade, hint, solution, reset, reroll, end, submit, openTask, skip, answer];
+  const mutations = [grade, hint, solution, reset, reroll, end, submit, pause, resume, openTask, skip, answer];
   const error = mutations.find((m) => m.error)?.error;
 
   const [activeTask, setActiveTask] = useState(0);
@@ -358,10 +419,12 @@ export function SessionPage() {
   const task = session?.tasks[activeTask] ?? session?.tasks[0];
 
   const state = session?.state;
+  // A paused exam hides its questions and terminal until it resumes.
+  const paused = !!session?.pausedAt;
 
   // Minutes per question: tell the server which question is on screen while the lab runs, and
   // that none is when the page is hidden or left.
-  const focusId = session && state === 'running' && !playground && !learn ? task?.id : undefined;
+  const focusId = session && state === 'running' && !playground && !learn && !paused ? task?.id : undefined;
   useEffect(() => {
     if (!focusId) return;
     const report = () => api.focus(document.visibilityState === 'visible' ? focusId : null).catch(() => {});
@@ -388,7 +451,8 @@ export function SessionPage() {
   const canHint = (state === 'running' || state === 'grading') && !!task && task.hintsRevealed.length < task.hintsTotal && session?.mode === 'practice';
   const canReset = exam ? state === 'failed' : state === 'running' || state === 'failed';
   const canSolution = !!session && session.mode === 'practice' && !session.solutionViewed && !!scenario.data?.hasSolution && state !== 'provisioning';
-  const canSubmit = exam && state === 'running' && !submit.isPending;
+  const canSubmit = exam && state === 'running' && !submit.isPending && !paused;
+  const canPause = exam && state === 'running' && !paused && !pause.isPending && !submit.isPending;
 
   // aws labs have no VMs or snapshots: a reset is a fresh account, ending removes the session's resources.
   const aws = session?.base === 'floci';
@@ -446,7 +510,7 @@ export function SessionPage() {
 
   const [focus, setFocus] = useState(() => localStorage.getItem(FOCUS_KEY) === '1');
   const live = state === 'running' || state === 'grading';
-  const focusActive = (focus || learn) && live && !!session?.connection;
+  const focusActive = (focus || learn) && live && !!session?.connection && !paused;
   const [split, setSplit] = useSplit();
   const focusRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -502,11 +566,23 @@ export function SessionPage() {
         </div>
         {exam && <Countdown session={session} />}
         <div className="flex flex-wrap gap-2">
-          {exam && (
-            <Button variant="primary" disabled={!canSubmit} onClick={doSubmit}>
-              {submit.isPending || state === 'grading' ? 'Submitting…' : 'Submit exam'}
-            </Button>
-          )}
+          {exam &&
+            (paused ? (
+              <Button variant="primary" disabled={resume.isPending || state !== 'running'} onClick={() => resume.mutate()}>
+                <ResumeIcon />
+                {resume.isPending ? 'Checking the lab…' : 'Resume'}
+              </Button>
+            ) : (
+              <>
+                <Button disabled={!canPause} onClick={() => pause.mutate()} title="Stop the clock and hide the questions until you resume">
+                  <PauseIcon />
+                  {pause.isPending ? 'Pausing…' : 'Pause'}
+                </Button>
+                <Button variant="primary" disabled={!canSubmit} onClick={doSubmit}>
+                  {submit.isPending || state === 'grading' ? 'Submitting…' : 'Submit exam'}
+                </Button>
+              </>
+            ))}
           {!playground && !learn && !exam && (
             <>
               <Button variant="primary" shortcut="g" disabled={!canGrade} onClick={() => grade.mutate()}>
@@ -539,11 +615,13 @@ export function SessionPage() {
       </div>
 
       <ErrorBanner error={error} onDismiss={() => mutations.forEach((m) => m.reset())} />
-      {exam && !focusActive && <ExamWarning session={session} />}
+      {exam && !focusActive && !paused && <ExamWarning session={session} />}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-4">
-          {live && session.connection && (
+          {paused && session.state === 'running' && <PausedExam session={session} resuming={resume.isPending} onResume={() => resume.mutate()} />}
+
+          {live && session.connection && !paused && (
             <div
               ref={focusRef}
               className={focusActive ? 'fixed inset-x-0 top-0 z-40 grid h-dvh bg-zinc-950 p-3' : ''}
@@ -580,6 +658,8 @@ export function SessionPage() {
                   onHint={() => hint.mutate(task?.id)}
                   canSubmit={canSubmit}
                   onSubmit={doSubmit}
+                  canPause={canPause}
+                  onPause={() => pause.mutate()}
                   blind={blind}
                   error={error}
                 />
@@ -630,7 +710,7 @@ export function SessionPage() {
             </Card>
           )}
 
-          {!playground && !learn && (
+          {!playground && !learn && !paused && (
             <Card title={session.tasks.length > 1 ? `Tasks (${session.tasks.length} questions)` : 'Task'}>
               <div className="space-y-4">
                 <QuestionTabs session={session} active={activeTask} onSelect={selectTask} />
@@ -647,7 +727,7 @@ export function SessionPage() {
         </div>
 
         <aside className="space-y-4">
-          <ConnectionPanel session={session} />
+          {!paused && <ConnectionPanel session={session} />}
           {session.state !== 'provisioning' && session.progress.length > 0 && (
             <Card title="Provisioning log">
               <ProgressLog session={session} compact />

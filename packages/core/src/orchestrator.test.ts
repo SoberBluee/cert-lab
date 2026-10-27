@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 import pino from 'pino';
 import { FakeDriver } from '@cka/driver-fake';
 import type { ExecOptions, ExecResult, Mode } from '@cka/schema';
@@ -29,6 +29,8 @@ describe('selectDriverName', () => {
 class RecordingDriver extends FakeDriver {
   scripts: string[] = [];
   commands: string[] = [];
+  /** When set, no node answers, as after the Mac restarted. */
+  down = false;
   constructor() {
     super(0);
   }
@@ -37,6 +39,7 @@ class RecordingDriver extends FakeDriver {
   }
   override async exec(sessionId: string, node: string, command: string, opts?: ExecOptions): Promise<ExecResult> {
     this.commands.push(command);
+    if (this.down) throw new Error(`Cannot run commands on ${node}: Connection refused`);
     return super.exec(sessionId, node, command, opts);
   }
 }
@@ -75,9 +78,10 @@ ${[task(1, 0), task(2, 1), task(3, 2)].join('\n')}
   const driver = new RecordingDriver();
   const library = new ScenarioLibrary(root);
   assert.deepEqual(library.errors, []);
-  const sessions = new SessionManager(driver, new Store(join(root, 'state.db')), library, pino({ enabled: false }));
+  const store = new Store(join(root, 'state.db'));
+  const sessions = new SessionManager(driver, store, library, pino({ enabled: false }));
   const start = async (mode: Mode = 'practice') => (await sessions.start('staged', mode)).ready;
-  return { driver, sessions, start };
+  return { driver, sessions, start, store, library };
 }
 
 const readyIds = (v: { tasks: { id: string; ready: boolean }[] }) => v.tasks.filter((t) => t.ready).map((t) => t.id);
@@ -183,6 +187,8 @@ describe('exam mode', () => {
     assert.equal(attempts.length, 1);
     assert.equal(attempts[0].mode, 'mock');
     assert.equal(attempts[0].score, 1);
+    assert.equal(attempts[0].pausedS, undefined);
+    assert.equal(ended.pausedS, undefined);
   });
 
   it('only an exam is submitted, and practice sessions have no deadline', async () => {
@@ -190,6 +196,135 @@ describe('exam mode', () => {
     const view = await start();
     assert.equal(view.deadlineAt, undefined);
     await assert.rejects(sessions.submit(), /Only an exam is submitted/);
+  });
+});
+
+describe('pausing an exam', () => {
+  const T0 = Date.parse('2026-10-27T09:00:00.000Z');
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  /** The exam clock follows a mocked Date that only moves on tick(); the fake lab still runs on real timers. */
+  const frozen = (t: TestContext) => t.mock.timers.enable({ apis: ['Date'], now: T0 });
+
+  it('stops the clock, and resume continues with exactly the time that was left', async (t) => {
+    frozen(t);
+    const { driver, sessions, start, store } = setup();
+    const view = await start('mock');
+    assert.equal(view.readyAt, new Date(T0).toISOString());
+    t.mock.timers.tick(MIN);
+    const paused = sessions.pause();
+    assert.equal(paused.state, 'running');
+    assert.equal(paused.pausedAt, new Date(T0 + MIN).toISOString());
+    assert.equal(paused.deadlineAt, undefined);
+    assert.equal(paused.timeLeftMs, 4 * MIN);
+
+    t.mock.timers.tick(3 * HOUR + 1234);
+    assert.equal(sessions.current()?.timeLeftMs, 4 * MIN);
+    const resumed = await sessions.resume();
+    assert.equal(resumed.pausedAt, undefined);
+    assert.equal(resumed.timeLeftMs, undefined);
+    assert.equal(Date.parse(resumed.deadlineAt!), Date.now() + 4 * MIN);
+    assert.equal(resumed.pausedS, 3 * 3600 + 1);
+    assert.equal(driver.commands.filter((c) => c.includes('chronyc -a makestep')).length, 3);
+    assert.deepEqual(
+      resumed.progress.slice(-2).map((p) => p.message),
+      ['Exam paused', 'Exam resumed after a 3 h 0 min pause'],
+    );
+
+    t.mock.timers.tick(30_000);
+    const ended = await sessions.submit();
+    assert.equal(ended.lastGrade?.elapsedS, 90);
+    assert.equal(ended.pausedS, 3 * 3600 + 1);
+    const [attempt] = store.listAttempts();
+    assert.equal(attempt.durationS, 90);
+    assert.equal(attempt.pausedS, 3 * 3600 + 1);
+  });
+
+  it('stays paused across an API restart', async (t) => {
+    frozen(t);
+    const { sessions, start, store, library } = setup();
+    await start('mock');
+    t.mock.timers.tick(2 * MIN);
+    sessions.pause();
+    t.mock.timers.tick(8 * HOUR);
+    const restarted = new SessionManager(new RecordingDriver(), store, library, pino({ enabled: false }));
+    await restarted.recoverOnStartup();
+    const view = restarted.current()!;
+    assert.equal(view.state, 'running');
+    assert.equal(view.timeLeftMs, 3 * MIN);
+    assert.equal(Date.parse((await restarted.resume()).deadlineAt!), Date.now() + 3 * MIN);
+  });
+
+  it('stops question time, and refuses to submit or open a question until resumed', async (t) => {
+    frozen(t);
+    const { sessions, start, store } = setup();
+    await start('mock');
+    sessions.focus('q1');
+    t.mock.timers.tick(20_000);
+    sessions.pause();
+    // A page that still reports the question while paused adds no time to it.
+    sessions.focus('q1');
+    t.mock.timers.tick(HOUR);
+    await assert.rejects(sessions.submit(), /paused\. Resume it before submitting/);
+    assert.throws(() => sessions.openTask('q2'), /paused\. Resume it to open a question/);
+    await sessions.resume();
+    sessions.focus('q1');
+    t.mock.timers.tick(10_000);
+    await sessions.end();
+    const [attempt] = store.listAttempts();
+    assert.equal(attempt.tasks?.find((x) => x.id === 'q1')?.seconds, 30);
+    assert.equal(attempt.durationS, 30);
+    assert.equal(attempt.pausedS, 3600);
+  });
+
+  it('stays paused when the lab does not answer on resume', async (t) => {
+    frozen(t);
+    const { driver, sessions, start } = setup();
+    await start('mock');
+    t.mock.timers.tick(MIN);
+    sessions.pause();
+    t.mock.timers.tick(HOUR);
+    driver.down = true;
+    await assert.rejects(sessions.resume(), /did not answer, so the exam stays paused \(controlplane: Cannot run commands on controlplane: Connection refused, and 2 more\)/);
+    assert.equal(sessions.current()?.timeLeftMs, 4 * MIN);
+    driver.down = false;
+    t.mock.timers.tick(MIN);
+    const resumed = await sessions.resume();
+    assert.equal(resumed.pausedAt, undefined);
+    assert.equal(Date.parse(resumed.deadlineAt!), Date.now() + 4 * MIN);
+  });
+
+  it('an exam abandoned while paused records only the time before the pause', async (t) => {
+    frozen(t);
+    const { sessions, start, store } = setup();
+    await start('mock');
+    t.mock.timers.tick(MIN);
+    sessions.pause();
+    t.mock.timers.tick(2 * HOUR);
+    const ended = await sessions.end();
+    assert.equal(ended.state, 'completed');
+    assert.equal(ended.pausedAt, undefined);
+    assert.equal(ended.pausedS, 2 * 3600);
+    const [attempt] = store.listAttempts();
+    assert.equal(attempt.durationS, 60);
+    assert.equal(attempt.pausedS, 2 * 3600);
+  });
+
+  it('pauses only an exam with time left, and pausing twice is harmless', async (t) => {
+    frozen(t);
+    const { sessions, start } = setup();
+    await start();
+    assert.throws(() => sessions.pause(), /Only an exam can be paused/);
+    await assert.rejects(sessions.resume(), /Only an exam/);
+    await sessions.end();
+    await start('mock');
+    const first = sessions.pause();
+    t.mock.timers.tick(MIN);
+    assert.equal(sessions.pause().pausedAt, first.pausedAt);
+    await sessions.resume();
+    assert.equal((await sessions.resume()).deadlineAt, new Date(T0 + 6 * MIN).toISOString());
+    t.mock.timers.tick(5 * MIN);
+    assert.throws(() => sessions.pause(), /Time is up/);
   });
 });
 

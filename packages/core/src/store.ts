@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   task_times TEXT,
   focus_task TEXT,
   focus_at TEXT,
+  paused_at TEXT,
+  paused_ms INTEGER,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS mock_exams (
@@ -51,7 +53,8 @@ CREATE TABLE IF NOT EXISTS attempts (
   hints_used INTEGER NOT NULL DEFAULT 0,
   solution_viewed INTEGER NOT NULL DEFAULT 0,
   mock_exam_id INTEGER REFERENCES mock_exams(id),
-  task_times TEXT
+  task_times TEXT,
+  paused_s INTEGER
 );
 CREATE INDEX IF NOT EXISTS attempts_scenario ON attempts(scenario_id, started_at);
 CREATE TABLE IF NOT EXISTS check_results (
@@ -102,6 +105,10 @@ export interface SessionRow {
   /** The task open on screen since focusAt, if any. */
   focusTask?: string;
   focusAt?: string;
+  /** Exam mode: when the exam was paused; its clock is stopped until it resumes. */
+  pausedAt?: string;
+  /** Exam mode: milliseconds spent in pauses that have ended. */
+  pausedMs: number;
   updatedAt: string;
 }
 
@@ -147,6 +154,8 @@ function toSession(r: Row): SessionRow {
     taskTimes: json<Record<string, number>>(r.task_times) ?? {},
     focusTask: opt(r.focus_task),
     focusAt: opt(r.focus_at),
+    pausedAt: opt(r.paused_at),
+    pausedMs: Number(r.paused_ms ?? 0),
     updatedAt: r.updated_at as string,
   };
 }
@@ -169,11 +178,14 @@ const SESSION_COLUMNS: Record<string, string> = {
   taskTimes: 'task_times',
   focusTask: 'focus_task',
   focusAt: 'focus_at',
+  pausedAt: 'paused_at',
+  pausedMs: 'paused_ms',
 };
 
 const ATTEMPT_COLUMNS: Record<string, string> = {
   endedAt: 'ended_at',
   durationS: 'duration_s',
+  pausedS: 'paused_s',
   score: 'score',
   maxScore: 'max_score',
   hintsUsed: 'hints_used',
@@ -205,9 +217,11 @@ export class Store {
     if (!cols.includes('tasks_ready')) this.db.exec('ALTER TABLE sessions ADD COLUMN tasks_ready TEXT');
     if (!cols.includes('preparing_task')) this.db.exec('ALTER TABLE sessions ADD COLUMN preparing_task TEXT');
     if (!cols.includes('learn_progress')) this.db.exec('ALTER TABLE sessions ADD COLUMN learn_progress TEXT');
-    for (const c of ['task_times', 'focus_task', 'focus_at']) if (!cols.includes(c)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${c} TEXT`);
+    for (const c of ['task_times', 'focus_task', 'focus_at', 'paused_at']) if (!cols.includes(c)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${c} TEXT`);
+    if (!cols.includes('paused_ms')) this.db.exec('ALTER TABLE sessions ADD COLUMN paused_ms INTEGER');
     const attemptCols = (this.db.prepare('PRAGMA table_info(attempts)').all() as Row[]).map((r) => r.name);
     if (!attemptCols.includes('task_times')) this.db.exec('ALTER TABLE attempts ADD COLUMN task_times TEXT');
+    if (!attemptCols.includes('paused_s')) this.db.exec('ALTER TABLE attempts ADD COLUMN paused_s INTEGER');
   }
 
   private update(table: string, columns: Record<string, string>, id: string | number, patch: Record<string, unknown>) {
@@ -270,7 +284,16 @@ export class Store {
 
   updateAttempt(
     id: number,
-    patch: Partial<{ endedAt: string; durationS: number; score: number; maxScore: number; hintsUsed: number; solutionViewed: boolean; tasks: TaskTime[] }>,
+    patch: Partial<{
+      endedAt: string;
+      durationS: number;
+      pausedS: number;
+      score: number;
+      maxScore: number;
+      hintsUsed: number;
+      solutionViewed: boolean;
+      tasks: TaskTime[];
+    }>,
   ) {
     this.update('attempts', ATTEMPT_COLUMNS, id, patch);
   }
@@ -310,6 +333,7 @@ export class Store {
       startedAt: r.started_at as string,
       endedAt: opt(r.ended_at),
       durationS: opt<number>(r.duration_s),
+      pausedS: opt<number>(r.paused_s),
       score: opt<number>(r.score),
       maxScore: opt<number>(r.max_score),
       hintsUsed: Number(r.hints_used),
