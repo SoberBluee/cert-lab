@@ -67,6 +67,10 @@ export const api = {
   current: () => request<{ session: SessionView | null }>('GET', '/sessions/current').then((r) => r.session),
   start: (scenarioId: string, mode: 'practice' | 'mock' = 'practice') => request<SessionView>('POST', '/sessions', { scenarioId, mode }),
   submit: () => request<SessionView>('POST', '/sessions/current/submit'),
+  /** Exam mode: stops the clock until resume. */
+  pause: () => request<SessionView>('POST', '/sessions/current/pause'),
+  /** Exam mode: checks the lab, then restarts the clock with the time that was left. */
+  resume: () => request<SessionView>('POST', '/sessions/current/resume'),
   startPlayground: () => request<SessionView>('POST', '/playground'),
   reset: () => request<SessionView>('POST', '/sessions/current/reset'),
   reroll: () => request<SessionView>('POST', '/sessions/current/reset', { reroll: true }),

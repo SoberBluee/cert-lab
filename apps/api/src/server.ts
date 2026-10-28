@@ -184,6 +184,8 @@ app.post<{ Params: { id: string } }>('/api/sessions/current/tasks/:id/open', asy
 app.post('/api/sessions/current/grade', async () => sessions.grade());
 app.post<{ Body: { taskId?: string | null } }>('/api/sessions/current/focus', async (req) => sessions.focus(req.body?.taskId ?? null));
 app.post('/api/sessions/current/submit', async () => sessions.submit());
+app.post('/api/sessions/current/pause', async () => sessions.pause());
+app.post('/api/sessions/current/resume', async () => sessions.resume());
 app.post<{ Body: { taskId?: string } | null }>('/api/sessions/current/hint', async (req) => sessions.hint(req.body?.taskId));
 app.post('/api/sessions/current/solution', async () => sessions.solution());
 

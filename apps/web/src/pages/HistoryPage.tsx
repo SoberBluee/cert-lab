@@ -112,7 +112,14 @@ export function HistoryPage() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2 pr-4 font-mono text-zinc-400">{a.durationS !== undefined ? formatDuration(a.durationS) : '-'}</td>
+                      <td className="py-2 pr-4 font-mono text-zinc-400">
+                        {a.durationS !== undefined ? formatDuration(a.durationS) : '-'}
+                        {a.pausedS ? (
+                          <div className="font-sans text-xs text-zinc-500" title="The exam was paused; the time above leaves the pauses out">
+                            paused {formatDuration(a.pausedS)}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="py-2 pr-4 text-xs text-zinc-400">
                         {a.hintsUsed > 0 && <span className="mr-2">{a.hintsUsed} hint{a.hintsUsed === 1 ? '' : 's'}</span>}
                         {a.solutionViewed && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-300">assisted</span>}

@@ -1,9 +1,23 @@
+import { Link } from 'react-router-dom';
 import type { SessionView } from '@cka/schema';
 import { useBlindGrading, useExamMode } from '../hooks';
+import { SECTIONS, useSection } from '../section';
 
 /** Exam mode hides hints, docs, solutions and grading until a single submit at the end. */
 export function ExamToggle({ session }: { session?: SessionView | null }) {
   const [exam, setExam] = useExamMode();
+  const section = useSection();
+  if (session?.mode === 'mock' && session.pausedAt) {
+    return (
+      <Link
+        to={`${SECTIONS[section].base}/session`}
+        title="Open the exam to resume it"
+        className="rounded-md border border-sky-700/70 bg-sky-950/50 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:border-sky-500 hover:text-sky-200"
+      >
+        Exam paused
+      </Link>
+    );
+  }
   if (session?.mode === 'mock') {
     return (
       <span className="rounded-md border border-amber-700/70 bg-amber-950/50 px-2.5 py-1 text-xs font-semibold text-amber-300">Exam in progress</span>

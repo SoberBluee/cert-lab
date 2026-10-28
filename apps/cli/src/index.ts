@@ -168,7 +168,8 @@ program
       if (!v) return console.log('No active session.');
       console.log(`${c.bold(v.scenarioTitle)} ${c.dim(v.scenarioId)}  state=${v.state}  mode=${v.mode}`);
       if (v.error) console.log(c.red(v.error));
-      if (v.readyAt) console.log(`elapsed ${formatDuration(Math.round((Date.now() - Date.parse(v.readyAt)) / 1000))}`);
+      if (v.pausedAt) console.log(c.yellow(`exam paused, ${formatDuration(Math.round((v.timeLeftMs ?? 0) / 1000))} left (./cka resume)`));
+      else if (v.readyAt) console.log(`elapsed ${formatDuration(Math.round((Date.now() - Date.parse(v.readyAt)) / 1000) - (v.pausedS ?? 0))}`);
       const waiting = v.tasks.flatMap((t, i) => (t.ready ? [] : [i + 1]));
       if (v.preparingTask) console.log(c.yellow(`setting up ${v.preparingTask}`));
       if (waiting.length) console.log(c.dim(`not set up yet: question ${waiting.join(', ')} (./cka task <n> sets one up)`));
@@ -213,6 +214,27 @@ program
       console.log(c.dim('Submitting...'));
       const view = await o().sessions.submit();
       if (view.lastGrade) printGrade(view.lastGrade);
+    }),
+  );
+
+program
+  .command('pause')
+  .description('exam mode: stop the clock until ./cka resume; the lab keeps running')
+  .action(
+    action(() => {
+      const v = o().sessions.pause();
+      console.log(`Exam paused with ${formatDuration(Math.round((v.timeLeftMs ?? 0) / 1000))} left. Continue with ./cka resume.`);
+    }),
+  );
+
+program
+  .command('resume')
+  .description('exam mode: check the lab, then restart the clock with the time that was left')
+  .action(
+    action(async () => {
+      console.log(c.dim('Checking the lab...'));
+      const v = await o().sessions.resume();
+      if (v.deadlineAt) console.log(`Exam resumed. Submit with ./cka submit before ${new Date(v.deadlineAt).toLocaleTimeString()}.`);
     }),
   );
 

@@ -95,8 +95,14 @@ export interface SessionView {
   attemptId: number;
   startedAt: string;
   readyAt?: string;
-  /** Exam mode: when the exam is submitted automatically. */
+  /** Exam mode: when the exam is submitted automatically, later by the time spent paused. Absent while paused. */
   deadlineAt?: string;
+  /** Exam mode: when the exam was paused. The clock is stopped until it resumes. */
+  pausedAt?: string;
+  /** Exam mode, while paused: milliseconds left on the clock. */
+  timeLeftMs?: number;
+  /** Exam mode: seconds spent in pauses that have ended (every pause, once the exam ends). Not exam time. */
+  pausedS?: number;
   endedAt?: string;
   error?: string;
   progress: ProgressLine[];
@@ -193,6 +199,8 @@ export interface AttemptRecord {
   startedAt: string;
   endedAt?: string;
   durationS?: number;
+  /** Exam mode: seconds the exam was paused, which durationS leaves out. */
+  pausedS?: number;
   score?: number;
   maxScore?: number;
   hintsUsed: number;
