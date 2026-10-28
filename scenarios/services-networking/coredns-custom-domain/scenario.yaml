@@ -1,0 +1,57 @@
+id: coredns-custom-domain
+title: "CoreDNS: extra Service domain"
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ coredns, dns, corefile ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ lookup, resolver, names, dns-lab, records, zones, directory, catalog, registry, gateway-ns ] }
+  Q1_DOMAIN: { oneOf: [ cka.lab, exam.lab, corp.lab, k8s.lab ] }
+tasks:
+  - id: q1
+    title: DNS domain ${Q1_DOMAIN}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 420
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-backup
+        description: coredns-backup.yaml is the CoreDNS ConfigMap as it was before the change
+        run: "f=/opt/course/coredns/coredns-backup.yaml; grep -q '^kind: ConfigMap' $f 2>/dev/null && grep -qE '^  name: coredns$' $f && grep -qE 'kubernetes cluster\\.local' $f && ! grep -qF '${Q1_DOMAIN}' $f && echo ok || echo wrong"
+        expect: { equals: ok }
+        weight: 1
+      - id: q1-coredns
+        description: CoreDNS runs 2 ready replicas, and its Corefile names ${Q1_DOMAIN}
+        type: kubectl
+        run: echo "$(kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}')/$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -qF '${Q1_DOMAIN}' && echo named || echo missing)"
+        expect: { equals: 2/named }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-new-domain
+        description: web.${Q1_NS}.svc.${Q1_DOMAIN} resolves to the ClusterIP of web
+        type: kubectl
+        run: ip=$(kubectl -n ${Q1_NS} get service web -o jsonpath='{.spec.clusterIP}'); [ -n "$ip" ] && kubectl -n ${Q1_NS} exec dns-test -- nslookup web.${Q1_NS}.svc.${Q1_DOMAIN} 2>/dev/null | grep -qw "$ip" && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 2
+        retrySeconds: 90
+      - id: q1-cluster-local
+        description: web.${Q1_NS}.svc.cluster.local still resolves to the ClusterIP of web
+        type: kubectl
+        run: ip=$(kubectl -n ${Q1_NS} get service web -o jsonpath='{.spec.clusterIP}'); [ -n "$ip" ] && kubectl -n ${Q1_NS} exec dns-test -- nslookup web.${Q1_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 2
+        retrySeconds: 90
+    hints:
+      - "CoreDNS reads its Corefile from ConfigMap kube-system/coredns: kubectl -n kube-system get configmap coredns -o yaml > <file> saves it."
+      - "The kubernetes plugin line (kubernetes cluster.local in-addr.arpa ip6.arpa) lists the zones CoreDNS answers for Services and Pods: add the new domain next to cluster.local."
+      - CoreDNS reloads a changed Corefile after a while; kubectl -n kube-system rollout restart deployment/coredns applies it at once, and kubectl -n kube-system logs deploy/coredns shows a Corefile that does not parse.
+    recipe: { builder: coredns, parts: [] }
