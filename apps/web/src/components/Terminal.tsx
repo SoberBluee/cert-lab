@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal as XTerm } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SessionView } from '@cka/schema';
 import { terminalUrl } from '../api';
 
@@ -123,15 +123,14 @@ function NodeTerminal({ node, visible, onConnected }: { node: string; visible: b
   );
 }
 
-/** Browser terminal with one SSH tab per lab node. Tabs connect when first opened and stay alive while hidden. */
+/** Browser terminal with one SSH tab per lab node, filling its container. Tabs connect when first opened and stay alive while hidden. */
 export function TerminalPanel({
   session,
-  fullscreen = false,
-  onToggleFullscreen,
+  actions,
 }: {
   session: SessionView;
-  fullscreen?: boolean;
-  onToggleFullscreen?: () => void;
+  /** Session controls shown at the right of the tab bar. */
+  actions?: ReactNode;
 }) {
   const nodes = session.connection?.nodes.map((n) => n.name) ?? [];
   const [active, setActive] = useState(nodes.includes('controlplane') ? 'controlplane' : nodes[0]);
@@ -161,9 +160,7 @@ export function TerminalPanel({
     });
 
   return (
-    <section
-      className={`overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60 ${fullscreen ? 'flex min-h-0 flex-col' : ''}`}
-    >
+    <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
       <header className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 px-2 py-1.5">
         <h2 className="mr-2 shrink-0 px-2 text-sm font-semibold tracking-wide text-zinc-300 uppercase">Terminal</h2>
         {nodes.map((n) => (
@@ -178,19 +175,9 @@ export function TerminalPanel({
             {n}
           </button>
         ))}
-        {onToggleFullscreen && (
-          <button
-            onClick={onToggleFullscreen}
-            title={
-              fullscreen ? 'Exit fullscreen' : session.mode === 'playground' ? 'Fullscreen terminal' : 'Fullscreen: task on the left, terminal on the right'
-            }
-            className="ml-auto shrink-0 rounded-md px-2.5 py-1 text-xs whitespace-nowrap text-zinc-400 transition hover:bg-zinc-800/60 hover:text-zinc-200"
-          >
-            {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          </button>
-        )}
+        <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">{actions}</div>
       </header>
-      <div className={fullscreen ? 'min-h-0 flex-1 overflow-hidden' : 'h-[55vh] min-h-48 resize-y overflow-hidden'}>
+      <div className="min-h-0 flex-1 overflow-hidden">
         {nodes
           .filter((n) => opened.has(n))
           .map((n) => (

@@ -124,8 +124,6 @@ export const studioApi = {
   quickCreate: (req: QuickCreateRequest) => request<{ id: string; job: StudioJob | null; jobError: string | null }>('POST', '/studio/quick', req),
 };
 
-export const kubeconfigUrl = '/api/sessions/current/kubeconfig';
-
 export function terminalUrl(node: string, cols: number, rows: number): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/api/terminal/${encodeURIComponent(node)}?cols=${cols}&rows=${rows}`;

@@ -1,15 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { SessionView } from '@cka/schema';
 import { api, studioApi } from '../api';
 import { AttemptReviewView } from '../components/AttemptReviewView';
-import { ConnectionPanel } from '../components/ConnectionPanel';
 import { GradeResultView } from '../components/GradeResultView';
 import { LessonPane } from '../components/LessonPane';
 import { ReferencePanel } from '../components/ReferencePanel';
 import { SPLIT_MIN_PX, SplitHandle, useSplit } from '../components/SplitHandle';
-import { Button, buttonClass, Card, ErrorBanner, Markdown, StateBadge } from '../components/ui';
+import { BarButton, Button, buttonClass, Card, ErrorBanner, Markdown, StateBadge } from '../components/ui';
 import { formatDuration, sessionKey, useBlindGrading, useNow, useSession } from '../hooks';
 import { SECTIONS, useSection } from '../section';
 
@@ -48,36 +47,34 @@ const ResumeIcon = () => (
   </svg>
 );
 
-/** Exam mode, while paused: the time left and the way back. The questions and the terminal stay hidden. */
+/** Exam mode, while paused: the time left and the way back, in place of the question. */
 function PausedExam({ session, resuming, onResume }: { session: SessionView; resuming: boolean; onResume: () => void }) {
   const now = useNow();
   const since = new Date(session.pausedAt!);
   const at = since.toDateString() === new Date(now).toDateString() ? since.toLocaleTimeString() : since.toLocaleString();
   return (
-    <Card title="Exam paused" className="border-sky-900/70">
-      <div className="flex flex-col items-center gap-5 py-10 text-center">
-        <div>
-          <div className="font-mono text-5xl text-zinc-100 tabular-nums">{formatDuration((session.timeLeftMs ?? 0) / 1000)}</div>
-          <div className="mt-1 text-sm text-zinc-400">left on the clock</div>
-        </div>
-        <Button variant="primary" className="px-5 py-2 text-base" disabled={resuming || session.state !== 'running'} onClick={onResume}>
-          <ResumeIcon />
-          {resuming ? 'Checking the lab…' : 'Resume exam'}
-        </Button>
-        <div className="space-y-1 text-xs text-zinc-500">
-          <p>
-            Paused at {at}, {formatDuration((now - since.getTime()) / 1000)} ago
-            {session.pausedS ? ` · ${formatDuration(session.pausedS)} in earlier pauses` : ''}
-          </p>
-          <p className="max-w-md">
-            The questions and the terminal are hidden until you resume.{' '}
-            {session.base === 'floci'
-              ? "The lab's AWS resources stay as they are."
-              : 'The lab VMs keep running; on resume they are checked and their clocks synced before the timer restarts.'}
-          </p>
-        </div>
+    <div className="flex flex-col items-center gap-5 py-10 text-center">
+      <div>
+        <div className="font-mono text-5xl text-zinc-100 tabular-nums">{formatDuration((session.timeLeftMs ?? 0) / 1000)}</div>
+        <div className="mt-1 text-sm text-zinc-400">left on the clock</div>
       </div>
-    </Card>
+      <Button variant="primary" className="px-5 py-2 text-base" disabled={resuming || session.state !== 'running'} onClick={onResume}>
+        <ResumeIcon />
+        {resuming ? 'Checking the lab…' : 'Resume exam'}
+      </Button>
+      <div className="space-y-1 text-xs text-zinc-500">
+        <p>
+          Paused at {at}, {formatDuration((now - since.getTime()) / 1000)} ago
+          {session.pausedS ? ` · ${formatDuration(session.pausedS)} in earlier pauses` : ''}
+        </p>
+        <p className="max-w-md">
+          The questions and the terminal are hidden until you resume.{' '}
+          {session.base === 'floci'
+            ? "The lab's AWS resources stay as they are."
+            : 'The lab VMs keep running; on resume they are checked and their clocks synced before the timer restarts.'}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -112,7 +109,7 @@ function ProgressLog({ session, compact }: { session: SessionView; compact?: boo
     ref.current?.scrollTo({ top: ref.current.scrollHeight });
   }, [session.progress.length]);
   return (
-    <ol ref={ref} className={`space-y-1 overflow-y-auto font-mono text-xs ${compact ? 'max-h-40' : 'max-h-80'}`}>
+    <ol ref={ref} className={`space-y-1 overflow-y-auto font-mono text-xs ${compact ? 'max-h-40' : 'h-full'}`}>
       {session.progress.map((p, i) => (
         <li key={i} className="flex gap-3">
           <span className="shrink-0 text-zinc-600">{new Date(p.at).toLocaleTimeString()}</span>
@@ -126,8 +123,6 @@ function ProgressLog({ session, compact }: { session: SessionView; compact?: boo
     </ol>
   );
 }
-
-const FOCUS_KEY = 'cka.focus';
 
 /** Question tabs for multi-task scenarios; renders nothing for a single task. */
 function QuestionTabs({ session, active, onSelect }: { session: SessionView; active: number; onSelect: (i: number) => void }) {
@@ -207,69 +202,88 @@ function TaskBody({ session, active, onOpen }: { session: SessionView; active: n
   );
 }
 
-/** Left side of focus mode: everything needed to work through the task next to the terminal. */
+/** Left side of a session: the task, its controls, and the docs. A playground has no task, only the controls and docs. */
 function TaskPane(props: {
   session: SessionView;
+  subtitle: ReactNode;
   active: number;
   onSelect: (i: number) => void;
   onOpen: () => void;
   grading: boolean;
   canGrade: boolean;
-  canHint: boolean;
   onGrade: () => void;
-  onHint: () => void;
   canSubmit: boolean;
   onSubmit: () => void;
   canPause: boolean;
+  pausing: boolean;
   onPause: () => void;
+  resuming: boolean;
+  onResume: () => void;
   error: unknown;
+  onDismissError: () => void;
   blind: boolean;
+  aws: boolean;
+  footer?: ReactNode;
 }) {
   const { session } = props;
-  const task = session.tasks[props.active];
   const exam = session.mode === 'mock';
+  const playground = session.mode === 'playground';
+  // A paused exam hides its questions until it resumes.
+  const paused = exam && !!session.pausedAt && session.state === 'running';
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
       <header className="space-y-2 border-b border-zinc-800 px-4 py-2.5">
-        <h1 className="truncate font-semibold text-zinc-100" title={session.scenarioTitle}>
-          {session.scenarioTitle}
-        </h1>
-        <div className="flex flex-wrap items-center gap-2">
-          {exam && <Countdown session={session} />}
-          <div className="ml-auto flex gap-2">
-            {exam ? (
-              <>
-                <Button disabled={!props.canPause} onClick={props.onPause} title="Stop the clock and hide the questions until you resume">
-                  <PauseIcon />
-                  Pause
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="min-w-0 truncate font-semibold text-zinc-100" title={session.scenarioTitle}>
+              {session.scenarioTitle}
+            </h1>
+            <StateBadge state={session.state} />
+          </div>
+          <div className="mt-0.5 truncate font-mono text-xs text-zinc-500">{props.subtitle}</div>
+        </div>
+        {!playground && (
+          <div className="flex flex-wrap items-center gap-2">
+            {exam && <Countdown session={session} />}
+            <div className="ml-auto flex gap-2">
+              {paused ? (
+                <Button variant="primary" disabled={props.resuming} onClick={props.onResume}>
+                  <ResumeIcon />
+                  {props.resuming ? 'Checking the lab…' : 'Resume'}
                 </Button>
-                <Button variant="primary" disabled={!props.canSubmit} onClick={props.onSubmit}>
-                  {props.grading ? 'Submitting…' : 'Submit exam'}
-                </Button>
-              </>
-            ) : (
-              <>
+              ) : exam ? (
+                <>
+                  <Button disabled={!props.canPause} onClick={props.onPause} title="Stop the clock and hide the questions until you resume">
+                    <PauseIcon />
+                    {props.pausing ? 'Pausing…' : 'Pause'}
+                  </Button>
+                  <Button variant="primary" disabled={!props.canSubmit} onClick={props.onSubmit}>
+                    {props.grading ? 'Submitting…' : 'Submit exam'}
+                  </Button>
+                </>
+              ) : (
                 <Button variant="primary" shortcut="g" disabled={!props.canGrade} onClick={props.onGrade}>
                   {props.grading ? 'Grading…' : 'Grade'}
                 </Button>
-                <Button shortcut="h" disabled={!props.canHint} onClick={props.onHint}>
-                  Hint {task?.hintsRevealed.length ?? 0}/{task?.hintsTotal ?? 0}
-                </Button>
-              </>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-        <QuestionTabs session={session} active={props.active} onSelect={props.onSelect} />
+        )}
+        {!paused && <QuestionTabs session={session} active={props.active} onSelect={props.onSelect} />}
       </header>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
-        <ErrorBanner error={props.error} />
+        <ErrorBanner error={props.error} onDismiss={props.onDismissError} />
         {exam && <ExamWarning session={session} />}
         {props.grading && (
           <div className="text-sm text-sky-300">
             {exam ? 'Submitting… your answers are being checked.' : 'Grading… unmet checks are retried for up to 30 seconds.'}
           </div>
         )}
-        <TaskBody session={session} active={props.active} onOpen={props.onOpen} />
+        {paused ? (
+          <PausedExam session={session} resuming={props.resuming} onResume={props.onResume} />
+        ) : (
+          !playground && <TaskBody session={session} active={props.active} onOpen={props.onOpen} />
+        )}
         {!exam && session.solution && (
           <div>
             <h2 className="mb-2 text-xs font-semibold tracking-wide text-amber-400 uppercase">Solution</h2>
@@ -282,7 +296,49 @@ function TaskPane(props: {
             <GradeResultView result={session.lastGrade} blind={props.blind} />
           </div>
         )}
+        {!exam && <ReferencePanel aws={props.aws} />}
       </div>
+      {props.footer && <footer className="flex flex-wrap gap-2 border-t border-zinc-800 px-4 py-2.5">{props.footer}</footer>}
+    </section>
+  );
+}
+
+/** Right side until the terminal is up: the lab's setup progress, or why it failed. */
+function LabStatus({
+  session,
+  actions,
+  onRetry,
+  retrying,
+}: {
+  session: SessionView;
+  actions: ReactNode;
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  const failed = session.state === 'failed';
+  const paused = !!session.pausedAt && session.state === 'running';
+  return (
+    <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+      <header className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 px-2 py-1.5">
+        <h2 className="mr-2 shrink-0 px-2 text-sm font-semibold tracking-wide text-zinc-300 uppercase">
+          {failed ? 'Session failed' : paused ? 'Exam paused' : session.state === 'provisioning' ? 'Preparing the lab' : 'Terminal'}
+        </h2>
+        <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">{actions}</div>
+      </header>
+      {failed ? (
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          <p className="text-sm whitespace-pre-wrap text-red-300">{session.error}</p>
+          <Button variant="primary" onClick={onRetry} disabled={retrying}>
+            {retrying ? 'Resetting…' : 'Reset and retry'}
+          </Button>
+        </div>
+      ) : paused ? (
+        <div className="min-h-0 flex-1 p-4 text-sm text-zinc-500">The terminal is hidden until you resume the exam.</div>
+      ) : (
+        <div className="min-h-0 flex-1 p-4">
+          <ProgressLog session={session} />
+        </div>
+      )}
     </section>
   );
 }
@@ -508,23 +564,20 @@ export function SessionPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const [focus, setFocus] = useState(() => localStorage.getItem(FOCUS_KEY) === '1');
   const live = state === 'running' || state === 'grading';
-  const focusActive = (focus || learn) && live && !!session?.connection && !paused;
   const [split, setSplit] = useSplit();
-  const focusRef = useRef<HTMLDivElement>(null);
+  const splitRef = useRef<HTMLDivElement>(null);
+  // A session fills the window, so the page underneath must not scroll.
+  const hasSession = !!session;
   useEffect(() => {
-    localStorage.setItem(FOCUS_KEY, focus ? '1' : '0');
-  }, [focus]);
-  useEffect(() => {
-    if (!focusActive) return;
+    if (!hasSession) return;
     const root = document.documentElement;
     const prev = root.style.overflow;
     root.style.overflow = 'hidden';
     return () => {
       root.style.overflow = prev;
     };
-  }, [focusActive]);
+  }, [hasSession]);
 
   if (ended && !session) return <EndedSummary ended={ended} onDismiss={() => setEnded(null)} />;
   if (isLoading) return <div className="text-zinc-500">Loading…</div>;
@@ -539,203 +592,104 @@ export function SessionPage() {
     );
   }
 
-  const lastGrade = session.lastGrade;
   // Blind practice grading: check names stay hidden until the solution is shown.
   const blind = blindSetting && session.mode === 'practice' && !session.solutionViewed;
 
+  // The session controls sit in the top bar on the right: the terminal's tab bar, or the status panel until the
+  // terminal is up. Lessons have their own reset in the lesson pane.
+  const scenarioMode = !playground && !learn && !exam;
+  const barActions = (
+    <>
+      {scenarioMode && (
+        <>
+          <BarButton shortcut="h" disabled={!canHint || hint.isPending} onClick={() => hint.mutate(task?.id)}>
+            Hint {task?.hintsRevealed.length ?? 0}/{task?.hintsTotal ?? 0}
+          </BarButton>
+          <BarButton disabled={!canSolution} onClick={doSolution} title="Reveal the solution; the attempt is marked as assisted">
+            Solution
+          </BarButton>
+        </>
+      )}
+      {!exam && !learn && (
+        <BarButton shortcut="r" disabled={!canReset || reset.isPending} onClick={doReset}>
+          Reset
+        </BarButton>
+      )}
+      <BarButton danger className="ml-1" disabled={end.isPending || submit.isPending} onClick={doEnd}>
+        {end.isPending ? 'Ending…' : exam ? 'Abandon' : 'End'}
+      </BarButton>
+    </>
+  );
+
+  const subtitle = playground ? (
+    'free practice · nothing is graded'
+  ) : (
+    <>
+      {session.scenarioId} · {exam ? 'exam' : session.mode}
+      {scenario.data && ` · ${scenario.data.points} pts · ~${scenario.data.estimatedMinutes} min`}
+    </>
+  );
+
+  // The task (or lesson) on the left and the terminal on the right, filling the window.
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
-        <div className="min-w-64 flex-1">
-          <div className="flex items-center gap-3">
-            <h1 className="truncate text-lg font-semibold text-zinc-100">{session.scenarioTitle}</h1>
-            <StateBadge state={session.state} />
-          </div>
-          <div className="mt-0.5 font-mono text-xs text-zinc-500">
-            {playground ? (
-              'free practice · nothing is graded'
-            ) : learn ? (
-              'lesson · follow the steps in the terminal'
-            ) : (
-              <>
-                {session.scenarioId} · {exam ? 'exam' : session.mode}
-                {scenario.data && ` · ${scenario.data.points} pts · ~${scenario.data.estimatedMinutes} min`}
-              </>
-            )}
-          </div>
-        </div>
-        {exam && <Countdown session={session} />}
-        <div className="flex flex-wrap gap-2">
-          {exam &&
-            (paused ? (
-              <Button variant="primary" disabled={resume.isPending || state !== 'running'} onClick={() => resume.mutate()}>
-                <ResumeIcon />
-                {resume.isPending ? 'Checking the lab…' : 'Resume'}
+    <div
+      ref={splitRef}
+      className="fixed inset-x-0 top-0 z-40 grid h-dvh bg-zinc-950 p-3"
+      style={{ gridTemplateColumns: `minmax(${SPLIT_MIN_PX}px,${split}%) 12px minmax(0,1fr)` }}
+    >
+      {learn ? (
+        <LessonPane
+          session={session}
+          onSkip={() => skip.mutate()}
+          skipping={skip.isPending}
+          onAnswer={(choice) => answer.mutate(choice)}
+          answering={answer.isPending}
+          onReset={doReset}
+          onEnd={doEnd}
+          error={error}
+        />
+      ) : (
+        <TaskPane
+          session={session}
+          subtitle={subtitle}
+          active={activeTask}
+          onSelect={selectTask}
+          onOpen={openActive}
+          grading={state === 'grading' || grade.isPending || submit.isPending}
+          canGrade={canGrade}
+          onGrade={() => grade.mutate()}
+          canSubmit={canSubmit}
+          onSubmit={doSubmit}
+          canPause={canPause}
+          pausing={pause.isPending}
+          onPause={() => pause.mutate()}
+          resuming={resume.isPending}
+          onResume={() => resume.mutate()}
+          blind={blind}
+          aws={Boolean(session.connection?.aws) || section === 'aws'}
+          error={error}
+          onDismissError={() => mutations.forEach((m) => m.reset())}
+          footer={
+            session.rerollable && (
+              <Button
+                disabled={!canReroll}
+                onClick={doReroll}
+                title={aws ? 'Start a fresh AWS account with a different variant of this question' : 'Restore the snapshot and set up a different variant of this question'}
+              >
+                {reroll.isPending ? 'Rolling…' : 'New variant'}
               </Button>
-            ) : (
-              <>
-                <Button disabled={!canPause} onClick={() => pause.mutate()} title="Stop the clock and hide the questions until you resume">
-                  <PauseIcon />
-                  {pause.isPending ? 'Pausing…' : 'Pause'}
-                </Button>
-                <Button variant="primary" disabled={!canSubmit} onClick={doSubmit}>
-                  {submit.isPending || state === 'grading' ? 'Submitting…' : 'Submit exam'}
-                </Button>
-              </>
-            ))}
-          {!playground && !learn && !exam && (
-            <>
-              <Button variant="primary" shortcut="g" disabled={!canGrade} onClick={() => grade.mutate()}>
-                {state === 'grading' ? 'Grading…' : 'Grade'}
-              </Button>
-              <Button shortcut="h" disabled={!canHint} onClick={() => hint.mutate(task?.id)}>
-                Hint {task?.hintsRevealed.length ?? 0}/{task?.hintsTotal ?? 0}
-              </Button>
-            </>
-          )}
-          {!exam && (
-            <Button shortcut="r" disabled={!canReset || reset.isPending} onClick={doReset}>
-              Reset
-            </Button>
-          )}
-          {session.rerollable && (
-            <Button disabled={!canReroll} onClick={doReroll} title={aws ? 'Start a fresh AWS account with a different variant of this question' : 'Restore the snapshot and set up a different variant of this question'}>
-              {reroll.isPending ? 'Rolling…' : 'New variant'}
-            </Button>
-          )}
-          {!playground && !learn && !exam && (
-            <Button disabled={!canSolution} onClick={doSolution}>
-              Solution
-            </Button>
-          )}
-          <Button variant="danger" disabled={end.isPending || submit.isPending} onClick={doEnd}>
-            {end.isPending ? 'Ending…' : exam ? 'Abandon' : 'End'}
-          </Button>
-        </div>
-      </div>
-
-      <ErrorBanner error={error} onDismiss={() => mutations.forEach((m) => m.reset())} />
-      {exam && !focusActive && !paused && <ExamWarning session={session} />}
-
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-4">
-          {paused && session.state === 'running' && <PausedExam session={session} resuming={resume.isPending} onResume={() => resume.mutate()} />}
-
-          {live && session.connection && !paused && (
-            <div
-              ref={focusRef}
-              className={focusActive ? 'fixed inset-x-0 top-0 z-40 grid h-dvh bg-zinc-950 p-3' : ''}
-              style={
-                focusActive
-                  ? { gridTemplateColumns: playground ? 'minmax(0,1fr)' : `minmax(${SPLIT_MIN_PX}px,${split}%) 12px minmax(0,1fr)` }
-                  : undefined
-              }
-            >
-              {focusActive && learn && (
-                <LessonPane
-                  key="lesson"
-                  session={session}
-                  onSkip={() => skip.mutate()}
-                  skipping={skip.isPending}
-                  onAnswer={(choice) => answer.mutate(choice)}
-                  answering={answer.isPending}
-                  onReset={doReset}
-                  onEnd={doEnd}
-                  error={error}
-                />
-              )}
-              {focusActive && !playground && !learn && (
-                <TaskPane
-                  key="task"
-                  session={session}
-                  active={activeTask}
-                  onSelect={selectTask}
-                  onOpen={openActive}
-                  grading={state === 'grading' || grade.isPending || submit.isPending}
-                  canGrade={canGrade}
-                  canHint={canHint}
-                  onGrade={() => grade.mutate()}
-                  onHint={() => hint.mutate(task?.id)}
-                  canSubmit={canSubmit}
-                  onSubmit={doSubmit}
-                  canPause={canPause}
-                  onPause={() => pause.mutate()}
-                  blind={blind}
-                  error={error}
-                />
-              )}
-              {focusActive && !playground && <SplitHandle key="split" container={focusRef} value={split} onChange={setSplit} />}
-              <Suspense key="terminal" fallback={<div className="text-sm text-zinc-500">Loading terminal…</div>}>
-                <TerminalPanel
-                  key={`${session.id}-${session.readyAt}`}
-                  session={session}
-                  fullscreen={focusActive}
-                  onToggleFullscreen={learn ? undefined : () => setFocus((f) => !f)}
-                />
-              </Suspense>
-            </div>
-          )}
-
-          {session.state === 'failed' && (
-            <Card title="Session failed" className="border-red-900">
-              <p className="mb-3 text-sm whitespace-pre-wrap text-red-300">{session.error}</p>
-              <div className="flex gap-2">
-                <Button variant="primary" onClick={() => reset.mutate()} disabled={reset.isPending}>
-                  Reset and retry
-                </Button>
-                <Button variant="danger" onClick={() => end.mutate()}>
-                  End session
-                </Button>
-              </div>
-            </Card>
-          )}
-
-          {session.state === 'provisioning' && (
-            <Card title="Preparing the lab">
-              <ProgressLog session={session} />
-            </Card>
-          )}
-
-          {(session.state === 'grading' || grade.isPending || submit.isPending) && (
-            <div className="rounded-xl border border-sky-900 bg-sky-950/30 px-4 py-3 text-sm text-sky-200">
-              {exam
-                ? `Submitting… your answers are being checked, then ${aws ? "the lab's AWS resources are removed" : 'the lab VMs are stopped'}.`
-                : 'Grading… checks that are not yet satisfied are retried for up to 30 seconds.'}
-            </div>
-          )}
-
-          {lastGrade && !exam && (
-            <Card title="Result">
-              <GradeResultView result={lastGrade} blind={blind} />
-            </Card>
-          )}
-
-          {!playground && !learn && !paused && (
-            <Card title={session.tasks.length > 1 ? `Tasks (${session.tasks.length} questions)` : 'Task'}>
-              <div className="space-y-4">
-                <QuestionTabs session={session} active={activeTask} onSelect={selectTask} />
-                <TaskBody session={session} active={activeTask} onOpen={openActive} />
-              </div>
-            </Card>
-          )}
-
-          {session.solution && !exam && (
-            <Card title="Solution" className="border-amber-900/60">
-              <Markdown>{session.solution}</Markdown>
-            </Card>
-          )}
-        </div>
-
-        <aside className="space-y-4">
-          {!paused && <ConnectionPanel session={session} />}
-          {session.state !== 'provisioning' && session.progress.length > 0 && (
-            <Card title="Provisioning log">
-              <ProgressLog session={session} compact />
-            </Card>
-          )}
-          {!exam && <ReferencePanel aws={Boolean(session.connection?.aws) || section === 'aws'} />}
-        </aside>
-      </div>
+            )
+          }
+        />
+      )}
+      <SplitHandle container={splitRef} value={split} onChange={setSplit} />
+      {live && session.connection && !paused ? (
+        <Suspense fallback={<div className="text-sm text-zinc-500">Loading terminal…</div>}>
+          <TerminalPanel key={`${session.id}-${session.readyAt}`} session={session} actions={barActions} />
+        </Suspense>
+      ) : (
+        <LabStatus session={session} actions={barActions} onRetry={() => reset.mutate()} retrying={reset.isPending} />
+      )}
     </div>
   );
 }

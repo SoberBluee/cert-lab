@@ -1,4 +1,4 @@
-import { useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { type ButtonHTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Domain, SessionState } from '@cka/schema';
 
@@ -36,6 +36,28 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; shortcut?: string }) {
   return (
     <button className={buttonClass(variant, className)} {...props}>
+      {children}
+      {shortcut && <kbd>{shortcut}</kbd>}
+    </button>
+  );
+}
+
+/** Compact button for a panel's top bar, such as the terminal's tab bar. */
+export function BarButton({
+  danger = false,
+  shortcut,
+  className = '',
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean; shortcut?: string }) {
+  const tone = danger
+    ? 'border border-red-800 bg-red-900/60 text-red-100 hover:bg-red-800'
+    : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200 disabled:hover:bg-transparent disabled:hover:text-zinc-400';
+  return (
+    <button
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs whitespace-nowrap transition disabled:cursor-not-allowed disabled:opacity-40 ${tone} ${className}`}
+      {...props}
+    >
       {children}
       {shortcut && <kbd>{shortcut}</kbd>}
     </button>
@@ -96,28 +118,6 @@ export function InlineMarkdown({ children }: { children: string }) {
         {children}
       </ReactMarkdown>
     </span>
-  );
-}
-
-export function CopyField({ value, label }: { value: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="group">
-      {label && <div className="mb-1 text-xs text-zinc-500">{label}</div>}
-      <div className="flex items-stretch overflow-hidden rounded-md border border-zinc-800 bg-zinc-950">
-        <code className="flex-1 overflow-x-auto px-2.5 py-1.5 font-mono text-xs whitespace-nowrap text-zinc-300">{value}</code>
-        <button
-          className="border-l border-zinc-800 px-2.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-          onClick={() => {
-            navigator.clipboard.writeText(value);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
-        >
-          {copied ? 'copied' : 'copy'}
-        </button>
-      </div>
-    </div>
   );
 }
 
