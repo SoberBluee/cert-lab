@@ -32,6 +32,8 @@ export const nodeConfigCategory: FaultCategory = {
   points: 7,
   tags: ['troubleshooting', 'node', 'kubelet', 'kubeconfig', 'systemd'],
   disruptive: true,
+  // A worker stops taking Pods: other questions must start theirs first.
+  blocksScheduling: 'node',
   settleSeconds: 60,
   hidden: { NODE: WORKERS },
   fields: [nsField(['fleet', 'edge', 'infra', 'nodes', 'config', 'workers', 'daemon', 'system', 'host-ops', 'platform'])],

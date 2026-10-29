@@ -27,6 +27,8 @@ export const controllersCategory: FaultCategory = {
   points: 8,
   tags: ['troubleshooting', 'control-plane', 'static-pod', 'kube-scheduler', 'kube-controller-manager'],
   disruptive: true,
+  // No new Pod starts anywhere while the scheduler or controller manager is broken.
+  blocksScheduling: 'cluster',
   settleSeconds: 60,
   hidden: { SCHEDULER_FILE: FILE_PICKS.SCHEDULER_FILE, CM_FILE: FILE_PICKS.CM_FILE },
   fields: controlPlaneCategory.fields,

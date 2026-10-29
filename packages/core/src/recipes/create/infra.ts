@@ -58,6 +58,8 @@ export const infraBuilder = taskBuilder({
   track: 'cluster',
   // Rejoining takes worker-2 out of the cluster while it is set up.
   disruptive: true,
+  // Rejoining takes a worker out of the cluster: other questions must start their Pods first.
+  blocksScheduling: 'node',
   fields: [selectField('NODE', 'Worker', ['worker-1', 'worker-2'], { randomizeByDefault: true })],
   tasks: {
     sysctl: {

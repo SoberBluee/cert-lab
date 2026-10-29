@@ -1,5 +1,5 @@
 import type { Domain, RecipeField } from '@cka/schema';
-import type { RecipeCheck, Refs } from '../types';
+import type { RecipeCheck, Refs, SchedulingBlock } from '../types';
 
 /**
  * One way a category can break. Snippets are bash, run with the question's variables in the
@@ -25,6 +25,8 @@ export interface Fault {
    * fixed like a disruptive category, so other questions are not verified while it is still broken.
    */
   disruptive?: boolean;
+  /** Takes scheduling capacity away when this fault is rolled; see SchedulingBlock. */
+  blocksScheduling?: SchedulingBlock;
   /** Solution text: what was wrong and how to spot it. */
   explain: string;
 }
@@ -63,6 +65,8 @@ export interface FaultCategory {
   track?: 'troubleshoot' | 'cluster';
   /** Breaks a node: set up after and fixed before every other question. */
   disruptive?: boolean;
+  /** Takes scheduling capacity away whatever fault is rolled; see SchedulingBlock. */
+  blocksScheduling?: SchedulingBlock;
   /** May take the API server down: set up after and fixed before even disruptive questions, at most one per lab. */
   breaksApi?: boolean;
   settleSeconds?: number;

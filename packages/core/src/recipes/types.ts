@@ -9,6 +9,13 @@ interface CheckBase {
   retrySeconds?: number;
 }
 
+/**
+ * How much scheduling capacity a question takes away once it is set up: a worker ('node', e.g. cordoned,
+ * tainted or NotReady), or room for every new Pod ('cluster', e.g. a broken scheduler). Other questions'
+ * setups start Pods, so these are set up after them, scheduler-wide ones last, and fixed before them.
+ */
+export type SchedulingBlock = 'node' | 'cluster';
+
 export type RecipeCheck = CheckBase &
   (
     | { type: 'kubectl'; run: string; expect: Expect }
@@ -36,6 +43,8 @@ export interface QuestionOutput {
   settleSeconds?: number;
   /** Breaks nodes: set up after and fixed before every other question. */
   disruptive?: boolean;
+  /** Takes scheduling capacity away; see SchedulingBlock. */
+  blocksScheduling?: SchedulingBlock;
   /** May take the API server down: set up last and fixed first, even among disruptive questions. */
   breaksApi?: boolean;
   /** Snapshot the lab starts from; cluster when omitted. */

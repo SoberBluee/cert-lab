@@ -1,5 +1,5 @@
 import type { Domain, RecipeField } from '@cka/schema';
-import { selectField, type RecipeCheck, type Refs } from '../types';
+import { selectField, type RecipeCheck, type Refs, type SchedulingBlock } from '../types';
 import { noPod } from './shared';
 import type { Builder, CreateCtx } from './types';
 
@@ -46,6 +46,8 @@ export function taskBuilder(b: {
   breaksApi?: boolean;
   /** Takes a node away while it is set up or solved. */
   disruptive?: boolean;
+  /** Takes scheduling capacity away; see SchedulingBlock. */
+  blocksScheduling?: SchedulingBlock;
   fields?: RecipeField[];
   tasks: Record<string, TaskDef>;
 }): Builder {
@@ -64,6 +66,7 @@ export function taskBuilder(b: {
     ...(b.solo ? { solo: true } : {}),
     ...(b.breaksApi ? { breaksApi: true } : {}),
     ...(b.disruptive ? { disruptive: true } : {}),
+    ...(b.blocksScheduling ? { blocksScheduling: b.blocksScheduling } : {}),
     fields: [
       selectField('TASK', 'Task', ids, {
         pool: undefined,

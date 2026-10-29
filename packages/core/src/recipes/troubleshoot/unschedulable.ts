@@ -30,6 +30,8 @@ export const unschedulableCategory: FaultCategory = {
   points: 6,
   tags: ['troubleshooting', 'scheduling', 'node', 'taints', 'kubelet'],
   disruptive: true,
+  // A worker stops taking Pods: other questions must start theirs first.
+  blocksScheduling: 'node',
   settleSeconds: 60,
   hidden: { NODE: WORKERS },
   fields: [nsField(['spread', 'ha', 'replicas', 'zones', 'fleet-apps', 'placement', 'balance', 'workers-ns', 'rack', 'edge'])],

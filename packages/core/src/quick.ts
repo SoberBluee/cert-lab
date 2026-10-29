@@ -284,12 +284,17 @@ export function buildQuickBundle(req: QuickCreateRequest): {
 
   const domain: Domain = req.domain ?? built[0].out.domain;
   const files: BundleFile[] = [];
-  const rank = ({ out }: (typeof built)[number]) => (out.breaksApi ? 2 : out.disruptive ? 1 : 0);
+  // Setup order of a multi-question lab, and fix order backwards. Other questions' setups start Pods, so a
+  // question that takes a worker away comes after the rest, one that stops every new Pod after that, and one
+  // that may take the API server down last of all.
+  const rank = ({ out }: (typeof built)[number]) =>
+    out.breaksApi ? 4 : out.blocksScheduling === 'cluster' ? 3 : out.blocksScheduling === 'node' ? 2 : out.disruptive ? 1 : 0;
   // A broken node has to be repaired before any other fix of the same rank: CoreDNS and
   // DaemonSets cannot finish a rollout while one node is still NotReady.
   const repairsNode = (b: (typeof built)[number]) => b.out.solution.some((p) => !isControlplane(p));
   const fixOrder = [...built].sort((a, b) => rank(b) - rank(a) || Number(repairsNode(b)) - Number(repairsNode(a)));
-  // Node- and API-breaking questions are set up when first opened, so they cannot block the others.
+  // Disruptive questions are set up when first opened, after every unopened question of an earlier stage, so
+  // they cannot block the others.
   const stage = (b: (typeof built)[number]) => (built.length > 1 ? rank(b) : 0);
 
   const taskSetup = (b: (typeof built)[number]) =>

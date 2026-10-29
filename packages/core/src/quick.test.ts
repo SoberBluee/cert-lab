@@ -416,7 +416,7 @@ describe('Troubleshoot track', () => {
     assert.equal(def.setup, undefined);
     assert.deepEqual(setupByStage(def), [
       '0 q2: controlplane setup/q2.sh lane q2',
-      '1 q1: controlplane setup/q1.sh, worker-1 setup/q1-2.sh, worker-2 setup/q1-3.sh, controlplane setup/q1-4.sh',
+      '2 q1: controlplane setup/q1.sh, worker-1 setup/q1-2.sh, worker-2 setup/q1-3.sh, controlplane setup/q1-4.sh',
     ]);
     assert.deepEqual(def.solution, [
       { node: 'worker-1', script: 'setup/q1-solution.sh' },
@@ -449,8 +449,8 @@ describe('Troubleshoot track', () => {
     assert.deepEqual(setupByStage(def), [
       '0 q3: controlplane setup/q3.sh lane q3',
       '0 q4: controlplane setup/q4.sh lane q4',
-      '1 q2: controlplane setup/q2.sh, worker-1 setup/q2-2.sh, worker-2 setup/q2-3.sh, controlplane setup/q2-4.sh',
-      '2 q1: controlplane setup/q1.sh',
+      '2 q2: controlplane setup/q2.sh, worker-1 setup/q2-2.sh, worker-2 setup/q2-3.sh, controlplane setup/q2-4.sh',
+      '4 q1: controlplane setup/q1.sh',
     ]);
     assert.deepEqual(def.solution, [
       { node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 },
@@ -460,6 +460,18 @@ describe('Troubleshoot track', () => {
     ]);
     const solution = res.bundle.files.find((f) => f.path === 'solution.sh')!.content;
     assert.ok(!solution.includes('# Question 1') && solution.indexOf('# Question 2') < solution.indexOf('# Question 3'));
+  });
+
+  it('sets up questions that start Pods before those that take workers away, and a broken scheduler last', () => {
+    // The mix of a mock whose Service question could not start its Pods: a worker tainted, the other drained.
+    const { build: res, issues } = build([troubleQ('controllers'), troubleQ('unschedulable'), troubleQ('services'), troubleQ('drain')]);
+    assert.deepEqual(issues, []);
+    const stages = Object.fromEntries(scenarioOf(res.bundle).tasks.map((t: { id: string; setupStage?: number }) => [t.id, t.setupStage ?? 0]));
+    assert.deepEqual(stages, { q1: 3, q2: 2, q3: 1, q4: 2 });
+    // Fixed the other way round: the scheduler first, then the workers, then the Service.
+    const solution = res.bundle.files.find((f) => f.path === 'solution.sh')!.content;
+    const at = (n: number) => solution.indexOf(`# Question ${n}:`);
+    assert.ok(at(1) < at(2) && at(2) < at(4) && at(4) < at(3), solution.split('\n').filter((l) => l.startsWith('# Question')).join(', '));
   });
 
   it('a control plane question alone still lists its solution step', () => {

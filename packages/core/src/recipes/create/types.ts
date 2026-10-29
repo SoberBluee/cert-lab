@@ -1,5 +1,5 @@
 import type { Domain, RecipeField } from '@cka/schema';
-import type { RecipeCheck, Refs } from '../types';
+import type { RecipeCheck, Refs, SchedulingBlock } from '../types';
 
 // Kubernetes objects are built as plain JSON and edited in place by add-ons.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -81,6 +81,8 @@ export interface Builder {
   breaksApi?: boolean;
   /** Takes a node away while it is set up or solved: set up after and fixed before the other questions. */
   disruptive?: boolean;
+  /** Takes scheduling capacity away; see SchedulingBlock. */
+  blocksScheduling?: SchedulingBlock;
   /** Snapshot the lab starts from; cluster when omitted. */
   base?: 'cluster' | 'bare';
   /** Must be the only question of its lab. */

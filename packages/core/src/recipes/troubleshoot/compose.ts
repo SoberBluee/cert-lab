@@ -1,5 +1,5 @@
 import { faultBlock } from '../../faults';
-import type { QuestionOutput, Refs, ScriptPart } from '../types';
+import type { QuestionOutput, Refs, SchedulingBlock, ScriptPart } from '../types';
 import type { Fault, FaultCategory } from './types';
 
 export const WORKERS = ['worker-1', 'worker-2'];
@@ -43,6 +43,12 @@ const varName = (ref: string) => /^\$\{(\w+)\}$/.exec(ref)?.[1];
  * Builds one question. `pick` is either the fault ids `v.FAULT` may roll, or one slot per layer of
  * a layered question; `v.NODE` references the hidden worker of node faults.
  */
+/** The widest scheduling block of the category and of the faults the question can roll. */
+const blocking = (category: SchedulingBlock | undefined, faults: (SchedulingBlock | undefined)[]): Pick<QuestionOutput, 'blocksScheduling'> => {
+  const all = [category, ...faults];
+  return all.includes('cluster') ? { blocksScheduling: 'cluster' } : all.includes('node') ? { blocksScheduling: 'node' } : {};
+};
+
 export function composeTrouble(cat: FaultCategory, v: Refs, pick: string[] | FaultSlot[], state: string): QuestionOutput {
   const shell = cat.shell(v, state);
   const all = cat.faults(v, state);
@@ -103,6 +109,7 @@ export function composeTrouble(cat: FaultCategory, v: Refs, pick: string[] | Fau
     tags: layered ? [...cat.tags, 'layered'] : cat.tags,
     ...(cat.settleSeconds ? { settleSeconds: cat.settleSeconds } : {}),
     ...(cat.disruptive || all.some((f) => f.disruptive && slots.some((s) => s.list.includes(f))) ? { disruptive: true } : {}),
+    ...blocking(cat.blocksScheduling, all.filter((f) => slots.some((s) => s.list.includes(f))).map((f) => f.blocksScheduling)),
     ...(cat.breaksApi ? { breaksApi: true } : {}),
     setup,
     solution,

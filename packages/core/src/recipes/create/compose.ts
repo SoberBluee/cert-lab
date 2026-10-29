@@ -41,6 +41,7 @@ export function composeCreate(builder: Builder, v: Refs, addons: ChosenPart[], f
     tags: [...new Set([...builder.tags, ...parts.map((p) => p.id)])],
     ...(builder.breaksApi ? { breaksApi: true, settleSeconds: 60 } : {}),
     ...(builder.disruptive ? { disruptive: true, settleSeconds: 60 } : {}),
+    ...(builder.blocksScheduling ? { blocksScheduling: builder.blocksScheduling } : {}),
     ...(builder.base ? { base: builder.base } : {}),
     ...(builder.solo ? { solo: true } : {}),
     setup: ctx.setup.length ? [{ script: ctx.setup.join('\n'), ...(ctx.setupTimeout ? { timeoutSeconds: ctx.setupTimeout } : {}) }] : [],

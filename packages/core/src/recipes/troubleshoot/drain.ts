@@ -32,6 +32,8 @@ export const drainCategory: FaultCategory = {
   points: 8,
   tags: ['troubleshooting', 'drain', 'pdb', 'disruption'],
   disruptive: true,
+  // A worker is drained and cordoned: other questions must start their Pods first.
+  blocksScheduling: 'node',
   settleSeconds: 60,
   hidden: { NODE: WORKERS },
   fields: [

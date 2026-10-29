@@ -117,6 +117,7 @@ ${waitUnhealthy(NS, `app=${APP}`, 15)}
       label: 'Other Deployments request nearly all the memory of each worker',
       // Starves every worker: stage it after other questions and fix it first.
       disruptive: true,
+      blocksScheduling: 'cluster',
       break: `${TO_MI}
 i=0
 for n in $(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{.items[*].metadata.name}'); do
