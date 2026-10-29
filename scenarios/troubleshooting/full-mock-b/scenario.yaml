@@ -79,6 +79,7 @@ solution:
     script: setup/q3-solution-2.sh
   - node: controlplane
     script: solution.sh
+    timeoutSeconds: 2400
   - node: worker-1
     script: setup/q13-solution.sh
   - node: worker-2

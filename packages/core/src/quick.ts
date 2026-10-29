@@ -314,7 +314,7 @@ export function buildQuickBundle(req: QuickCreateRequest): {
       };
     });
 
-  const CP = { node: 'controlplane', script: 'solution.sh' };
+  const CP: { node: string; script: string; timeoutSeconds?: number } = { node: 'controlplane', script: 'solution.sh' };
   const solution: { node: string; script: string; timeoutSeconds?: number }[] = [];
   const cpSections: string[] = [];
   for (const { n, out } of fixOrder) {
@@ -342,6 +342,8 @@ export function buildQuickBundle(req: QuickCreateRequest): {
       }
     }
   }
+  // One script fixes every controlplane question, each with its own waits: give it time per question.
+  if (cpSections.length) CP.timeoutSeconds = Math.max(600, 150 * cpSections.length);
   if (cpSections.length)
     files.push({
       path: 'solution.sh',
@@ -386,7 +388,8 @@ export function buildQuickBundle(req: QuickCreateRequest): {
     draft: true,
     ...(Object.keys(variables).length ? { variables } : {}),
     ...(contexts.length ? { setup: [{ node: 'controlplane', script: 'setup/contexts.sh' }] } : {}),
-    ...(solution.some((s) => s !== CP) ? { solution } : {}),
+    // Listed when it has more than solution.sh, or when solution.sh needs longer than the default 600s.
+    ...(solution.some((s) => s !== CP) || (CP.timeoutSeconds ?? 0) > 600 ? { solution } : {}),
     tasks: built.map((b) => {
       const { n, out } = b;
       const setup = taskSetup(b);

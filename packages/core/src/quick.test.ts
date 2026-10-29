@@ -421,7 +421,7 @@ describe('Troubleshoot track', () => {
     assert.deepEqual(def.solution, [
       { node: 'worker-1', script: 'setup/q1-solution.sh' },
       { node: 'worker-2', script: 'setup/q1-solution-2.sh' },
-      { node: 'controlplane', script: 'solution.sh' },
+      { node: 'controlplane', script: 'solution.sh', timeoutSeconds: 600 },
     ]);
     assert.deepEqual(def.variables.Q1_NODE, {
       oneOf: ['worker-1', 'worker-2'],
@@ -435,7 +435,7 @@ describe('Troubleshoot track', () => {
     assert.deepEqual(def.solution, [
       { node: 'worker-1', script: 'setup/q2-solution.sh' },
       { node: 'worker-2', script: 'setup/q2-solution-2.sh' },
-      { node: 'controlplane', script: 'solution.sh' },
+      { node: 'controlplane', script: 'solution.sh', timeoutSeconds: 600 },
     ]);
     const solution = res.bundle.files.find((f) => f.path === 'solution.sh')!.content;
     assert.ok(solution.indexOf('# Question 2') < solution.indexOf('# Question 1'));
@@ -456,7 +456,7 @@ describe('Troubleshoot track', () => {
       { node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 },
       { node: 'worker-1', script: 'setup/q2-solution.sh' },
       { node: 'worker-2', script: 'setup/q2-solution-2.sh' },
-      { node: 'controlplane', script: 'solution.sh' },
+      { node: 'controlplane', script: 'solution.sh', timeoutSeconds: 600 },
     ]);
     const solution = res.bundle.files.find((f) => f.path === 'solution.sh')!.content;
     assert.ok(!solution.includes('# Question 1') && solution.indexOf('# Question 2') < solution.indexOf('# Question 3'));
