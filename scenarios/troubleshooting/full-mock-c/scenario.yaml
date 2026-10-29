@@ -67,7 +67,7 @@ solution:
     timeoutSeconds: 900
   - node: controlplane
     script: solution.sh
-    timeoutSeconds: 2400
+    timeoutSeconds: 1800
 tasks:
   - id: q1
     title: Control plane after maintenance

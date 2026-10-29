@@ -82,7 +82,7 @@ solution:
     script: setup/q6-solution-2.sh
   - node: controlplane
     script: solution.sh
-    timeoutSeconds: 2550
+    timeoutSeconds: 1800
 tasks:
   - id: q1
     title: New Pods rejected in ${Q1_NS}

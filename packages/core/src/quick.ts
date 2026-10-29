@@ -342,8 +342,9 @@ export function buildQuickBundle(req: QuickCreateRequest): {
       }
     }
   }
-  // One script fixes every controlplane question, each with its own waits: give it time per question.
-  if (cpSections.length) CP.timeoutSeconds = Math.max(600, 150 * cpSections.length);
+  // One script fixes every controlplane question, each with its own waits: give it time per question, up to
+  // the 1800s a step may take.
+  if (cpSections.length) CP.timeoutSeconds = Math.min(1800, Math.max(600, 150 * cpSections.length));
   if (cpSections.length)
     files.push({
       path: 'solution.sh',
