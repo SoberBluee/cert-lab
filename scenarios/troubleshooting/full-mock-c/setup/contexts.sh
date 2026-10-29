@@ -7,6 +7,7 @@ for cfg in /home/ubuntu/.kube/config /root/.kube/config; do
   for ctx in k8s-data k8s-ops k8s-core k8s-gamma k8s-west k8s-infra k8s-blue k8s-web k8s-green k8s-south k8s-alpha k8s-beta k8s-prod k8s-delta k8s-batch k8s-lab k8s-east; do
     kubectl --kubeconfig "$cfg" config set-context "$ctx" --cluster=kubernetes --user=kubernetes-admin --namespace=default >/dev/null
   done
-  kubectl --kubeconfig "$cfg" config get-contexts -o name | grep -qx "k8s-east"
+  # Not grep -q: it stops reading at the match, and under pipefail kubectl's SIGPIPE fails the setup.
+  kubectl --kubeconfig "$cfg" config get-contexts -o name | grep -x "k8s-east" >/dev/null
 done
 chown -R ubuntu:ubuntu /home/ubuntu/.kube

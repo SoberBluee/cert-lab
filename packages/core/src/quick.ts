@@ -49,7 +49,8 @@ const contextsScript = (names: string[]) => `for cfg in /home/ubuntu/.kube/confi
   for ctx in ${names.join(' ')}; do
     kubectl --kubeconfig "$cfg" config set-context "$ctx" --cluster=kubernetes --user=kubernetes-admin --namespace=default >/dev/null
   done
-  kubectl --kubeconfig "$cfg" config get-contexts -o name | grep -qx "${names.at(-1)}"
+  # Not grep -q: it stops reading at the match, and under pipefail kubectl's SIGPIPE fails the setup.
+  kubectl --kubeconfig "$cfg" config get-contexts -o name | grep -x "${names.at(-1)}" >/dev/null
 done
 chown -R ubuntu:ubuntu /home/ubuntu/.kube`;
 const NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
