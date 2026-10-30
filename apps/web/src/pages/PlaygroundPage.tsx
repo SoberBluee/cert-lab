@@ -60,17 +60,28 @@ export function PlaygroundPage() {
   const built = (name: string) => images.data?.find((i) => i.name === name)?.available;
 
   const start = useMutation({
-    mutationFn: (kind: PlaygroundKind) => api.startPlayground(kind),
+    mutationFn: ({ kind, fresh }: { kind: PlaygroundKind; fresh: boolean }) => api.startPlayground(kind, fresh),
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
       navigate('/session');
     },
   });
 
+  // A playground left open keeps everything done on it, so starting another one replaces it with clean nodes.
+  const replaces = session?.mode === 'playground' && (session.state === 'running' || session.state === 'failed') ? session : undefined;
+  const openedAt = replaces && new Date(replaces.startedAt);
   const startButton = (kind: PlaygroundKind, label: string, image: string) =>
-    !session && (
-      <Button variant="primary" className="mt-4" disabled={start.isPending || built(image) === false} onClick={() => start.mutate(kind)}>
-        {start.isPending && start.variables === kind ? 'Starting…' : label}
+    (!session || replaces) && (
+      <Button
+        variant={replaces ? 'secondary' : 'primary'}
+        className="mt-4"
+        disabled={start.isPending || built(image) === false}
+        onClick={() => {
+          if (replaces && !confirm(`End ${replaces.scenarioTitle} and start a fresh ${label}? Everything done on the open one is lost.`)) return;
+          start.mutate({ kind, fresh: Boolean(replaces) });
+        }}
+      >
+        {start.isPending && start.variables?.kind === kind ? 'Starting…' : replaces ? `Start a fresh ${label}` : `Start ${label}`}
       </Button>
     );
 
@@ -93,9 +104,11 @@ export function PlaygroundPage() {
       {session && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-sm">
           <span className="text-zinc-300">
-            {session.mode === 'playground'
-              ? `${session.scenarioTitle} is open.`
-              : `A session for "${session.scenarioTitle}" is open. End it to start a playground.`}
+            {openedAt
+              ? `${session.scenarioTitle} is open since ${openedAt.toDateString() === new Date().toDateString() ? openedAt.toLocaleTimeString() : openedAt.toLocaleString()}, with everything done on it. Go to it to carry on, or start a fresh one below on clean nodes.`
+              : session.mode === 'playground'
+                ? `${session.scenarioTitle} is open.`
+                : `A session for "${session.scenarioTitle}" is open. End it to start a playground.`}
           </span>
           <Link to="/session" className={`${buttonClass('primary')} ml-auto`}>
             Go to session
@@ -106,7 +119,7 @@ export function PlaygroundPage() {
       <Card title="Cluster">
         <p className="mb-4 text-sm text-zinc-400">A healthy 3-node cluster. Break it, fix it, try things out.</p>
         <Included rows={CLUSTER} />
-        {startButton('cluster', 'Start playground', 'cluster')}
+        {startButton('cluster', 'cluster playground', 'cluster')}
       </Card>
 
       <Card title="Install a cluster">
@@ -139,7 +152,7 @@ export function PlaygroundPage() {
             </Missing>
           </div>
         )}
-        {startButton('install', 'Start install playground', 'os')}
+        {startButton('install', 'install playground', 'os')}
       </Card>
     </div>
   );

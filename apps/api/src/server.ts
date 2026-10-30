@@ -99,8 +99,8 @@ app.post<{ Body: { scenarioId?: string; mode?: Mode } }>('/api/sessions', async 
   return view;
 });
 
-app.post<{ Body: { kind?: PlaygroundKind } | undefined }>('/api/playground', async (req, reply) => {
-  const { view } = await sessions.startPlayground(req.body?.kind);
+app.post<{ Body: { kind?: PlaygroundKind; fresh?: boolean } | undefined }>('/api/playground', async (req, reply) => {
+  const { view } = await sessions.startPlayground(req.body?.kind, { fresh: req.body?.fresh === true });
   reply.status(202);
   return view;
 });

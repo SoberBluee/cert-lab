@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { PLAYGROUNDS, type SessionView } from '@cka/schema';
+import { PLAYGROUNDS, type PlaygroundKind, type SessionView } from '@cka/schema';
 import { api, studioApi } from '../api';
 import { AttemptReviewView } from '../components/AttemptReviewView';
 import { GradeResultView } from '../components/GradeResultView';
@@ -349,14 +349,17 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
   const aws = useSection() === 'aws';
   const playground = ended.mode === 'playground';
   const install = ended.scenarioId === PLAYGROUNDS.install;
+  // A playground restarts as the same kind; the other kind is one click away, so it is never picked by accident.
+  const kind: PlaygroundKind = install ? 'install' : 'cluster';
+  const other: PlaygroundKind = install ? 'cluster' : 'install';
   const exam = ended.mode === 'mock';
   const lesson = ended.mode === 'learn' ? ended.lesson : undefined;
   // After an exam, the report: each question that lost points or time, with what it took to get it right.
   const report = useQuery({ queryKey: ['review', ended.attemptId], queryFn: () => api.review(ended.attemptId), enabled: exam && Boolean(ended.lastGrade) });
   const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity, enabled: exam });
   const retry = useMutation({
-    mutationFn: () =>
-      playground ? api.startPlayground(install ? 'install' : 'cluster') : lesson ? api.startLesson(lesson.id) : api.start(ended.scenarioId, exam ? 'mock' : 'practice'),
+    mutationFn: (pick: PlaygroundKind = kind) =>
+      playground ? api.startPlayground(pick) : lesson ? api.startLesson(lesson.id) : api.start(ended.scenarioId, exam ? 'mock' : 'practice'),
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
       onDismiss();
@@ -408,9 +411,22 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
         )}
         <ErrorBanner error={retry.error} />
         <div className="mt-5 flex gap-2">
-          <Button variant="primary" onClick={() => retry.mutate()} disabled={retry.isPending}>
-            {retry.isPending ? 'Starting…' : playground ? 'Start a new playground' : lesson ? 'Drill it again' : exam ? 'Retake exam' : 'Retry scenario'}
+          <Button variant="primary" onClick={() => retry.mutate(kind)} disabled={retry.isPending}>
+            {retry.isPending && retry.variables !== other
+              ? 'Starting…'
+              : playground
+                ? `Start a new ${kind} playground`
+                : lesson
+                  ? 'Drill it again'
+                  : exam
+                    ? 'Retake exam'
+                    : 'Retry scenario'}
           </Button>
+          {playground && (
+            <Button onClick={() => retry.mutate(other)} disabled={retry.isPending}>
+              {retry.isPending && retry.variables === other ? 'Starting…' : `Start ${other === 'install' ? 'an install' : 'a cluster'} playground instead`}
+            </Button>
+          )}
           <Link to={lesson ? `${SECTIONS[lesson.track].base}/learn` : aws ? '/aws/scenarios' : '/'} className={buttonClass()}>
             {lesson ? 'Back to lessons' : 'Back to scenarios'}
           </Link>
@@ -625,7 +641,11 @@ export function SessionPage() {
   );
 
   const subtitle = playground ? (
-    'free practice · nothing is graded'
+    session.scenarioId === PLAYGROUNDS.install ? (
+      'plain Ubuntu · no Kubernetes yet'
+    ) : (
+      'Kubernetes pre-installed and running'
+    )
   ) : (
     <>
       {session.scenarioId} · {exam ? 'exam' : session.mode}

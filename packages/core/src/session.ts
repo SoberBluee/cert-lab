@@ -201,10 +201,16 @@ export class SessionManager extends EventEmitter {
     return this.store.getSession(id)?.state === 'provisioning';
   }
 
-  /** Starts a task-free lab for free practice: a healthy cluster, or plain nodes to install one on. */
-  startPlayground(kind: PlaygroundKind = 'cluster'): Promise<StartResult> {
+  /**
+   * Starts a task-free lab for free practice: a healthy cluster, or plain nodes to install one on.
+   * With `fresh`, a running playground is ended first; the new one is restored from its clean image
+   * either way. Other open sessions still have to be ended by hand.
+   */
+  startPlayground(kind: PlaygroundKind = 'cluster', opts: { fresh?: boolean } = {}): Promise<StartResult> {
     const playground = Object.hasOwn(PLAYGROUND_SCENARIOS, kind) ? PLAYGROUND_SCENARIOS[kind] : undefined;
     if (!playground) throw new OrchestratorError(`Unknown playground "${kind}". Use cluster or install.`, 400);
+    const open = this.store.openSession();
+    if (opts.fresh && open?.mode === 'playground' && open.state === 'running') this.close(open);
     return this.start(playground.def.id, 'playground');
   }
 

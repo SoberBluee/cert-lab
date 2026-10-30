@@ -445,7 +445,7 @@ describe('playground', () => {
     const view = await (await sessions.startPlayground()).ready;
     assert.equal(view.state, 'running');
     assert.equal(view.mode, 'playground');
-    assert.equal(view.scenarioTitle, 'Playground');
+    assert.equal(view.scenarioTitle, 'Cluster playground');
     assert.equal(view.base, 'cluster');
     assert.deepEqual(view.tasks, []);
     assert.deepEqual(driver.scripts, []);
@@ -475,6 +475,21 @@ describe('playground', () => {
     const again = await (await sessions.reset()).ready;
     assert.equal(again.base, 'os');
     await sessions.end();
+  });
+
+  it('a fresh start replaces a running playground, but no other open session', async () => {
+    const { sessions } = setup();
+    const old = await (await sessions.startPlayground('install')).ready;
+    await assert.rejects(sessions.startPlayground('install'), /already running/);
+    const next = await (await sessions.startPlayground('install', { fresh: true })).ready;
+    assert.notEqual(next.id, old.id);
+    assert.equal(next.base, 'os');
+    assert.equal(sessions.current()?.id, next.id);
+    await sessions.end();
+
+    await (await sessions.start('staged')).ready;
+    await assert.rejects(sessions.startPlayground('install', { fresh: true }), /already running/);
+    assert.equal(sessions.current()?.scenarioId, 'staged');
   });
 
   it('the playground ids only start in playground mode, and vice versa', async () => {

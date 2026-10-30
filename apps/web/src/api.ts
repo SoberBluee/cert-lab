@@ -72,7 +72,8 @@ export const api = {
   pause: () => request<SessionView>('POST', '/sessions/current/pause'),
   /** Exam mode: checks the lab, then restarts the clock with the time that was left. */
   resume: () => request<SessionView>('POST', '/sessions/current/resume'),
-  startPlayground: (kind: PlaygroundKind = 'cluster') => request<SessionView>('POST', '/playground', { kind }),
+  /** `fresh` ends a running playground first, so the new one starts from its clean image. */
+  startPlayground: (kind: PlaygroundKind = 'cluster', fresh = false) => request<SessionView>('POST', '/playground', { kind, fresh }),
   reset: () => request<SessionView>('POST', '/sessions/current/reset'),
   reroll: () => request<SessionView>('POST', '/sessions/current/reset', { reroll: true }),
   grade: () => request<GradeResult>('POST', '/sessions/current/grade'),

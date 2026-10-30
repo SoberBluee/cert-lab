@@ -3,7 +3,7 @@ import type { LoadedScenario } from './scenarios';
 
 const cluster: Scenario = {
   id: PLAYGROUNDS.cluster,
-  title: 'Playground',
+  title: 'Cluster playground',
   domain: 'cluster-architecture',
   track: 'cka',
   difficulty: 1,
