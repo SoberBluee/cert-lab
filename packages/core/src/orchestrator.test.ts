@@ -139,17 +139,19 @@ describe('deferred task setup', () => {
     assert.deepEqual(readyIds(view), ['q1', 'q2', 'q3']);
   });
 
-  it('a scenario cannot use the playground id', () => {
-    const root = mkdtempSync(join(tmpdir(), 'cka-reserved-'));
-    mkdirSync(join(root, 'x'));
-    writeFileSync(
-      join(root, 'x', 'scenario.yaml'),
-      `id: playground\ntitle: P\ndomain: troubleshooting\ndifficulty: 1\nestimatedMinutes: 1\npoints: 1\nbase: cluster\nchecks: [{ id: c, description: c, type: kubectl, run: 'true', expect: { equals: '' } }]\n`,
-    );
-    writeFileSync(join(root, 'x', 'task.md'), 'x\n');
-    const library = new ScenarioLibrary(root);
-    assert.equal(library.get('playground'), undefined);
-    assert.match(library.errors[0].messages.join(), /reserved for the playground/);
+  it('a scenario cannot use a playground id', () => {
+    for (const id of ['playground', 'playground-install']) {
+      const root = mkdtempSync(join(tmpdir(), 'cka-reserved-'));
+      mkdirSync(join(root, 'x'));
+      writeFileSync(
+        join(root, 'x', 'scenario.yaml'),
+        `id: ${id}\ntitle: P\ndomain: troubleshooting\ndifficulty: 1\nestimatedMinutes: 1\npoints: 1\nbase: cluster\nchecks: [{ id: c, description: c, type: kubectl, run: 'true', expect: { equals: '' } }]\n`,
+      );
+      writeFileSync(join(root, 'x', 'task.md'), 'x\n');
+      const library = new ScenarioLibrary(root);
+      assert.equal(library.get(id), undefined);
+      assert.match(library.errors[0].messages.join(), new RegExp(`"${id}" is reserved for the playground`));
+    }
   });
 
   it('reset forgets opened tasks', async () => {
@@ -461,9 +463,25 @@ describe('playground', () => {
     assert.deepEqual(store.listAttempts(), []);
   });
 
-  it('the playground id only starts in playground mode, and vice versa', async () => {
+  it('the install playground runs on the os image, and resets to it', async () => {
+    const { sessions } = setup();
+    const view = await (await sessions.startPlayground('install')).ready;
+    assert.equal(view.state, 'running');
+    assert.equal(view.mode, 'playground');
+    assert.equal(view.scenarioId, 'playground-install');
+    assert.equal(view.base, 'os');
+    assert.equal(view.context, undefined);
+    assert.deepEqual(view.tasks, []);
+    const again = await (await sessions.reset()).ready;
+    assert.equal(again.base, 'os');
+    await sessions.end();
+  });
+
+  it('the playground ids only start in playground mode, and vice versa', async () => {
     const { sessions } = setup();
     await assert.rejects(sessions.start('playground', 'practice'), /only be started as a playground/);
+    await assert.rejects(sessions.start('playground-install', 'practice'), /only be started as a playground/);
     await assert.rejects(sessions.start('staged', 'playground'), /only be started as a playground/);
+    assert.throws(() => sessions.startPlayground('toString' as never), /Unknown playground "toString"/);
   });
 });

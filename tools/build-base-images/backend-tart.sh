@@ -22,7 +22,7 @@ backend_check() {
 }
 
 list_existing() {
-  "$TART" list | awk '$1 == "local" { print $2 }' | grep -E "^${PREFIX}(controlplane|worker-[0-9]+)(-bare|-cluster)?$" || true
+  "$TART" list | awk '$1 == "local" { print $2 }' | grep -E "^${PREFIX}(controlplane|worker-[0-9]+)(-bare|-cluster|-os)?$" || true
 }
 
 delete_all() {

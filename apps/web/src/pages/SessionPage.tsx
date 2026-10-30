@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import type { SessionView } from '@cka/schema';
+import { PLAYGROUNDS, type SessionView } from '@cka/schema';
 import { api, studioApi } from '../api';
 import { AttemptReviewView } from '../components/AttemptReviewView';
 import { GradeResultView } from '../components/GradeResultView';
@@ -348,6 +348,7 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
   const qc = useQueryClient();
   const aws = useSection() === 'aws';
   const playground = ended.mode === 'playground';
+  const install = ended.scenarioId === PLAYGROUNDS.install;
   const exam = ended.mode === 'mock';
   const lesson = ended.mode === 'learn' ? ended.lesson : undefined;
   // After an exam, the report: each question that lost points or time, with what it took to get it right.
@@ -355,7 +356,7 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
   const catalog = useQuery({ queryKey: ['recipes'], queryFn: () => studioApi.recipes(), staleTime: Infinity, enabled: exam });
   const retry = useMutation({
     mutationFn: () =>
-      playground ? api.startPlayground() : lesson ? api.startLesson(lesson.id) : api.start(ended.scenarioId, exam ? 'mock' : 'practice'),
+      playground ? api.startPlayground(install ? 'install' : 'cluster') : lesson ? api.startLesson(lesson.id) : api.start(ended.scenarioId, exam ? 'mock' : 'practice'),
     onSuccess: (view) => {
       qc.setQueryData(sessionKey, view);
       onDismiss();
@@ -366,7 +367,9 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
       <Card title={playground ? 'Playground ended' : lesson ? 'Lesson ended' : exam ? 'Exam result' : 'Session ended'}>
         <h2 className="mb-4 text-xl font-semibold text-zinc-100">{ended.scenarioTitle}</h2>
         {playground ? (
-          <p className="text-sm text-zinc-400">The lab VMs are stopped. A new playground starts from a clean cluster.</p>
+          <p className="text-sm text-zinc-400">
+            The lab VMs are stopped. A new playground starts from {install ? 'clean nodes' : 'a clean cluster'}.
+          </p>
         ) : lesson ? (
           <p className="text-sm text-zinc-400">
             {ended.learn?.steps.filter((st) => st.done && !st.skipped).length ?? 0} of {lesson.steps.length} steps done. The lab VMs are stopped.

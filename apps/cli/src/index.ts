@@ -149,13 +149,18 @@ program
 program
   .command('playground')
   .description('start a 3-node cluster with no tasks, to practise freely')
+  .option('--install', 'plain Ubuntu nodes with nothing of Kubernetes on them, to install a cluster yourself')
   .action(
-    action(async () => {
-      const { ready } = await o().sessions.startPlayground();
+    action(async (opts: { install?: boolean }) => {
+      const { ready } = await o().sessions.startPlayground(opts.install ? 'install' : 'cluster');
       const view = await awaitReady(ready);
-      console.log(c.bold('\nPlayground ready') + c.dim('  Calico, Traefik (Ingress and Gateway API on :30080), Helm, crictl, etcdctl'));
+      if (opts.install) {
+        console.log(c.bold('\nInstall playground ready') + c.dim('  Ubuntu nodes with no container runtime, kubeadm, kubelet or kubectl'));
+      } else {
+        console.log(c.bold('\nPlayground ready') + c.dim('  Calico, Traefik (Ingress and Gateway API on :30080), Helm, crictl, etcdctl'));
+      }
       printConnection(view.connection);
-      console.log(c.dim('\nReset to a clean cluster: ./cka reset   finish: ./cka end'));
+      console.log(c.dim(`\nReset to ${opts.install ? 'clean nodes' : 'a clean cluster'}: ./cka reset   finish: ./cka end`));
     }),
   );
 
@@ -500,7 +505,7 @@ authoringCommand(
 const images = program.command('images').description('manage base images');
 images
   .command('build')
-  .description('build the lab VMs and their bare/cluster base images (15-25 minutes)')
+  .description('build the lab VMs and their bare, cluster and os base images (15-25 minutes)')
   .option('--force', 'delete and rebuild existing lab VMs')
   .option('--driver <name>', 'VM backend: multipass or tart (default: CKA_DRIVER, then the existing images, then multipass)')
   .action(
@@ -524,6 +529,21 @@ images
       if (driver !== 'multipass' && driver !== 'tart') fail(`images can only be extended for the multipass or tart driver, not "${driver}"`);
       return new Promise<number>((resolve) => {
         const script = join(repoRoot, 'tools', 'build-base-images', 'extras.sh');
+        const p = spawn('bash', [script], { stdio: 'inherit', env: { ...process.env, CKA_DRIVER: driver } });
+        p.on('close', (code) => resolve(code ?? 1));
+      });
+    }),
+  );
+images
+  .command('os')
+  .description('add the plain Ubuntu image of the install playground to existing images, without a rebuild (about 5 minutes)')
+  .option('--driver <name>', 'VM backend: multipass or tart (default: CKA_DRIVER, then the existing images, then multipass)')
+  .action(
+    action((opts: { driver?: string }) => {
+      const driver = opts.driver ?? selectDriverName();
+      if (driver !== 'multipass' && driver !== 'tart') fail(`images can only be extended for the multipass or tart driver, not "${driver}"`);
+      return new Promise<number>((resolve) => {
+        const script = join(repoRoot, 'tools', 'build-base-images', 'os.sh');
         const p = spawn('bash', [script], { stdio: 'inherit', env: { ...process.env, CKA_DRIVER: driver } });
         p.on('close', (code) => resolve(code ?? 1));
       });

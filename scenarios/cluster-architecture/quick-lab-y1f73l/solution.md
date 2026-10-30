@@ -1,0 +1,14 @@
+## Solution
+
+### Question 1: Kubeconfig clusters and the CA
+
+```bash
+cfg=/home/ubuntu/.kube/config
+for c in $(kubectl --kubeconfig $cfg config get-contexts -o name); do
+  cl=$(kubectl --kubeconfig $cfg config view -o jsonpath="{.contexts[?(@.name==\"$c\")].context.cluster}")
+  echo "$c $(kubectl --kubeconfig $cfg config view -o jsonpath="{.clusters[?(@.name==\"$cl\")].cluster.server}")"
+done > /opt/course/kubeconfig/servers
+kubectl --kubeconfig $cfg config view --raw -o jsonpath='{.clusters[?(@.name=="kubernetes")].cluster.certificate-authority-data}' | base64 -d > /opt/course/kubeconfig/ca.crt
+openssl x509 -in /opt/course/kubeconfig/ca.crt -noout -enddate > /opt/course/kubeconfig/ca-expiry
+chown -R ubuntu:ubuntu /opt/course/kubeconfig
+```

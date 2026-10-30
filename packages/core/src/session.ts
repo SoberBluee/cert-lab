@@ -4,6 +4,7 @@ import { basename, join } from 'node:path';
 import {
   visibleVars,
   type Driver,
+  type PlaygroundKind,
   type GradeResult,
   type Mode,
   type SessionState,
@@ -19,7 +20,7 @@ import { renderScenario, rollScenarioVars } from './vars';
 import { initialProgress, LearnWatcher } from './learn';
 import { LEARN_PREFIX, lessonScenario, toLessonView, type LessonLibrary } from './lessons';
 import type { Logger } from './logger';
-import { PLAYGROUND, PLAYGROUND_ID } from './playground';
+import { PLAYGROUND_SCENARIOS, playgroundById } from './playground';
 import type { LoadedScenario, ScenarioLibrary } from './scenarios';
 import type { SessionRow, Store } from './store';
 
@@ -93,7 +94,8 @@ export class SessionManager extends EventEmitter {
 
   /** `fresh` re-reads the scenario from disk; use it whenever a lab is about to be set up. */
   private lookup(id: string, fresh = false): LoadedScenario | undefined {
-    if (id === PLAYGROUND_ID) return PLAYGROUND;
+    const playground = playgroundById(id);
+    if (playground) return playground;
     if (id.startsWith(LEARN_PREFIX)) {
       const lesson = this.lessonFor(id);
       return lesson && lessonScenario(lesson);
@@ -199,10 +201,11 @@ export class SessionManager extends EventEmitter {
     return this.store.getSession(id)?.state === 'provisioning';
   }
 
-  /** Starts a session. Variables are rolled here (pinned values win) and kept for the session's life. */
-  /** Starts a task-free lab on the cluster image, for free practice. */
-  startPlayground(): Promise<StartResult> {
-    return this.start(PLAYGROUND_ID, 'playground');
+  /** Starts a task-free lab for free practice: a healthy cluster, or plain nodes to install one on. */
+  startPlayground(kind: PlaygroundKind = 'cluster'): Promise<StartResult> {
+    const playground = Object.hasOwn(PLAYGROUND_SCENARIOS, kind) ? PLAYGROUND_SCENARIOS[kind] : undefined;
+    if (!playground) throw new OrchestratorError(`Unknown playground "${kind}". Use cluster or install.`, 400);
+    return this.start(playground.def.id, 'playground');
   }
 
   /** Starts a guided lesson on the cluster image. */
@@ -211,8 +214,9 @@ export class SessionManager extends EventEmitter {
     return this.start(LEARN_PREFIX + lessonId, 'learn');
   }
 
+  /** Starts a session. Variables are rolled here (pinned values win) and kept for the session's life. */
   async start(scenarioId: string, mode: Mode = 'practice', opts: { vars?: Vars } = {}): Promise<StartResult> {
-    if ((scenarioId === PLAYGROUND_ID) !== (mode === 'playground')) {
+    if (Boolean(playgroundById(scenarioId)) !== (mode === 'playground')) {
       throw new OrchestratorError('The playground can only be started as a playground.', 400);
     }
     if (scenarioId.startsWith(LEARN_PREFIX) !== (mode === 'learn')) {

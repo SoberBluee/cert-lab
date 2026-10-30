@@ -4,7 +4,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyError } from 'fastify';
 import { attemptReview, createOrchestrator, focusReport, gradeQuiz, OrchestratorError, repoRoot, Studio, toLessonSummary, toQuizSummary, toQuizView, toSummary } from '@cka/core';
-import type { AttemptRecord, Mode, ScenarioDetail, ScenarioSummary } from '@cka/schema';
+import type { AttemptRecord, Mode, PlaygroundKind, ScenarioDetail, ScenarioSummary } from '@cka/schema';
 import { registerStudio } from './studio';
 import { registerTerminal } from './terminal';
 
@@ -99,8 +99,8 @@ app.post<{ Body: { scenarioId?: string; mode?: Mode } }>('/api/sessions', async 
   return view;
 });
 
-app.post('/api/playground', async (_req, reply) => {
-  const { view } = await sessions.startPlayground();
+app.post<{ Body: { kind?: PlaygroundKind } | undefined }>('/api/playground', async (req, reply) => {
+  const { view } = await sessions.startPlayground(req.body?.kind);
   reply.status(202);
   return view;
 });

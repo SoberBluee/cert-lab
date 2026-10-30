@@ -9,6 +9,7 @@ import type {
   GradeResult,
   LessonSummary,
   LessonTrack,
+  PlaygroundKind,
   QuickCreateRequest,
   QuickPreview,
   QuizGradeResult,
@@ -71,7 +72,7 @@ export const api = {
   pause: () => request<SessionView>('POST', '/sessions/current/pause'),
   /** Exam mode: checks the lab, then restarts the clock with the time that was left. */
   resume: () => request<SessionView>('POST', '/sessions/current/resume'),
-  startPlayground: () => request<SessionView>('POST', '/playground'),
+  startPlayground: (kind: PlaygroundKind = 'cluster') => request<SessionView>('POST', '/playground', { kind }),
   reset: () => request<SessionView>('POST', '/sessions/current/reset'),
   reroll: () => request<SessionView>('POST', '/sessions/current/reset', { reroll: true }),
   grade: () => request<GradeResult>('POST', '/sessions/current/grade'),

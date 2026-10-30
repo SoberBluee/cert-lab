@@ -1,0 +1,49 @@
+id: quick-lab-y1f73l
+title: "Quick lab: Kubeconfig and cluster facts"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 7
+points: 6
+tags: [ kubeconfig, contexts, certificates, cidr, kube-proxy, cni, static-pod ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_USER: { oneOf: [ auditor, ops-lead, sre-oncall, release-mgr, qa-lead, sec-review, billing-ops, data-eng ] }
+tasks:
+  - id: q1
+    title: Kubeconfig clusters and the CA
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-servers
+        description: servers maps every context of the ubuntu kubeconfig to its API server URL
+        run: want=$(for c in $(kubectl --kubeconfig /home/ubuntu/.kube/config config get-contexts -o name); do cl=$(kubectl --kubeconfig /home/ubuntu/.kube/config config view -o jsonpath="{.contexts[?(@.name==\"$c\")].context.cluster}"); echo "$c $(kubectl --kubeconfig /home/ubuntu/.kube/config config view -o jsonpath="{.clusters[?(@.name==\"$cl\")].cluster.server}")"; done | sort); have=$(sed -E 's/[[:space:]]+/ /g; s/ $//; /^$/d' /opt/course/kubeconfig/servers 2>/dev/null | sort); [ -n "$have" ] && [ "$have" = "$want" ] && echo same || echo different
+        expect: { equals: same }
+        weight: 3
+      - type: ssh
+        node: controlplane
+        id: q1-ca
+        description: ca.crt is the CA certificate of cluster kubernetes
+        run: a=$(openssl x509 -in /opt/course/kubeconfig/ca.crt -noout -fingerprint -sha256 2>/dev/null); b=$(kubectl --kubeconfig /home/ubuntu/.kube/config config view --raw -o jsonpath='{.clusters[?(@.name=="kubernetes")].cluster.certificate-authority-data}' | base64 -d | openssl x509 -noout -fingerprint -sha256); [ -n "$a" ] && [ "$a" = "$b" ] && echo same || echo different
+        expect: { equals: same }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-ca-expiry
+        description: ca-expiry holds the expiry date of that CA certificate
+        run: want=$(kubectl --kubeconfig /home/ubuntu/.kube/config config view --raw -o jsonpath='{.clusters[?(@.name=="kubernetes")].cluster.certificate-authority-data}' | base64 -d | openssl x509 -noout -enddate | cut -d= -f2); [ -n "$want" ] && grep -qF "$want" /opt/course/kubeconfig/ca-expiry 2>/dev/null && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+    hints:
+      - A context only names a cluster; the server URL is in the clusters list. kubectl config get-contexts shows the CLUSTER of each context.
+      - kubectl config view --raw shows certificate-authority-data, which base64 -d turns into PEM.
+      - openssl x509 -in <file> -noout -enddate prints notAfter=<date>.
+    recipe: { builder: cluster-info, parts: [] }

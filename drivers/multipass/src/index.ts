@@ -1,4 +1,4 @@
-import type { ExecResult } from '@cka/schema';
+import { VM_BASES, type ExecResult } from '@cka/schema';
 import { DriverError, NODES, VmLabDriver, runProcess, tail, type VmLabDriverOptions } from '@cka/driver-vm-common';
 
 export { DriverError, readImagesMeta, type DriverLog, type ImagesMeta } from '@cka/driver-vm-common';
@@ -9,7 +9,7 @@ export interface MultipassDriverOptions extends VmLabDriverOptions {
 
 /**
  * Multipass backend. The lab is a fixed set of three VMs (cka-controlplane, cka-worker-1,
- * cka-worker-2), each holding a `bare` and a `cluster` snapshot.
+ * cka-worker-2), each holding a `bare`, a `cluster` and an `os` snapshot.
  */
 export class MultipassDriver extends VmLabDriver {
   readonly name = 'multipass';
@@ -64,7 +64,7 @@ export class MultipassDriver extends VmLabDriver {
 
   protected async availableImages(): Promise<Set<string>> {
     const [insts, snaps] = await Promise.all([this.instances(), this.snapshots()]);
-    return new Set(['bare', 'cluster'].filter((name) => this.allInstances().every((i) => insts.has(i) && snaps.get(i)?.has(name))));
+    return new Set(VM_BASES.filter((name) => this.allInstances().every((i) => insts.has(i) && snaps.get(i)?.has(name))));
   }
 
   protected async nodeIps(): Promise<Record<string, string[]>> {

@@ -18,14 +18,15 @@ multipass set local.passphrase      # once, as the user that installed Multipass
 multipass authenticate              # in the terminal that will run cka
 
 ./cka images build                  # 15-25 minutes; creates cka-controlplane, cka-worker-1, cka-worker-2
-./cka images list                   # bare: available, cluster: available
+./cka images list                   # bare: available, cluster: available, os: available
 ```
 
 The build:
 
 1. launches 3 Ubuntu VMs and installs containerd, kubeadm, kubelet and kubectl at the version pinned in `config/versions.yaml`, adds the extras (below), then snapshots **`bare`**;
 2. runs `kubeadm init`, installs Calico, joins the workers, waits for everything to be Ready, installs Helm, the Gateway API CRDs and Traefik (see below), then snapshots **`cluster`**;
-3. writes `~/.cka-lab/images.json` (build date, versions, node IPs, `addons`) and leaves the VMs stopped.
+3. writes `~/.cka-lab/images.json` (build date, versions, node IPs, `addons`);
+4. restores `bare`, removes everything Kubernetes from it (`tools/build-base-images/node-os.sh`), then snapshots **`os`** for the install playground, and leaves the VMs stopped.
 
 The node images also pre-pull every container image the scenarios use, so sessions do not depend on Docker Hub. The controller manager runs with `--node-monitor-grace-period=20s`, so a worker whose kubelet stops turns `NotReady` after about 20 seconds instead of the stock 40-50.
 
@@ -44,6 +45,8 @@ The versions are pinned in `config/versions.yaml` (`gatewayApiVersion`, `traefik
 - the local-path provisioner image (`localPathProvisionerVersion`) and, on controlplane, its manifest in `/opt/cka/addons/local-path-storage.yaml`, pinned to pre-pulled images.
 
 Images built before the extras existed get them with `./cka images extras` (5-10 minutes, needs the internet). It restores `bare`, adds the extras, re-snapshots, does the same for `cluster`, and records them in `images.json`. Until then those questions stop at setup with a message naming the command.
+
+**The `os` image.** Plain Ubuntu for the install playground: `bare` without the Kubernetes packages and repositories, containerd, the pre-pulled images, the extras, the kernel modules and sysctls, and the staged Calico manifest. The hostnames, `/etc/hosts`, the `ubuntu` user with sudo, SSH between the nodes, the static addresses (Tart) and the exam shell stay. Images built before it existed get it with `./cka images os` (about 5 minutes, needs the internet, no rebuild); logs go to `~/.cka-lab/logs/os-*.log`.
 
 Per-node build logs go to `~/.cka-lab/logs/build-*.log`. To rebuild from scratch, for example after bumping versions or once the certificates near their one-year expiry, run `./cka images build --force`.
 
@@ -117,7 +120,7 @@ brew install cirruslabs/cli/tart
   - **Isolation:** macOS 26 isolates Virtualization.framework VMs from each other on the shared network, and only the Mac can reach them. Each node therefore routes the other nodes' addresses through the Mac (192.168.64.1), which forwards TCP, UDP and ICMP but not IP-in-IP. For that reason Calico uses VXLAN on Tart, instead of IP-in-IP as on Multipass.
   - **Pod CIDR:** the pod CIDR in `config/versions.yaml` must not overlap the vmnet subnet (192.168.64.0/24 by default).
 - **Stopping:** `tart stop` cuts a Linux guest off without flushing its disk cache. Snapshots therefore power off from inside the guest; restores and session ends stop hard, because those disks are thrown away.
-- **Disk:** 9 VMs (3 golden `bare`, 3 golden `cluster`, 3 session clones). Clones share blocks until they diverge, so real usage stays around the Multipass figure. `tart list` shows them; `./cka images build --driver tart --force` deletes and rebuilds all of them.
+- **Disk:** 12 VMs (3 golden `bare`, 3 golden `cluster`, 3 golden `os`, 3 session clones). Clones share blocks until they diverge, so real usage stays around the Multipass figure. `tart list` shows them; `./cka images build --driver tart --force` deletes and rebuilds all of them.
 - **Base image:** `ghcr.io/cirruslabs/ubuntu:<ubuntuRelease>`, overridable with `CKA_TART_IMAGE`. The build uses the image's default `admin`/`admin` login once to create the `ubuntu` user. `CKA_TART_BIN` overrides the `tart` binary.
 - **Licence:** Tart is fair-source, not open source; larger organisations may need a paid licence. Check the current terms on [tart.run](https://tart.run) for your use.
 
@@ -152,6 +155,7 @@ Floci is an emulator, so some things differ from AWS. The scenarios are written 
 ## Troubleshooting
 
 - **"Base image cluster is not built yet"**: run `./cka images build`.
+- **"Base image os is not built yet"**: run `./cka images os` to add the install playground's image to existing images.
 - **"The IP of worker-1 changed ..."**: the Multipass DHCP lease changed, and the cluster certificates are bound to the old address. Rebuild with `./cka images build --force`.
 - **Tart: "SSH to worker-1 did not come up"** or **"did not get an IP address"**: check `~/.cka-lab/logs/tart-<node>.log` and `tart list`. A VM left running by another process blocks `tart run`; `tart stop <vm>` it, then reset.
 - **Tart: "driver key ... is missing"**: the images were built under another account or `CKA_LAB_HOME`. Rebuild with `./cka images build --driver tart --force`.

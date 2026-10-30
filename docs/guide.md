@@ -178,7 +178,10 @@ To check that a lesson can be completed, run `./cka learn verify <id>`. It plays
 
 ## Playground
 
-A healthy 3-node cluster with nothing to solve and nothing graded. Break it, fix it, try things out; **Reset** brings back a clean cluster. Start it from the UI or with `./cka playground`.
+Free practice with nothing to solve and nothing graded; **Reset** brings back a clean start. There are two:
+
+- **Cluster:** a healthy 3-node cluster. Break it, fix it, try things out. Start it from the UI or with `./cka playground`.
+- **Install a cluster:** the same three nodes as plain Ubuntu, set up like exam nodes, with nothing of Kubernetes on them: no kernel modules or sysctls for it, no containerd, no kubeadm, kubelet or kubectl, no CNI. The `ubuntu` user has passwordless sudo, `ssh worker-1` and `ssh worker-2` work from controlplane, and vim, curl, gpg and jq are there, with internet access for apt and image pulls. `alias k=kubectl` is set, and kubectl completion turns on in shells started after kubectl is installed. Install a kubeadm cluster from memory; the page lists the steps, without commands, behind a spoiler. Pick a pod CIDR outside the VM network (192.168.64.0/24 by default), and on Tart a VXLAN overlay, since the Mac forwards no IP-in-IP between Tart VMs. Start it from the UI or with `./cka playground --install`. It runs on the `os` image (see [setup](setup.md#first-run)).
 
 ---
 
@@ -360,7 +363,7 @@ Everything in the UI can also be done from the terminal with `./cka`:
 | --- | --- |
 | `cka list` | List scenarios |
 | `cka start <id>` | Restore the snapshot, run setup and print the task |
-| `cka playground` | Start a 3-node cluster with no tasks |
+| `cka playground [--install]` | Start a 3-node cluster with no tasks; `--install`: plain Ubuntu nodes to install a cluster on |
 | `cka status` / `cka task [n]` | Show the session; print the task, or set up and print question *n* |
 | `cka grade [--blind]` | Run the checks; `--blind` prints the score without the checks |
 | `cka submit` | Exam mode: grade once, end the session and stop the VMs |

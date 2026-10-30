@@ -2,6 +2,7 @@
 # Builds the lab VMs and their base snapshots:
 #   bare    - containerd + kubeadm/kubelet/kubectl installed, no cluster
 #   cluster - healthy 1 control plane + 2 workers with Calico
+#   os      - plain Ubuntu, derived from bare by os.sh, for installing a cluster from scratch
 #
 # Usage: [CKA_DRIVER=multipass|tart] tools/build-base-images/build.sh [--force]
 #   --force   delete existing lab VMs (and their snapshots) and rebuild from scratch
@@ -316,5 +317,8 @@ cat > "$DATA_DIR/images-$DRIVER.json" <<EOF
 }
 EOF
 cp "$DATA_DIR/images-$DRIVER.json" "$DATA_DIR/images.json"
+
+log "Deriving 'os' from 'bare'"
+CKA_DRIVER="$DRIVER" bash "$HERE/os.sh" || die "deriving the os snapshot failed; retry with ./cka images os"
 
 log "Done in $(( ($(date +%s) - START) / 60 )) min. VMs are stopped; start a scenario with ./cka start <id>"

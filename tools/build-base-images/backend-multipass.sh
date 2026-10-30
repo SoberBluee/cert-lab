@@ -1,4 +1,4 @@
-# Multipass backend for build.sh (sourced). Each node is one instance holding `bare` and `cluster` snapshots.
+# Multipass backend for build.sh (sourced). Each node is one instance holding `bare`, `cluster` and `os` snapshots.
 
 backend_check() {
   command -v multipass >/dev/null || die "multipass is not installed"
@@ -43,8 +43,8 @@ restore_all() {
   start_all
 }
 
-# Snapshot names are unique per instance: drop the old one first.
+# Snapshot names are unique per instance: drop the old one first, if there is one.
 replace_snapshot_all() {
-  for i in $(all_insts); do multipass delete --purge "$i.$1" >/dev/null; done
+  for i in $(all_insts); do multipass delete --purge "$i.$1" >/dev/null 2>&1 || true; done
   snapshot_all "$1"
 }

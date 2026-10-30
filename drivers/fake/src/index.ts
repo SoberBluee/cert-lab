@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Base, BaseImage, ConnectionInfo, Driver, DriverSession, ExecOptions, ExecResult, ProgressFn, Topology } from '@cka/schema';
+import { VM_BASES, type Base, type BaseImage, type ConnectionInfo, type Driver, type DriverSession, type ExecOptions, type ExecResult, type ProgressFn, type Topology } from '@cka/schema';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const NODES = ['controlplane', 'worker-1', 'worker-2'];
@@ -14,10 +14,7 @@ export class FakeDriver implements Driver {
   constructor(private readonly delayMs = Number(process.env.CKA_FAKE_DELAY_MS ?? 800)) {}
 
   async listBaseImages(): Promise<BaseImage[]> {
-    return [
-      { name: 'bare', available: true, builtAt: new Date().toISOString(), kubernetesVersion: 'fake' },
-      { name: 'cluster', available: true, builtAt: new Date().toISOString(), kubernetesVersion: 'fake' },
-    ];
+    return VM_BASES.map((name) => ({ name, available: true, builtAt: new Date().toISOString(), kubernetesVersion: 'fake' }));
   }
 
   async createSession(_topology: Topology, base: Base, opts: { sessionId?: string; onProgress?: ProgressFn } = {}): Promise<DriverSession> {

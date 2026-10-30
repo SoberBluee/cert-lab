@@ -63,13 +63,14 @@ const goldens = (base: string) => ['controlplane', 'worker-1', 'worker-2'].map((
 
 describe('TartDriver', () => {
   it('lists a base image only when every node has its golden VM', async () => {
-    const { driver } = setup([...goldens('bare'), { Name: 'cka-controlplane-cluster' }, { Name: 'cka-worker-1-cluster', Source: 'OCI' }]);
+    const { driver } = setup([...goldens('bare'), ...goldens('os'), { Name: 'cka-controlplane-cluster' }, { Name: 'cka-worker-1-cluster', Source: 'OCI' }]);
     const images = await driver.listBaseImages();
     assert.deepEqual(
       images.map((i) => [i.name, i.available]),
       [
         ['bare', true],
         ['cluster', false],
+        ['os', true],
       ],
     );
   });

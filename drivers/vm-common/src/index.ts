@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Base, BaseImage, ConnectionInfo, Driver, DriverSession, ExecOptions, ExecResult, ProgressFn, Topology } from '@cka/schema';
+import { VM_BASES, type Base, type BaseImage, type ConnectionInfo, type Driver, type DriverSession, type ExecOptions, type ExecResult, type ProgressFn, type Topology } from '@cka/schema';
 
 export type DriverLog = (level: 'debug' | 'info' | 'warn' | 'error', msg: string, extra?: object) => void;
 
@@ -122,7 +122,7 @@ export function runProcess(bin: string, args: string[], o: RunOptions): Promise<
 }
 
 /**
- * Lab of three fixed VMs (controlplane, worker-1, worker-2) with a `bare` and a `cluster` image each.
+ * Lab of three fixed VMs (controlplane, worker-1, worker-2) with a `bare`, a `cluster` and an `os` image each.
  * Subclasses supply the VM lifecycle; this class owns the post-boot sequence and the session key,
  * kubeconfig and connection details. Since v1 allows a single session, session ids are only logged.
  */
@@ -186,7 +186,7 @@ export abstract class VmLabDriver implements Driver {
   async listBaseImages(): Promise<BaseImage[]> {
     const meta = this.meta();
     const available = await this.availableImages();
-    return (['bare', 'cluster'] as const).map((name) => ({
+    return VM_BASES.map((name) => ({
       name,
       available: available.has(name),
       builtAt: meta?.builtAt,
@@ -202,7 +202,13 @@ export abstract class VmLabDriver implements Driver {
     }
     const images = await this.listBaseImages();
     if (!images.find((i) => i.name === base)?.available) {
-      throw new DriverError(`Base image "${base}" is not built yet. Run "./cka images build" first (takes 15-25 minutes).`);
+      // Images built before `os` existed get it from the bare image, without a rebuild.
+      const fromBare = base === 'os' && images.find((i) => i.name === 'bare')?.available;
+      throw new DriverError(
+        fromBare
+          ? 'Base image "os" is not built yet. Run "./cka images os" first (takes about 5 minutes).'
+          : `Base image "${base}" is not built yet. Run "./cka images build" first (takes 15-25 minutes).`,
+      );
     }
     const id = opts.sessionId ?? randomUUID();
     await this.restoreSnapshot(id, base, opts.onProgress);

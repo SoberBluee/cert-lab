@@ -9,7 +9,6 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 30
-draft: true
 variables:
   Q1_NS: { oneOf: [ batch, reports, nightly, jobs, cron, scheduled, etl, ops-jobs, maintenance, automation ] }
   Q1_NAME: { oneOf: [ report, cleanup, backup, export, rotate, sync, digest, purge, archive, reconcile ] }

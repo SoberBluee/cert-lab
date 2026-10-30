@@ -6,11 +6,14 @@ MARKER="# >>> cka-lab exam environment >>>"
 
 for home in /root /home/ubuntu; do
   if ! grep -qF "$MARKER" "$home/.bashrc" 2>/dev/null; then
+    # Completion turns on in the first shell after kubectl is installed (the os image has none).
     cat >> "$home/.bashrc" <<'EOF'
 # >>> cka-lab exam environment >>>
-source <(kubectl completion bash)
+if command -v kubectl >/dev/null; then
+  source <(kubectl completion bash)
+  complete -o default -F __start_kubectl k
+fi
 alias k=kubectl
-complete -o default -F __start_kubectl k
 export do="--dry-run=client -o yaml"
 export now="--force --grace-period 0"
 # <<< cka-lab exam environment <<<

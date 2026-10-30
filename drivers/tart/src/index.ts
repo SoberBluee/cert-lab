@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
-import type { ExecResult } from '@cka/schema';
+import { VM_BASES, type ExecResult } from '@cka/schema';
 import { DriverError, NODES, VmLabDriver, runProcess, sleep, tail, type VmLabDriverOptions } from '@cka/driver-vm-common';
 
 export interface TartDriverOptions extends VmLabDriverOptions {
@@ -29,8 +29,8 @@ function defaultTartBin(): string {
 }
 
 /**
- * Tart backend. Tart has no snapshots, so every node has golden VMs `cka-<node>-bare` and
- * `cka-<node>-cluster`; a restore replaces the session VM `cka-<node>` with an APFS copy-on-write
+ * Tart backend. Tart has no snapshots, so every node has golden VMs `cka-<node>-bare`,
+ * `cka-<node>-cluster` and `cka-<node>-os`; a restore replaces the session VM `cka-<node>` with an APFS copy-on-write
  * clone of the golden one. VMs are per user (~/.tart), and commands run over SSH as `ubuntu`
  * with the driver key installed at build time.
  */
@@ -97,7 +97,7 @@ export class TartDriver extends VmLabDriver {
 
   protected async availableImages(): Promise<Set<string>> {
     const vms = await this.vms();
-    return new Set(['bare', 'cluster'].filter((base) => NODES.every((n) => vms.has(this.golden(n, base)))));
+    return new Set(VM_BASES.filter((base) => NODES.every((n) => vms.has(this.golden(n, base)))));
   }
 
   /**

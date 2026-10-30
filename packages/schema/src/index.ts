@@ -4,4 +4,4 @@ export * from './quiz';
 export * from './driver';
 export * from './api';
 export * from './vars';
-export { QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS, QUICK_MAX_LAYERS } from './constants';
+export { PLAYGROUNDS, QUICK_MAX_ADDONS, QUICK_MAX_FOLLOWUPS, QUICK_MAX_LAYERS, VM_BASES, type PlaygroundKind } from './constants';

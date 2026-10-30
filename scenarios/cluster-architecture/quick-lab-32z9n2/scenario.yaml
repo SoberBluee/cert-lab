@@ -1,0 +1,70 @@
+id: quick-lab-32z9n2
+title: "Quick lab: Kubeconfig and cluster facts"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 7
+points: 6
+tags: [ kubeconfig, contexts, certificates, cidr, kube-proxy, cni, static-pod ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_USER: { oneOf: [ auditor, ops-lead, sre-oncall, release-mgr, qa-lead, sec-review, billing-ops, data-eng ] }
+tasks:
+  - id: q1
+    title: Cluster network facts
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-pod-cidr
+        description: pod-cidr holds the cluster CIDR of the controller manager
+        run: want=$(grep -oE -- '--cluster-cidr=[^ "]+' /etc/kubernetes/manifests/kube-controller-manager.yaml | cut -d= -f2); [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/facts/pod-cidr 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-service-cidr
+        description: service-cidr holds the Service range of the API server
+        run: want=$(grep -oE -- '--service-cluster-ip-range=[^ "]+' /etc/kubernetes/manifests/kube-apiserver.yaml | cut -d= -f2); [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/facts/service-cidr 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-dns-ip
+        description: dns-ip holds the ClusterIP of kube-dns
+        run: want=$(kubectl -n kube-system get service kube-dns -o jsonpath='{.spec.clusterIP}'); [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/facts/dns-ip 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-proxy-mode
+        description: proxy-mode holds the mode kube-proxy reports
+        run: want=$(curl -s -m 3 http://127.0.0.1:10249/proxyMode); [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/facts/proxy-mode 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-cni
+        description: cni names the CNI plugin
+        run: want=$(jq -r '.plugins[0].type // .type' "/etc/cni/net.d/$(ls /etc/cni/net.d/ | grep -E '\.(conf|conflist|json)$' | sort | head -1)"); [ -n "$want" ] && grep -qiw "$want" /opt/course/facts/cni 2>/dev/null && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-cni-config
+        description: cni-config holds the path of the CNI configuration the runtime loads
+        run: want="/etc/cni/net.d/$(ls /etc/cni/net.d/ | grep -E '\.(conf|conflist|json)$' | sort | head -1)"; [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/facts/cni-config 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+    hints:
+      - "The control plane components run as static Pods: their flags are in /etc/kubernetes/manifests. kube-controller-manager has --cluster-cidr, kube-apiserver --service-cluster-ip-range."
+      - "kube-proxy reports its mode on its metrics port: curl localhost:10249/proxyMode. Its ConfigMap kube-system/kube-proxy has the configured mode, empty meaning the default."
+      - The container runtime loads the first file, in lexical order, of /etc/cni/net.d; the plugin type is inside it.
+    recipe: { builder: cluster-info, parts: [] }
