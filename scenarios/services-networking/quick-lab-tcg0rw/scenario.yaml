@@ -1,0 +1,58 @@
+id: quick-lab-tcg0rw
+title: "Quick lab: Gateway across namespaces"
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 10
+points: 7
+tags: [ troubleshooting, gateway-api, httproute, referencegrant, tls ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ shop, store, market, tickets, travel, booking, auction, fleet-app, rentals, events ] }
+  Q1_FAULT: { oneOf: [ allowed-routes-same, listener-hostname, listener-port, https-listener-secret, gatewayclass-missing, route-parent-namespace, route-backend-namespace, reference-grant-missing, reference-grant-from ], hidden: true }
+tasks:
+  - id: q1
+    title: app.${Q1_NS}.lab unreachable through the Gateway
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-serves-http
+        description: app.${Q1_NS}.lab returns the nginx welcome page over HTTP
+        type: kubectl
+        run: "curl -s -m 5 -H 'Host: app.${Q1_NS}.lab' http://controlplane:30080/"
+        expect: { contains: Welcome to nginx }
+        weight: 3
+        retrySeconds: 60
+      - id: q1-serves-https
+        description: app.${Q1_NS}.lab returns the nginx welcome page over HTTPS
+        type: kubectl
+        run: curl -sk -m 5 --resolve app.${Q1_NS}.lab:30443:$(getent hosts controlplane | awk '{print $1}') https://app.${Q1_NS}.lab:30443/
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-route
+        description: HTTPRoute shop is accepted and its backend resolves
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get httproute shop -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status} {.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'
+        expect: { equals: True True }
+        weight: 1
+        retrySeconds: 30
+      - id: q1-kept
+        description: the Gateway, the HTTPRoute, the Service and Secret edge-tls stay in their namespaces
+        type: kubectl
+        run: echo "$(kubectl -n ${Q1_NS}-gw get gateway edge -o name) $(kubectl -n ${Q1_NS} get httproute shop -o name) $(kubectl -n ${Q1_NS}-backend get svc shop -o name) $(kubectl -n ${Q1_NS}-gw get secret edge-tls -o name)"
+        expect: { equals: gateway.gateway.networking.k8s.io/edge httproute.gateway.networking.k8s.io/shop service/shop secret/edge-tls }
+        weight: 1
+    hints:
+      - "curl -v both URLs: a 404 means no route matched the request, a 5xx that a route matched but its backend failed, and a TLS error or a refused connection that the listener itself is not serving."
+      - "kubectl -n ${Q1_NS}-gw describe gateway edge: the Gateway's conditions and each listener's conditions (Accepted, Programmed, ResolvedRefs) give a reason. Compare its class with kubectl get gatewayclass."
+      - "kubectl -n ${Q1_NS} describe httproute shop: the Accepted and ResolvedRefs conditions under Status say whether a parent took the route and whether its backend resolved."
+      - A route that points at a Service in another namespace needs that namespace to allow it, for the route's own namespace.
+    recipe: { category: gateway }

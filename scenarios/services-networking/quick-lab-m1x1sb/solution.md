@@ -1,0 +1,38 @@
+## Solution
+
+### Question 1: Migrate an Ingress to Gateway API
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shop-gw
+  namespace: ${Q1_NS}
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 8443
+      hostname: shop.${Q1_NS}.lab
+      tls:
+        mode: Terminate
+        certificateRefs: [{ kind: Secret, name: shop-tls }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shop
+  namespace: ${Q1_NS}
+spec:
+  parentRefs: [{ name: shop-gw, sectionName: https }]
+  hostnames: [shop.${Q1_NS}.lab]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: /api } }]
+      backendRefs: [{ name: api, port: 80 }]
+    - matches: [{ path: { type: PathPrefix, value: / } }]
+      backendRefs: [{ name: web, port: 80 }]
+EOF
+kubectl -n ${Q1_NS} delete ingress shop
+```

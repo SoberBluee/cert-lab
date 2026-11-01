@@ -1,0 +1,41 @@
+## Solution
+
+### Question 1: Pod ${Q1_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/dockerconfigjson
+metadata:
+  name: "${Q1_NAME}-pull"
+  namespace: "${Q1_NS}"
+stringData:
+  .dockerconfigjson: "{\"auths\":{\"${Q1_SECRETS_REGISTRY}\":{\"username\":\"${Q1_SECRETS_USER}\",\"password\":\"${Q1_SECRETS_PASSWORD}\"}}}"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "${Q1_NAME}"
+  namespace: "${Q1_NS}"
+spec:
+  containers:
+    - name: main
+      image: "${Q1_IMAGE}"
+      command:
+        - sleep
+        - 1d
+      volumeMounts:
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+  imagePullSecrets:
+    - name: "${Q1_NAME}-pull"
+  volumes:
+    - name: tls
+      secret:
+        secretName: "${Q1_NAME}-tls"
+EOF
+kubectl -n "${Q1_NS}" create secret tls "${Q1_NAME}-tls" --cert="/opt/course/certs/${Q1_NAME}/tls.crt" --key="/opt/course/certs/${Q1_NAME}/tls.key"
+kubectl -n "${Q1_NS}" wait --for=condition=Ready "pod/${Q1_NAME}" --timeout=180s
+```

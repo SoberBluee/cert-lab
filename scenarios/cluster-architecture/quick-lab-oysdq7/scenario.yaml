@@ -1,0 +1,48 @@
+id: quick-lab-oysdq7
+title: "Quick lab: Node infrastructure"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ sysctl, kernel-modules, dpkg, systemd, kubeadm-join ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ] }
+tasks:
+  - id: q1
+    title: Kernel settings on ${Q1_NODE}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+    checks:
+      - id: q1-runtime
+        description: the three settings are active on ${Q1_NODE}
+        type: ssh
+        node: ${Q1_NODE}
+        run: echo $(sysctl -n net.bridge.bridge-nf-call-iptables; sysctl -n net.ipv4.ip_forward; sysctl -n net.netfilter.nf_conntrack_max)
+        expect: { equals: 1 1 131072 }
+        weight: 2
+      - id: q1-persisted
+        description: the three settings are written under /etc/sysctl.d
+        type: ssh
+        node: ${Q1_NODE}
+        run: all=$(cat /etc/sysctl.d/*.conf 2>/dev/null | tr -d ' \t'); n=0; grep -qx 'net.bridge.bridge-nf-call-iptables=1' <<< "$all" && n=$((n+1)); grep -qx 'net.ipv4.ip_forward=1' <<< "$all" && n=$((n+1)); grep -qx 'net.netfilter.nf_conntrack_max=131072' <<< "$all" && n=$((n+1)); echo $n
+        expect: { equals: "3" }
+        weight: 3
+      - id: q1-module
+        description: br_netfilter is loaded at boot
+        type: ssh
+        node: ${Q1_NODE}
+        run: grep -rhx 'br_netfilter' /etc/modules-load.d/ >/dev/null 2>&1 && lsmod | grep -q '^br_netfilter' && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+    hints:
+      - sysctl -w changes a setting until the next reboot; files in /etc/sysctl.d/ are read at boot, and sysctl --system applies them now.
+      - Files in /etc/modules-load.d/ list one module per line; modprobe loads one now.
+      - The kubeadm install guide on kubernetes.io lists these settings under "Install and configure prerequisites".
+    recipe: { builder: infra, parts: [] }

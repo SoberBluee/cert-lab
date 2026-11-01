@@ -383,5 +383,186 @@ kubectl -n ${ns} rollout status daemonset/${APP}-agent --timeout=180s`,
         };
       },
     },
+    'hpa-overlays': {
+      label: 'Replace a ConfigMap with an HPA across base and overlays',
+      make: ({ APP }) => {
+        const dir = `${DIR}/${APP}-envs`;
+        const base = `${dir}/base`;
+        const staging = `${dir}/overlays/staging`;
+        const prod = `${dir}/overlays/prod`;
+        const cm = `${APP}-scaling`;
+        return {
+          title: 'Kustomize: HPA in base, patched in prod',
+          text: `\`${dir}\` on \`controlplane\` holds a Kustomize base and two overlays, \`staging\` and \`prod\`, both already applied, to namespaces \`${APP}-staging\` and \`${APP}-production\`. Until now \`${APP}\` was scaled by hand from ConfigMap \`${cm}\`. Replace that with a HorizontalPodAutoscaler:
+
+1. Remove ConfigMap \`${cm}\` from the Kustomize config, and from both namespaces.
+2. Add a HorizontalPodAutoscaler \`${APP}\` to the base. It keeps Deployment \`${APP}\` between \`1\` and \`4\` replicas, targeting \`50%\` average CPU utilization.
+3. In prod the autoscaler may go up to \`6\` replicas. Set this with a patch in the prod overlay, not in the base.
+4. Apply both overlays with \`kubectl apply -k\`.
+
+\`kubectl kustomize\` must still build the base and both overlays.`,
+          setup: [
+            `${courseDir(`kustomize/${APP}-envs`)}
+mkdir -p ${base} ${staging} ${prod}
+cat > ${base}/deployment.yaml <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ${APP} }
+  template:
+    metadata:
+      labels: { app: ${APP} }
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27-alpine
+          resources:
+            requests: { cpu: 20m, memory: 16Mi }
+EOF
+cat > ${base}/scaling-config.yaml <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${cm}
+data:
+  MIN_REPLICAS: "1"
+  MAX_REPLICAS: "4"
+EOF
+cat > ${base}/kustomization.yaml <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - scaling-config.yaml
+EOF
+cat > ${staging}/kustomization.yaml <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${APP}-staging
+resources:
+  - ../../base
+labels:
+  - pairs:
+      env: staging
+EOF
+cat > ${prod}/resources.yaml <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP}
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+EOF
+cat > ${prod}/kustomization.yaml <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${APP}-production
+resources:
+  - ../../base
+labels:
+  - pairs:
+      env: prod
+patches:
+  - path: resources.yaml
+EOF
+chown -R ubuntu:ubuntu /opt/course
+for ns in ${APP}-staging ${APP}-production; do
+  kubectl delete namespace "$ns" --ignore-not-found --wait=true >/dev/null
+  kubectl create namespace "$ns" >/dev/null
+done
+kubectl apply -k ${staging} >/dev/null
+kubectl apply -k ${prod} >/dev/null
+kubectl -n ${APP}-staging get configmap ${cm} >/dev/null
+kubectl -n ${APP}-production get configmap ${cm} >/dev/null`,
+          ],
+          checks: [
+            {
+              id: 'hpa-staging',
+              description: `HPA ${APP} in ${APP}-staging keeps Deployment ${APP} between 1 and 4 replicas at 50% CPU`,
+              type: 'kubectl',
+              run: `kubectl -n ${APP}-staging get hpa ${APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'`,
+              expect: { equals: `Deployment/${APP}/1/4/50` },
+              weight: 2,
+            },
+            {
+              id: 'hpa-prod',
+              description: `HPA ${APP} in ${APP}-production allows up to 6 replicas`,
+              type: 'kubectl',
+              run: `kubectl -n ${APP}-production get hpa ${APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'`,
+              expect: { equals: `Deployment/${APP}/1/6/50` },
+              weight: 2,
+            },
+            onCp({
+              id: 'builds',
+              description: 'base and staging build with maxReplicas 4, prod with 6, and none of them renders the ConfigMap',
+              run: `out() { kubectl kustomize "$1" 2>/dev/null; }; max() { out "$1" | grep -oE 'maxReplicas: [0-9]+' | grep -oE '[0-9]+' | xargs; }; cms=$(for d in ${base} ${staging} ${prod}; do out "$d" | grep -c '^kind: ConfigMap'; done | awk '{ s += $1 } END { print s + 0 }'); echo "base=$(max ${base}) staging=$(max ${staging}) prod=$(max ${prod}) configmaps=$cms"`,
+              expect: { equals: 'base=4 staging=4 prod=6 configmaps=0' },
+              weight: 1,
+            }),
+            {
+              id: 'configmap-gone',
+              description: `ConfigMap ${cm} is gone from both namespaces`,
+              type: 'kubectl',
+              run: `for ns in ${APP}-staging ${APP}-production; do kubectl -n "$ns" get configmap ${cm} >/dev/null 2>&1 && echo "still in $ns"; done; echo checked`,
+              expect: { equals: 'checked' },
+              weight: 1,
+            },
+          ],
+          solution: [
+            `sed -i '/scaling-config.yaml/d' ${base}/kustomization.yaml
+rm ${base}/scaling-config.yaml
+cat > ${base}/hpa.yaml <<EOF
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ${APP}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ${APP}
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+EOF
+printf '  - hpa.yaml\\n' >> ${base}/kustomization.yaml
+cat > ${prod}/hpa-max.yaml <<EOF
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ${APP}
+spec:
+  maxReplicas: 6
+EOF
+printf '  - path: hpa-max.yaml\\n' >> ${prod}/kustomization.yaml
+kubectl apply -k ${staging}
+kubectl apply -k ${prod}
+# apply -k never deletes: the ConfigMap left the kustomization but not the cluster
+kubectl -n ${APP}-staging delete configmap ${cm}
+kubectl -n ${APP}-production delete configmap ${cm}`,
+          ],
+          hints: [
+            'kubectl autoscale deployment <name> --min=1 --max=4 with a CPU target and --dry-run=client -o yaml writes the HPA for you (kubectl autoscale --help).',
+            'A patch in an overlay needs only the fields it changes: apiVersion, kind, metadata.name and spec.maxReplicas. kubectl kustomize <overlay> shows the merged result before you apply.',
+            'kubectl apply -k creates and updates, but never deletes: an object you take out of a kustomization stays in the cluster until you delete it yourself.',
+          ],
+        };
+      },
+    },
   },
 });

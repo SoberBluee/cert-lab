@@ -1,0 +1,41 @@
+id: quick-lab-8ex3bf
+title: "Quick lab: CRDs and operators"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ crd, operator, kubectl-explain, helm ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ shop, orders, billing, inventory, crm, ledger, payments, sales, reports, catalog ] }
+tasks:
+  - id: q1
+    title: Document and use a custom field
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-explain
+        description: schedule.txt holds the kubectl explain output of spec.backup.schedule
+        run: grep -q "$(cat /root/.cka-crd-token)" /opt/course/crd/schedule.txt 2>/dev/null && grep -qi 'schedule' /opt/course/crd/schedule.txt && echo ok || echo missing
+        expect: { equals: ok }
+        weight: 3
+      - id: q1-database
+        description: Database reports in ${Q1_NS} has 3 replicas and backs up at 0 2 * * *
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get databases.db.example.lab reports -o jsonpath='{.spec.replicas}|{.spec.backup.schedule}'
+        expect: { equals: 3|0 2 * * * }
+        weight: 3
+    hints:
+      - "kubectl explain works for custom resources too, using the plural name or the kind: kubectl explain databases.spec."
+      - kubectl explain <resource>.<field>.<field> drills down one level at a time; --recursive shows the whole tree.
+      - The apiVersion of a custom object is <group>/<version>, as the CRD names them.
+    recipe: { builder: crds, parts: [] }

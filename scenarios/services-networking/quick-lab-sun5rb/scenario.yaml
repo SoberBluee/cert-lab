@@ -1,0 +1,48 @@
+id: quick-lab-sun5rb
+title: "Quick lab: Gateway API with TLS"
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 12
+points: 6
+tags: [ gateway-api, httproute, tls, ingress, migration, header-match ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ shop, store, portal, checkout, accounts, tickets, docs-site, payments, support, members ] }
+tasks:
+  - id: q1
+    title: Canary by request header
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-canary
+        description: "requests to app.${Q1_NS}.lab with X-Canary: always reach web-canary"
+        type: kubectl
+        run: "curl -sk -m 5 -H 'X-Canary: always' --resolve app.${Q1_NS}.lab:30443:$(getent hosts controlplane | awk '{print $1}') https://app.${Q1_NS}.lab:30443/"
+        expect: { contains: "canary ${Q1_NS}" }
+        weight: 3
+        retrySeconds: 60
+      - id: q1-default
+        description: requests without that header, or with another value, still reach web
+        type: kubectl
+        run: "curl -sk -m 5 --resolve app.${Q1_NS}.lab:30443:$(getent hosts controlplane | awk '{print $1}') https://app.${Q1_NS}.lab:30443/ | grep -q 'Welcome to nginx' && curl -sk -m 5 -H 'X-Canary: never' --resolve app.${Q1_NS}.lab:30443:$(getent hosts controlplane | awk '{print $1}') https://app.${Q1_NS}.lab:30443/ | grep -q 'Welcome to nginx' && echo ok || echo fail"
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-route
+        description: HTTPRoute web is the only route in the namespace, still on app-gw, and matches header X-Canary
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get httproute -o json | jq -r '"\(.items | length) \(.items[0].spec.parentRefs[0].name) \([.items[0].spec.rules[].matches[]?.headers[]? | select((.name | ascii_downcase) == "x-canary") | .value] | join(","))"'
+        expect: { equals: 1 app-gw always }
+        weight: 1
+    hints:
+      - "An HTTPRoute rule can match on headers: matches: [{ headers: [{ name: X-Canary, value: always }] }]. A rule without matches takes every other request."
+      - "Keep parentRefs and hostnames as they are: kubectl -n ${Q1_NS} edit httproute web, or apply the whole route again."
+      - kubectl describe httproute web shows whether the route is still Accepted and its backends resolve.
+    recipe: { builder: gateway, parts: [] }
