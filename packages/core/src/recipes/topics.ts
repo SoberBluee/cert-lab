@@ -89,6 +89,8 @@ export const labTopics = (): LabTopic[] => {
     trouble('trouble-ingress', 'Ingress', [{ id: 'ingress', faults: [...faultsStarting('ingress', 'ingress'), ...faultsStarting('ingress', 'controller-')] }], ['ingress']),
     trouble('trouble-httproute', 'HTTPRoute / Gateway', [{ id: 'ingress', faults: faultsStarting('ingress', 'route-') }], ['httproute', 'gateway-api']),
     trouble('trouble-deployment', 'Deployment', [{ id: 'pods' }], ['deployment', 'pods', 'rollout', 'imagepullbackoff', 'command']),
+    trouble('trouble-daemonset', 'DaemonSet', [{ id: 'daemonsets' }], ['daemonset', 'ondelete', 'hostport']),
+    trouble('trouble-statefulset', 'StatefulSet', [{ id: 'statefulsets' }], ['statefulset', 'volumeclaimtemplates', 'forced-rollback']),
     trouble('trouble-nodes', 'Nodes', [{ id: 'nodes' }], ['node', 'notready', 'containerd', 'container-runtime', 'cni']),
     trouble('trouble-kubelet', 'Kubelet', [
       { id: 'nodes', faults: faultsStarting('nodes', 'kubelet-') },

@@ -191,3 +191,7 @@ export const requireLocalPath = `if ! kubectl -n local-path-storage get deployme
   kubectl apply -f ${LOCAL_PATH_MANIFEST} >/dev/null
 fi
 kubectl -n local-path-storage rollout status deployment/local-path-provisioner --timeout=180s >/dev/null`;
+
+/** requireLocalPath, plus the built-in local-path StorageClass that the staged manifest ships, for questions that use it by name. */
+export const requireLocalPathClass = `${requireLocalPath}
+kubectl get storageclass local-path >/dev/null 2>&1 || kubectl apply -f ${LOCAL_PATH_MANIFEST} >/dev/null`;

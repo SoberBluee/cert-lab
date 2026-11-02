@@ -4,6 +4,7 @@ import { apiAccessCategory } from './apiaccess';
 import { controllersCategory } from './controllers';
 import { controlPlaneCategory } from './controlplane';
 import { cronJobsCategory } from './cronjobs';
+import { daemonSetsCategory } from './daemonsets';
 import { dnsCategory } from './dns';
 import { drainCategory } from './drain';
 import { gatewayCategory } from './gateway';
@@ -19,6 +20,7 @@ import { rbacCategory } from './rbac';
 import { restartsCategory } from './restarts';
 import { schedulingCategory } from './scheduling';
 import { servicesCategory } from './services';
+import { statefulSetsCategory } from './statefulsets';
 import { storageCategory } from './storage';
 import type { FaultCategory } from './types';
 import { unschedulableCategory } from './unschedulable';
@@ -34,6 +36,8 @@ export const CATEGORIES: FaultCategory[] = [
   hpaCategory,
   vpaCategory,
   cronJobsCategory,
+  daemonSetsCategory,
+  statefulSetsCategory,
   rbacCategory,
   servicesCategory,
   netpolCategory,
