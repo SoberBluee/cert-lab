@@ -82,6 +82,7 @@ export const labTopics = (): LabTopic[] => {
     create('create-workload-ops', 'Workload operations', 'workload-ops', ['resources', 'capacity', 'priorityclass', 'serviceaccount-token', 'in-cluster-api']),
     create('create-gateway', 'Gateway API with TLS', 'gateway', ['tls', 'migration', 'header-match']),
     create('create-cluster-info', 'Kubeconfig and cluster facts', 'cluster-info', ['kubeconfig', 'cidr', 'kube-proxy', 'static-pod']),
+    create('create-kubeconfig', 'Kubeconfig extraction', 'kubeconfig', ['kubeconfig', 'contexts', 'kubeconfig-merge', 'auth-whoami']),
     create('create-workload-controllers', 'StatefulSets and DaemonSets', 'workload-controllers', ['statefulset', 'daemonset', 'headless']),
     create('create-coredns', 'CoreDNS configuration', 'coredns', ['coredns', 'corefile']),
     trouble('trouble-services', 'Services', [{ id: 'services' }], ['service', 'endpoints', 'selector', 'targetport', 'named-port', 'externalname', 'headless', 'kube-proxy']),

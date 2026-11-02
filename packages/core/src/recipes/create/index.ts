@@ -11,6 +11,7 @@ import { gatewayBuilder } from './gateway';
 import { deploymentBuilder } from './deployment';
 import { helmBuilder } from './helm';
 import { infraBuilder } from './infra';
+import { kubeconfigBuilder } from './kubeconfig';
 import { kustomizeBuilder } from './kustomize';
 import { netopsBuilder } from './netops';
 import { observeBuilder } from './observe';
@@ -51,6 +52,7 @@ export const BUILDERS: Builder[] = [
   workloadOpsBuilder,
   gatewayBuilder,
   clusterInfoBuilder,
+  kubeconfigBuilder,
   workloadControllersBuilder,
   corednsBuilder,
 ];
