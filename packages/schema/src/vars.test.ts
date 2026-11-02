@@ -94,6 +94,21 @@ describe('rollVars', () => {
     assert.equal(vars.Q3_NS, 'api');
   });
 
+  it('rolls a differentFrom variable apart from the one it names, unless that leaves nothing', () => {
+    const variables = {
+      Q6_NODE: { oneOf: ['worker-1', 'worker-2'] },
+      Q8_NODE: { oneOf: ['worker-1', 'worker-2'], differentFrom: 'Q6_NODE' },
+      ONLY: { oneOf: ['worker-1'], differentFrom: 'Q6_NODE' },
+    };
+    // Always pick the first oneOf entry, so Q8_NODE would otherwise land on Q6_NODE's worker.
+    const vars = rollVars(variables, 2, {}, () => 0);
+    assert.equal(vars.Q6_NODE, 'worker-1');
+    assert.equal(vars.Q8_NODE, 'worker-2');
+    assert.equal(vars.ONLY, 'worker-1');
+    assert.equal(rollVars(variables, 2, { Q6_NODE: 'worker-2' }, () => 0).Q8_NODE, 'worker-1');
+    assert.equal(rollVars(variables, 2, { Q8_NODE: 'worker-1' }, () => 0).Q8_NODE, 'worker-1');
+  });
+
   it('synthesizes a unique namespace when the pool is exhausted', () => {
     const vars = rollVars(
       {

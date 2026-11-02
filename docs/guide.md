@@ -41,7 +41,7 @@ Everything Cert Lab does, in detail. Start with the [README](../README.md) for w
 - **`bare`:** the packages are installed, but there is no cluster. It is used for "install a cluster" and upgrade tasks.
 - **`cluster`:** a healthy, ready cluster.
 
-Both carry the extras above. Images built before the extras existed can get them without a rebuild: `./cka images extras` (5-10 minutes). Until then, upgrade and dynamic provisioning questions stop at setup with that hint.
+Both carry the extras above. Every image they hold is pinned, so the kubelet's image garbage collection never removes one and a lab never pulls it again mid-setup. Images built before the extras existed, or before pinning, can get them without a rebuild: `./cka images extras` (5-10 minutes). Until then, upgrade and dynamic provisioning questions stop at setup with that hint.
 
 **VM backends.**
 
@@ -377,7 +377,7 @@ Everything in the UI can also be done from the terminal with `./cka`:
 | `cka verify <id>` | Set up, apply the solution and grade: every check must pass |
 | `cka learn list / start / verify` | Guided lessons |
 | `cka images build / list` | Build or inspect the base images (`--driver tart`, `--force`) |
-| `cka images extras` | Add the upgrade packages and the local-path provisioner to existing images, without a rebuild |
+| `cka images extras` | Add the upgrade packages and the local-path provisioner to existing images, and pin their images, without a rebuild |
 
 `dry-run` and `verify` also take these options:
 - `--all` runs every scenario.

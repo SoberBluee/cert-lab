@@ -670,15 +670,17 @@ export class SessionManager extends EventEmitter {
    * marked failed and its VMs are stopped. A running session is kept so it can be resumed.
    */
   async recoverOnStartup(): Promise<void> {
-    const row = this.store.openSession();
+    let row = this.store.openSession();
     if (!row) return;
+    // Grading only reads the lab, so a grade cut short leaves nothing to undo: the learner grades again.
+    if (row.state === 'grading') {
+      this.store.updateSession(row.id, { state: 'running' });
+      this.log.warn({ sessionId: row.id }, 'put an interrupted grade back to running');
+      row = { ...row, state: 'running' };
+    }
     // A half-applied break cannot safely be re-run, so an interrupted question setup fails the session too.
     const interrupted =
-      row.state === 'provisioning' || row.state === 'grading'
-        ? row.state
-        : row.state === 'running' && row.preparingTask
-          ? `setting up ${row.preparingTask}`
-          : undefined;
+      row.state === 'provisioning' ? row.state : row.state === 'running' && row.preparingTask ? `setting up ${row.preparingTask}` : undefined;
     if (!interrupted) {
       if (row.state === 'running' && row.mode === 'learn') this.watchLesson(row.id);
       return;

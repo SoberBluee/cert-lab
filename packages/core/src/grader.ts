@@ -139,7 +139,13 @@ export interface RunCheckOptions {
 export async function runCheck(driver: Driver, sessionId: string, check: Check, opts: RunCheckOptions): Promise<CheckResult> {
   const limit: Limit = opts.limit ?? ((fn) => fn());
   if (check.type === 'script') {
-    await limit(() => driver.copyIn(sessionId, check.node, join(opts.dir, check.script), remoteCheckPath(check.id)));
+    try {
+      await limit(() => driver.copyIn(sessionId, check.node, join(opts.dir, check.script), remoteCheckPath(check.id)));
+    } catch (e) {
+      // A node that cannot be reached fails this check, like a command that cannot run, not the whole grade.
+      const r: ExecResult = { exitCode: -1, stdout: '', stderr: (e as Error).message };
+      return { id: check.id, description: check.description, passed: false, weight: check.weight, detail: 'could not copy the check script', output: formatOutput(r) };
+    }
   }
   const plan = planCheck(check);
   const env = { ...opts.vars, ...plan.env };

@@ -164,6 +164,28 @@ describe('deferred task setup', () => {
   });
 });
 
+describe('an API restart', () => {
+  it('puts a grade it cut short back to running, and keeps the VMs', async () => {
+    const { start, store, library } = setup();
+    const { id } = await start();
+    // Grading only reads the lab, so stopping halfway leaves nothing to undo.
+    store.updateSession(id, { state: 'grading' });
+    const driver = new (class extends RecordingDriver {
+      destroyed = 0;
+      override async destroySession(): Promise<void> {
+        this.destroyed++;
+      }
+    })();
+    const restarted = new SessionManager(driver, store, library, pino({ enabled: false }));
+    await restarted.recoverOnStartup();
+    const view = restarted.current()!;
+    assert.equal(view.state, 'running');
+    assert.equal(view.error, undefined);
+    assert.equal(driver.destroyed, 0);
+    assert.equal((await restarted.grade({ retry: false })).score, 1);
+  });
+});
+
 describe('exam mode', () => {
   it('has a deadline and refuses grade, hints, solution and reset', async () => {
     const { sessions, start } = setup();

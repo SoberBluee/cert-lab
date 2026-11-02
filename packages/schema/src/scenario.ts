@@ -129,6 +129,8 @@ export const VariableSchema = z.union([
     oneOf: z.array(z.union([z.string().min(1), z.number()])).min(1, { message: 'oneOf needs at least one value' }),
     /** The rolled value is kept from the learner (and the Studio) until the solution is revealed. */
     hidden: z.boolean().optional(),
+    /** Rolls a value other than this earlier variable's, when oneOf has another: two questions that break a worker each get their own. */
+    differentFrom: z.string().optional(),
   }),
   z
     .strictObject({ range: z.tuple([z.number().int(), z.number().int()]) })
@@ -278,10 +280,16 @@ export const ScenarioSchema = z
         if (!values.includes(k)) ctx.addIssue({ code: 'custom', message: `variants.${k} is not a value of ${t.variant}`, path: ['tasks', ti, 'variants', k] });
       }
     });
+    const declared = new Set<string>();
     for (const [name, v] of Object.entries(s.variables)) {
       if ('node' in v && v.node === 'workers' && s.nodes.workers < 1) {
         ctx.addIssue({ code: 'custom', message: `variable ${name} picks a worker but the topology has none`, path: ['variables', name] });
       }
+      // Variables roll in order, so the one to differ from must already have its value.
+      if ('oneOf' in v && v.differentFrom !== undefined && !declared.has(v.differentFrom)) {
+        ctx.addIssue({ code: 'custom', message: `differentFrom ${v.differentFrom} must name a variable declared before ${name}`, path: ['variables', name, 'differentFrom'] });
+      }
+      declared.add(name);
     }
 
     const nodeAllowed = (node: string) => {

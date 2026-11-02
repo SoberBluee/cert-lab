@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Adds the image extras (node-extras.sh) to lab images that already exist, without a rebuild:
-# for the bare and the cluster snapshot in turn, restore it, stage the extras, and snapshot again.
+# for the bare and the cluster snapshot in turn, restore it, stage the extras, pin every image (pin-images.sh)
+# and snapshot again.
 # A full build (build.sh) already includes them.
 #
 # Usage: [CKA_DRIVER=multipass|tart] tools/build-base-images/extras.sh
@@ -62,11 +63,19 @@ extras() {
   echo "  staged extras on $node"
 }
 
+# Pinned images survive the kubelet's image garbage collection, so a lab never pulls one again mid-setup.
+pin() {
+  transfer "$1" /tmp/ "$HERE/pin-images.sh"
+  on "$1" "bash /tmp/pin-images.sh" >> "$BUILD_LOG-$SNAP-$1.log" 2>&1 || { echo "  pinning images failed on $1, see $BUILD_LOG-$SNAP-$1.log" >&2; return 1; }
+}
+
 for SNAP in bare cluster; do
   log "Restoring '$SNAP'"
   restore_all "$SNAP"
   log "Staging extras on '$SNAP' (logs in $BUILD_LOG-$SNAP-<node>.log)"
   parallel extras
+  log "Pinning the images of '$SNAP'"
+  parallel pin
   log "Snapshotting '$SNAP' again"
   stop_all
   replace_snapshot_all "$SNAP"

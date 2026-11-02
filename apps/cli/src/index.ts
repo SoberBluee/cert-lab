@@ -521,7 +521,7 @@ images
   );
 images
   .command('extras')
-  .description('add the upgrade packages and the local-path provisioner to existing images, without a rebuild (5-10 minutes)')
+  .description('add the upgrade packages and the local-path provisioner to existing images, and pin their images, without a rebuild (5-10 minutes)')
   .option('--driver <name>', 'VM backend: multipass or tart (default: CKA_DRIVER, then the existing images, then multipass)')
   .action(
     action((opts: { driver?: string }) => {

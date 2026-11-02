@@ -121,6 +121,14 @@ describe('ScenarioSchema variables', () => {
     assert.match(errors(s).join(), /picks a worker but the topology has none/);
   });
 
+  it('accepts differentFrom only when it names a variable declared earlier', () => {
+    const withVars = (variables: object) => errors({ ...base, variables, checks: [check('a')] }).join();
+    assert.equal(withVars({ A: { oneOf: ['x', 'y'] }, B: { oneOf: ['x', 'y'], differentFrom: 'A' } }), '');
+    assert.match(withVars({ B: { oneOf: ['x', 'y'], differentFrom: 'A' }, A: { oneOf: ['x', 'y'] } }), /differentFrom A must name a variable declared before B/);
+    assert.match(withVars({ B: { oneOf: ['x', 'y'], differentFrom: 'B' } }), /differentFrom B must name a variable declared before B/);
+    assert.match(withVars({ B: { oneOf: ['x', 'y'], differentFrom: 'MISSING' } }), /differentFrom MISSING must name a variable declared before B/);
+  });
+
   it('validates generator shapes and names', () => {
     assert.match(errors({ ...base, variables: { lower: { oneOf: ['a'] } }, checks: [check('a')] }).join(), /UPPER_SNAKE_CASE/);
     assert.notDeepEqual(errors({ ...base, variables: { R: { range: [5, 1] } }, checks: [check('a')] }), []);

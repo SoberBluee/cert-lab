@@ -150,6 +150,14 @@ extras() {
 log "Staging upgrade packages and the local-path provisioner"
 parallel extras
 
+# Pinned images survive the kubelet's image garbage collection, so a lab never pulls one again mid-setup.
+pin() {
+  transfer "$1" /tmp/ "$HERE/pin-images.sh"
+  on "$1" "bash /tmp/pin-images.sh" >> "$BUILD_LOG-$1.log" 2>&1 || { echo "  pinning images failed on $1, see $BUILD_LOG-$1.log" >&2; return 1; }
+}
+log "Pinning the pre-pulled images"
+parallel pin
+
 log "Snapshotting 'bare'"
 stop_all
 snapshot_all bare
@@ -285,6 +293,9 @@ on controlplane "kubectl get crd verticalpodautoscalers.autoscaling.k8s.io >/dev
   kubectl -n vpa wait --for=condition=Available deployment/vpa-recommender deployment/vpa-updater deployment/vpa-admission-controller --timeout=180s >/dev/null" \
   || die "the VPA components are not available"
 on controlplane "kubectl get nodes -o wide"
+
+log "Pinning the cluster's images"
+parallel pin
 
 log "Snapshotting 'cluster'"
 stop_all

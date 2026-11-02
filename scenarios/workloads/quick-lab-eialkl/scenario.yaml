@@ -35,7 +35,7 @@ variables:
   Q8_NS: { oneOf: [ maintain, fleet, ops, upgrade, rolling, cluster-ops, node-ops, infra, platform, sre ] }
   Q8_APP: { oneOf: [ checkout, cart, orders, payments, inventory, shipping, notify, search, catalog, loyalty ] }
   Q8_FAULT: { oneOf: [ pdb-min-available, pdb-max-unavailable-0, pinned-node-selector, replica-anti-affinity, bare-pod, emptydir-pod ], hidden: true }
-  Q8_NODE: { oneOf: *a1, hidden: true }
+  Q8_NODE: { oneOf: *a1, hidden: true, differentFrom: Q6_NODE }
   Q9_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
   Q9_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
   Q9_CLIENT: { oneOf: [ client, shell, toolbox, tester, debugger, checker, caller, consumer, runner, probe ] }

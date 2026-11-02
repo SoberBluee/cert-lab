@@ -3,7 +3,7 @@
 export type Vars = Record<string, string>;
 
 export type VariableDef =
-  | { oneOf: (string | number)[]; hidden?: boolean }
+  | { oneOf: (string | number)[]; hidden?: boolean; differentFrom?: string }
   | { range: [number, number] }
   | { node: 'workers' | 'any' }
   | { random: number };
@@ -121,6 +121,10 @@ export function rollVars(
   const out: Vars = {};
   for (const [name, def] of Object.entries(variables)) {
     out[name] = Object.hasOwn(pinned, name) ? pinned[name] : rollVariable(def, workers, rng);
+    if ('oneOf' in def && def.differentFrom !== undefined && out[name] === out[def.differentFrom] && !Object.hasOwn(pinned, name)) {
+      const others = def.oneOf.map(String).filter((v) => v !== out[def.differentFrom!]);
+      if (others.length) out[name] = others[Math.floor(rng() * others.length)]!;
+    }
   }
   uniquifyQuestionNamespaces(out, variables, pinned, rng);
   return out;

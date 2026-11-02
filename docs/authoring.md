@@ -29,6 +29,8 @@ $EDITOR scenarios/troubleshooting/ts-coredns-broken/*
 
 A `oneOf` variable marked `hidden: true` (as Quick Create does for troubleshooting faults) is rolled like any other but kept out of the UI, the API and the preview until the solution is viewed or the session ends. Lint rejects it in task text, titles, hints and checks; only scripts and `solution.md` may use it.
 
+A `oneOf` variable with `differentFrom: OTHER` rolls a value other than `OTHER`'s whenever its list has one, so two questions that each break a worker get a worker each: `Q8_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true, differentFrom: Q6_NODE }`. `OTHER` must be declared above it, and a pinned value (`--var`) is kept as given.
+
 ## scenario.yaml reference
 
 ```yaml

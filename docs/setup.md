@@ -44,7 +44,7 @@ The versions are pinned in `config/versions.yaml` (`gatewayApiVersion`, `traefik
 - the control plane images of both versions;
 - the local-path provisioner image (`localPathProvisionerVersion`) and, on controlplane, its manifest in `/opt/cka/addons/local-path-storage.yaml`, pinned to pre-pulled images.
 
-Images built before the extras existed get them with `./cka images extras` (5-10 minutes, needs the internet). It restores `bare`, adds the extras, re-snapshots, does the same for `cluster`, and records them in `images.json`. Until then those questions stop at setup with a message naming the command.
+Images built before the extras existed get them with `./cka images extras` (5-10 minutes, needs the internet). It restores `bare`, adds the extras, pins every image, re-snapshots, does the same for `cluster`, and records them in `images.json`. Until then those questions stop at setup with a message naming the command.
 
 **The `os` image.** Plain Ubuntu for the install playground: `bare` without the Kubernetes packages and repositories, containerd, the pre-pulled images, the extras, the kernel modules and sysctls, and the staged Calico manifest. The hostnames, `/etc/hosts`, the `ubuntu` user with sudo, SSH between the nodes, the static addresses (Tart) and the exam shell stay. Images built before it existed get it with `./cka images os` (about 5 minutes, needs the internet, no rebuild); logs go to `~/.cka-lab/logs/os-*.log`.
 
