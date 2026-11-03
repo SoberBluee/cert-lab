@@ -1,0 +1,19 @@
+## Solution
+
+### Question 1: Scale StatefulSet ${Q1_STS}
+
+```bash
+kubectl -n ${Q1_NS} delete service ${Q1_STS}-hl
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata: { name: ${Q1_STS}-hl, namespace: ${Q1_NS} }
+spec:
+  clusterIP: None
+  selector: { app: ${Q1_STS} }
+  ports: [{ port: 80 }]
+EOF
+kubectl -n ${Q1_NS} scale statefulset ${Q1_STS} --replicas=4
+kubectl -n ${Q1_NS} rollout status statefulset/${Q1_STS} --timeout=240s
+echo "${Q1_STS}-3.${Q1_STS}-hl.${Q1_NS}.svc.cluster.local" > /opt/course/sts/fqdn
+```

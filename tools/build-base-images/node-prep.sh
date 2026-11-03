@@ -67,6 +67,16 @@ apt-get install -y -q --allow-change-held-packages \
 apt-mark hold kubelet kubeadm kubectl cri-tools
 systemctl enable kubelet
 
+# containerd's default config names its own pause image (pause:3.10.1 for containerd 2.2), which no
+# snapshot carries: a kubeadm init on the bare snapshot would wait on registry.k8s.io for every Pod
+# sandbox. Use the one kubeadm pulls instead, on every node.
+PAUSE="$(kubeadm config images list --kubernetes-version "$(kubeadm version -o short)" | grep '/pause:')"
+echo "==> [$NODE_NAME] containerd sandbox image $PAUSE"
+sed -i -E "s#^( *)sandbox(_image)? = .*#\1sandbox\2 = '$PAUSE'#" /etc/containerd/config.toml
+grep -qF "'$PAUSE'" /etc/containerd/config.toml || { echo "could not set the sandbox image in /etc/containerd/config.toml" >&2; exit 1; }
+systemctl restart containerd
+crictl pull "$PAUSE" >/dev/null
+
 if [[ "$ROLE" == "controlplane" ]]; then
   echo "==> [$NODE_NAME] pre-pulling control plane images"
   kubeadm config images pull --kubernetes-version "$(kubeadm version -o short)"

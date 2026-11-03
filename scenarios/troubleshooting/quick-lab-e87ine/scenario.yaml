@@ -1,0 +1,71 @@
+id: quick-lab-e87ine
+title: "Quick lab: DaemonSet"
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 8
+points: 8
+tags: [ troubleshooting, daemonset, tolerations, taints, rollout ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ agents, observability, telemetry, monitoring, logging, security, edge-agents, platform-ops, node-svc, collectors ] }
+  Q1_DS: { oneOf: [ log-shipper, node-monitor, net-agent, disk-watch, metrics-relay, trace-collector, audit-forwarder, sec-scanner, cache-warmer, dns-probe ] }
+  Q1_FAULT: { oneOf: [ image-typo, readiness-port, cp-toleration-typo, hostname-affinity, hostport-conflict, worker-taint, ondelete-stale ], hidden: true }
+  Q1_WORKER: { oneOf: [ worker-1, worker-2 ], hidden: true }
+tasks:
+  - id: q1
+    title: DaemonSet ${Q1_DS} is not running everywhere
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+    checks:
+      - id: q1-everywhere
+        description: ${Q1_DS} has a ready Pod on every node, controlplane included
+        type: kubectl
+        run: n=$(kubectl get nodes --no-headers | wc -l | tr -d ' '); s=$(kubectl -n ${Q1_NS} get daemonset ${Q1_DS} -o jsonpath='{.status.desiredNumberScheduled}/{.status.numberReady}'); [ "$s" = "$n/$n" ] && echo everywhere || echo "$s of $n nodes"
+        expect: { equals: everywhere }
+        weight: 3
+        retrySeconds: 90
+      - id: q1-current
+        description: every Pod of ${Q1_DS} runs its current template, and template changes roll out on their own
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get daemonset ${Q1_DS} -o jsonpath='{.spec.updateStrategy.type} {.status.updatedNumberScheduled}/{.status.desiredNumberScheduled}'
+        expect: { matches: "^RollingUpdate ([1-9][0-9]*)/\\1$" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-spec
+        description: ${Q1_DS} keeps image nginx:1.27-alpine, its resource requests and a readiness probe
+        type: kubectl
+        run: c='{.spec.template.spec.containers[0]'; echo "$(kubectl -n ${Q1_NS} get daemonset ${Q1_DS} -o jsonpath="$c.image} $c.resources.requests.cpu} $c.resources.requests.memory}") $([ -n "$(kubectl -n ${Q1_NS} get daemonset ${Q1_DS} -o jsonpath="$c.readinessProbe}")" ] && echo readiness)"
+        expect: { equals: nginx:1.27-alpine 10m 16Mi readiness }
+        weight: 1
+      - id: q1-control-plane-taint
+        description: controlplane keeps its NoSchedule taint
+        type: kubectl
+        run: kubectl get node controlplane -o jsonpath='{.spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].effect}'
+        expect: { equals: NoSchedule }
+        weight: 1
+      - id: q1-others
+        description: every other DaemonSet of ${Q1_NS} still runs all its Pods
+        type: kubectl
+        run: ok=yes; for d in $(cat /var/tmp/cka-q1.others); do r=$(kubectl -n ${Q1_NS} get daemonset "$d" -o jsonpath='{.status.numberReady}' 2>/dev/null); w=$(kubectl -n ${Q1_NS} get daemonset "$d" -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null); [ -n "$w" ] && [ "$r" = "$w" ] || ok=no; done; echo $ok
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-same-daemonset
+        description: ${Q1_DS} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get daemonset ${Q1_DS} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q1.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get daemonset ${Q1_DS}: compare DESIRED with the number of nodes, and READY and UP-TO-DATE with DESIRED."
+      - kubectl -n ${Q1_NS} get pods -l app=${Q1_DS} -o wide shows which nodes have a Pod; kubectl -n ${Q1_NS} describe pod <pod> says why one is Pending, not ready or failing.
+      - "kubectl describe node <node> | grep Taints, then kubectl -n ${Q1_NS} get daemonset ${Q1_DS} -o yaml: tolerations, affinity, ports and the update strategy decide where Pods may run and when they are replaced."
+      - kubectl -n ${Q1_NS} rollout status daemonset/${Q1_DS} and kubectl -n ${Q1_NS} rollout history daemonset/${Q1_DS} show whether the Pods run the current template.
+    recipe: { category: daemonsets }

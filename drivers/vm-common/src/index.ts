@@ -45,6 +45,18 @@ const SYNC_AND_QUIET =
   'chronyc -a makestep >/dev/null 2>&1; ' +
   'systemctl disable --now apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1; ' +
   'systemctl stop --no-block apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1; true';
+/**
+ * Images built before node-prep.sh set it leave containerd's default sandbox image (pause:3.10.1 for
+ * containerd 2.2), which no snapshot carries, so a kubeadm init on a bare snapshot waits on
+ * registry.k8s.io for every Pod sandbox. Switches to kubeadm's pause image when the node already has it.
+ */
+const ALIGN_SANDBOX = `command -v kubeadm >/dev/null && [ -f /etc/containerd/config.toml ] || exit 0
+pause=$(kubeadm config images list --kubernetes-version "$(kubeadm version -o short)" 2>/dev/null | grep '/pause:') || exit 0
+grep -qE "^ *sandbox(_image)? = ['\\"]$pause['\\"]" /etc/containerd/config.toml && exit 0
+crictl inspecti "$pause" >/dev/null 2>&1 || { echo "$pause is not on this node; leaving containerd as it is"; exit 0; }
+sed -i -E "s#^( *)sandbox(_image)? = .*#\\1sandbox\\2 = '$pause'#" /etc/containerd/config.toml
+systemctl restart containerd
+echo "sandbox image set to $pause"`;
 const READY_TIMEOUT_S = 240;
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -255,7 +267,7 @@ export abstract class VmLabDriver implements Driver {
       this.installSessionKey(sessionId),
       this.fetchKubeconfig(sessionId),
       this.writeHosts(sessionId),
-      isCluster ? this.copyIn(sessionId, 'controlplane', this.opts.readyScriptPath, READY_BIN) : Promise.resolve(),
+      isCluster ? this.copyIn(sessionId, 'controlplane', this.opts.readyScriptPath, READY_BIN) : this.alignSandbox(sessionId),
     ]);
     lap('setup');
     if (!isCluster) return;
@@ -272,6 +284,17 @@ export abstract class VmLabDriver implements Driver {
       throw new DriverError(`The cluster did not become ready within ${READY_TIMEOUT_S}s after restore.`, (r.stdout || r.stderr).trim());
     }
     lap('cluster');
+  }
+
+  /** Runs ALIGN_SANDBOX on every node. A failure only warns: the snapshot's own config may still work. */
+  protected async alignSandbox(sessionId: string): Promise<void> {
+    await Promise.all(
+      NODES.map(async (n) => {
+        const r = await this.exec(sessionId, n, ALIGN_SANDBOX, { timeoutMs: 60_000 }).catch((e: Error) => ({ exitCode: -1, stdout: '', stderr: e.message }));
+        if (r.exitCode !== 0) this.log('warn', 'could not align the containerd sandbox image', { sessionId, node: n, output: tail(r.stderr || r.stdout) });
+        else if (r.stdout.trim()) this.log('info', r.stdout.trim(), { sessionId, node: n });
+      }),
+    );
   }
 
   protected checkIps(ips: Record<string, string[]>): void {

@@ -1,0 +1,58 @@
+id: quick-lab-6ho5db
+title: "Quick lab: StatefulSets and DaemonSets"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 7
+points: 6
+tags: [ statefulset, daemonset, headless, dns, tolerations, volumeclaimtemplates, partition, hostpath, downward-api, maxsurge ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ stateful, data-tier, quorum, records, kv-store, agents, fleet, node-ops, cluster-svc, storage-ops ] }
+  Q1_STS: { oneOf: [ web, db, cache, kv, queue, ledger, search, session ] }
+  Q1_DS: { oneOf: [ node-probe, log-agent, net-watch, disk-agent, metrics-agent, trace-agent, node-exporter, audit-agent ] }
+tasks:
+  - id: q1
+    title: Scale StatefulSet ${Q1_STS}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-headless
+        description: Service ${Q1_STS}-hl is headless and selects the StatefulSet's Pods
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get service ${Q1_STS}-hl -o jsonpath='{.spec.clusterIP}/{.spec.selector.app}'
+        expect: { equals: "None/${Q1_STS}" }
+        weight: 1
+      - id: q1-scaled
+        description: StatefulSet ${Q1_STS} has 4 of 4 replicas ready and still uses ${Q1_STS}-hl
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get statefulset ${Q1_STS} -o jsonpath='{.spec.serviceName}/{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: "${Q1_STS}-hl/4/4" }
+        weight: 2
+        retrySeconds: 90
+      - type: ssh
+        node: controlplane
+        id: q1-fqdn
+        description: /opt/course/sts/fqdn holds the fully qualified DNS name of ${Q1_STS}-3
+        run: tr -d '[:space:]' < /opt/course/sts/fqdn 2>/dev/null | sed 's/\.$//'
+        expect: { equals: "${Q1_STS}-3.${Q1_STS}-hl.${Q1_NS}.svc.cluster.local" }
+        weight: 1
+      - id: q1-resolves
+        description: that name resolves to the IP of Pod ${Q1_STS}-3 inside the cluster
+        type: kubectl
+        run: ip=$(kubectl -n ${Q1_NS} get pod ${Q1_STS}-3 -o jsonpath='{.status.podIP}'); [ -n "$ip" ] && kubectl -n ${Q1_NS} exec ${Q1_STS}-0 -- nslookup ${Q1_STS}-3.${Q1_STS}-hl.${Q1_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 2
+        retrySeconds: 60
+    hints:
+      - "kubectl -n ${Q1_NS} get service ${Q1_STS}-hl: does it have a ClusterIP?"
+      - "spec.clusterIP cannot be changed in place: delete the Service and create it again; the StatefulSet does not need to be recreated."
+      - Each StatefulSet Pod gets the DNS name <pod>.<service>.<namespace>.svc.cluster.local, here ${Q1_STS}-0.${Q1_STS}-hl.${Q1_NS}.svc.cluster.local, but only when spec.serviceName names a headless Service that selects it.
+      - "A headless Service has clusterIP: None, so its DNS name returns the Pod IPs instead of one virtual IP."
+    recipe: { builder: workload-controllers, parts: [] }

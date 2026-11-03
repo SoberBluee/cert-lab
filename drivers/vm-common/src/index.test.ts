@@ -64,6 +64,7 @@ describe('VmLabDriver', () => {
     assert.ok(scripts.some((s) => s.includes('cka-lab-session') && s.includes('authorized_keys')));
     assert.ok(scripts.some((s) => s.includes("'10.0.0.12 worker-1 # cka-lab'")));
     assert.ok(scripts.some((s) => s.startsWith("export KUBECONFIG='/etc/kubernetes/admin.conf'\n/usr/local/bin/cka-cluster-ready")));
+    assert.ok(!scripts.some((s) => s.includes('systemctl restart containerd')), 'a running cluster keeps its containerd');
     assert.ok(progress.includes('waiting: 2/3 nodes Ready'));
     assert.match(progress.at(-1)!, /^Lab restored in \d+s \(boot/);
     assert.equal(readFileSync(join(dataDir, 'session', 'kubeconfig'), 'utf8'), 'server: https://10.0.0.11:6443\n');
@@ -80,6 +81,21 @@ describe('VmLabDriver', () => {
     await driver.restoreSnapshot('s1', 'bare');
     assert.ok(!driver.calls.some((c) => c.startsWith('copy')));
     assert.ok(!driver.scripts.some((s) => s.script.includes('cka-cluster-ready')));
+  });
+
+  it("points containerd at kubeadm's pause image on every node of a bare restore", async () => {
+    const { driver } = setup();
+    await driver.restoreSnapshot('s1', 'bare');
+    const aligned = driver.scripts.filter((s) => s.script.includes('kubeadm config images list') && s.script.includes('systemctl restart containerd'));
+    assert.deepEqual(aligned.map((s) => s.node).sort(), ['controlplane', 'worker-1', 'worker-2']);
+  });
+
+  it('still restores when the sandbox image cannot be aligned', async () => {
+    const { driver } = setup();
+    const exec = driver['rawExec'].bind(driver);
+    driver['rawExec'] = async (node: string, script: string, t: number) =>
+      script.includes('kubeadm config images list') ? { exitCode: 1, stdout: '', stderr: 'boom' } : exec(node, script, t);
+    await driver.restoreSnapshot('s1', 'bare');
   });
 
   it('fails readably when a node IP changed after restore', async () => {
