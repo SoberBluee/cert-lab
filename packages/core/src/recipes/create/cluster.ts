@@ -226,7 +226,7 @@ export const etcdRestoreBuilder: Builder = {
     ctx.bullets.push(
       `restore the snapshot into the new data directory \`${DATADIR}\``,
       `make the etcd static Pod on \`controlplane\` use \`${DATADIR}\``,
-      'afterwards the API server answers, and the control plane Pods run Ready',
+      `afterwards the API server answers, \`kubectl\` no longer lists \`after-backup\`, and the control plane Pods run Ready`,
       'restoring discards everything created after the snapshot, so do this question before the others',
     );
     ctx.setup.push(`${createNs(NS)}
@@ -258,11 +258,20 @@ kubectl -n "${NS}" create configmap after-backup --from-literal=state=lost --dry
     ctx.solution.push(`etcdutl snapshot restore "${SNAPSHOT}" --data-dir "${DATADIR}"
 sed -i -E "s#path: /var/lib/etcd\\$#path: ${DATADIR}#" /etc/kubernetes/manifests/etcd.yaml
 grep -q -- "path: ${DATADIR}" /etc/kubernetes/manifests/etcd.yaml
+# Once etcd runs from the restored directory, restart the API server: it caches what it read from
+# etcd, does not notice the restore, and would go on listing after-backup.
+for _ in $(seq 1 60); do
+  etcd=$(crictl ps --name '^etcd$' -q 2>/dev/null | head -1)
+  [[ -n "$etcd" ]] && crictl inspect "$etcd" 2>/dev/null | grep -q -- "${DATADIR}" && break
+  sleep 2
+done
+crictl ps --name kube-apiserver -q | xargs -r crictl stop
 ${waitControlPlane}
 [[ "$(${readyz})" == ok ]]`);
     ctx.hints.push(
       'etcdutl snapshot restore <file> --data-dir <dir> writes a new data directory; it does not need the endpoint or certificates.',
       'In /etc/kubernetes/manifests/etcd.yaml, change the hostPath of the etcd-data volume. The kubelet recreates the Pod, and the API server can take a minute or two to answer again.',
+      'The API server caches what it read from etcd and does not notice a restore: lists stay stale until it restarts. Once etcd runs from the new directory, crictl stop its container and the kubelet starts a fresh one.',
     );
     return ctx;
   },

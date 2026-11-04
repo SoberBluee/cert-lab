@@ -1,6 +1,6 @@
 id: etcd-restore
 title: Restore etcd from a snapshot
-summary: Take a snapshot, change the cluster, restore the snapshot into a new data directory and point the etcd static Pod at it.
+summary: Take a snapshot, change the cluster, restore the snapshot into a new data directory, point the etcd static Pod at it and restart the API server.
 topic: etcd
 estimatedMinutes: 12
 setup:
@@ -58,10 +58,42 @@ steps:
       node: controlplane
       run: grep -cE 'path:\s*/var/lib/etcd-restore/?\s*$' /etc/kubernetes/manifests/etcd.yaml || true
       expect: { gte: 1 }
-  - id: wait
-    title: Wait for etcd and the API server to come back
+  - id: etcd-running
+    title: Wait for etcd to run from the restored directory
     explain: |
-      etcd restarts, and the API server reconnects to it. `kubectl` errors for a minute or so; repeat the command until it lists the nodes. `sudo crictl ps` shows the containers meanwhile.
+      The kubelet replaces the etcd Pod within about 20 seconds of the file changing. `crictl` talks to the container runtime directly, so it works while `kubectl` does not. Repeat until the CREATED time of the etcd container is only seconds old.
+    command: sudo crictl ps --name etcd
+    match: '^crictl ps\b.*etcd'
+    check:
+      id: etcd-restored-dir
+      description: etcd runs from /var/lib/etcd-restore
+      type: ssh
+      node: controlplane
+      run: |-
+        id=$(crictl ps -q --name '^etcd$' | head -1); [ -n "$id" ] && crictl inspect "$id" | grep -q /var/lib/etcd-restore && echo restored || echo waiting
+      expect: { equals: restored }
+      retrySeconds: 60
+  - id: restart-apiserver
+    title: Restart the API server
+    explain: |
+      The API server keeps an in-memory cache of what it read from etcd, and it does not notice a restore. It reconnects to the new etcd and answers again, but its lists keep showing objects that are no longer in etcd. Stopping its container makes the kubelet start a fresh one, which reads everything from the restored etcd.
+
+      Do this after etcd runs from the restored directory: a restart before that only reloads the old data. The Kubernetes docs stop the API servers before a restore and start them afterwards, which has the same effect.
+    command: sudo crictl stop $(sudo crictl ps -q --name kube-apiserver)
+    match: '^crictl stop\b'
+    check:
+      id: apiserver-fresh
+      description: kube-apiserver started after etcd
+      type: ssh
+      node: controlplane
+      run: |-
+        c() { crictl ps --name "$1" -o json | jq -r '.containers[0].createdAt // 0'; }; [ "$(c kube-apiserver)" -gt "$(c '^etcd$')" ] && echo fresh || echo stale
+      expect: { equals: fresh }
+      retrySeconds: 60
+  - id: wait
+    title: Wait for the API server to come back
+    explain: |
+      The new API server reads everything from etcd before it answers. `kubectl` errors for a minute or so; repeat the command until it lists the nodes. `sudo crictl ps` shows the containers meanwhile.
     command: kubectl get nodes
     match: '^kubectl get (no|node|nodes)\b'
     check:
@@ -74,13 +106,12 @@ steps:
   - id: verify
     title: Confirm the cluster is back to the snapshot
     explain: |
-      The Deployment created after the backup is gone: this command now fails with **NotFound**, which is what a successful restore looks like.
-    command: kubectl get deployment after-backup
-    match: '^kubectl get (deploy|deployment|deployments)\b.*after-backup'
-    allowFailure: true
+      The Deployment created after the backup is gone. Check with a list: the API server answers lists from its cache, so without the restart this would still show `after-backup`, even though `kubectl get deployment after-backup` already says **NotFound**.
+    command: kubectl get deployments
+    match: '^kubectl get (deploy|deployment|deployments)\b'
     check:
       id: deployment-gone
-      description: Deployment after-backup no longer exists
+      description: Deployment after-backup is no longer listed
       type: kubectl
-      run: kubectl get deployment after-backup -o name 2>&1 || true
-      expect: { contains: NotFound }
+      run: kubectl get deployments -o name
+      expect: { notContains: after-backup }

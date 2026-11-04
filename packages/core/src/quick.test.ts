@@ -622,6 +622,17 @@ describe('Quick Create', () => {
     assert.deepEqual(def.solution, [{ node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 }]);
   });
 
+  it('etcd restore restarts the API server once etcd runs the restored data, or lists stay stale', () => {
+    const restore = BUILDERS.find((b) => b.id === 'etcd-restore')!;
+    const { bundle } = build([createQ(restore, [], [])]).build;
+    const script = bundle.files.find((f) => f.path === 'setup/q1-solution.sh')!.content;
+    const at = (s: string) => script.indexOf(s);
+    assert.ok(at('snapshot restore') >= 0 && at('snapshot restore') < at('crictl inspect'), script);
+    assert.ok(at('crictl inspect') < at('xargs -r crictl stop'), script);
+    assert.ok(at('xargs -r crictl stop') < script.lastIndexOf('readyz'), script);
+    assert.match(bundle.files.find((f) => f.path === 'tasks/q1.md')!.content, /no longer lists `after-backup`/);
+  });
+
   it('a builder without manifests applies nothing', () => {
     const backup = BUILDERS.find((b) => b.id === 'etcd-backup')!;
     const out = composeCreate(backup, defaults(backup.fields), [], []);
