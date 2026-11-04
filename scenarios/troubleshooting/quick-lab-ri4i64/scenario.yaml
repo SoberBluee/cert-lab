@@ -1,0 +1,71 @@
+id: quick-lab-ri4i64
+title: "Quick lab: StatefulSet"
+domain: troubleshooting
+difficulty: 2
+estimatedMinutes: 9
+points: 8
+tags: [ troubleshooting, statefulset, headless, dns, volumeclaimtemplates ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ databases, data, state, persistence, brokers, storage-tier, backend-data, clusters, replicas, ledger-ns ] }
+  Q1_STS: { oneOf: [ pg, redis, kafka, zk, mongo, rabbit, elastic, cassandra, consul, minio ] }
+  Q1_FAULT: { oneOf: [ headless-clusterip, service-selector, servicename-mismatch, claim-class-typo, readiness-forced-rollback ], hidden: true }
+tasks:
+  - id: q1
+    title: StatefulSet ${Q1_STS} is not healthy
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: ${Q1_STS} runs 3 of 3 ready replicas, governed by ${Q1_STS}-hl
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get statefulset ${Q1_STS} -o jsonpath='{.spec.serviceName}/{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: "${Q1_STS}-hl/3/3" }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-headless
+        description: Service ${Q1_STS}-hl is headless and selects the StatefulSet's Pods
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get service ${Q1_STS}-hl -o jsonpath='{.spec.clusterIP}/{.spec.selector.app}'
+        expect: { equals: "None/${Q1_STS}" }
+        weight: 1
+      - id: q1-dns
+        description: ${Q1_STS}-2.${Q1_STS}-hl.${Q1_NS}.svc.cluster.local resolves to the IP of Pod ${Q1_STS}-2
+        type: kubectl
+        run: ip=$(kubectl -n ${Q1_NS} get pod ${Q1_STS}-2 -o jsonpath='{.status.podIP}'); [ -n "$ip" ] && kubectl -n ${Q1_NS} exec ${Q1_STS}-0 -- nslookup ${Q1_STS}-2.${Q1_STS}-hl.${Q1_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-claims
+        description: every Pod has its own Bound claim of StorageClass local-path, mounted at /data
+        type: kubectl
+        run: echo "$(kubectl -n ${Q1_NS} get pvc data-${Q1_STS}-0 data-${Q1_STS}-1 data-${Q1_STS}-2 -o jsonpath='{range .items[*]}{.status.phase}/{.spec.storageClassName} {end}' 2>/dev/null)$(kubectl -n ${Q1_NS} get statefulset ${Q1_STS} -o jsonpath='{.spec.template.spec.containers[0].volumeMounts[?(@.name=="data")].mountPath}')"
+        expect: { equals: Bound/local-path Bound/local-path Bound/local-path /data }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-spec
+        description: ${Q1_STS} keeps image nginx:1.27-alpine and a readiness probe
+        type: kubectl
+        run: c='{.spec.template.spec.containers[0]'; echo "$(kubectl -n ${Q1_NS} get statefulset ${Q1_STS} -o jsonpath="$c.image}") $([ -n "$(kubectl -n ${Q1_NS} get statefulset ${Q1_STS} -o jsonpath="$c.readinessProbe}")" ] && echo readiness)"
+        expect: { equals: nginx:1.27-alpine readiness }
+        weight: 1
+      - id: q1-data-kept
+        description: claim data-${Q1_STS}-0 was not deleted once Bound
+        type: kubectl
+        run: r=$(cat /var/tmp/cka-q1.uid); { [ "$r" = none ] || [ "$(kubectl -n ${Q1_NS} get pvc data-${Q1_STS}-0 -o jsonpath='{.metadata.uid}' 2>/dev/null)" = "$r" ]; } && echo kept || echo deleted
+        expect: { equals: kept }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get statefulset,pods,pvc -o wide: how many Pods exist, are they ready, and are their claims Bound? A StatefulSet creates its Pods one at a time, each only once the one before it is ready."
+      - "kubectl -n ${Q1_NS} describe pod <pod> and kubectl -n ${Q1_NS} describe pvc <claim>: the Events say why a Pod is Pending or not ready, or why a claim waits."
+      - "From inside a Pod: kubectl -n ${Q1_NS} exec ${Q1_STS}-0 -- nslookup ${Q1_STS}-0.${Q1_STS}-hl.${Q1_NS}.svc.cluster.local. Per-Pod names need a headless Service with endpoints, named by the StatefulSet's spec.serviceName."
+      - "kubectl explain statefulset.spec: serviceName, podManagementPolicy and volumeClaimTemplates cannot be changed on an existing StatefulSet. Delete it (its claims stay) and create it again."
+    recipe: { category: statefulsets }
