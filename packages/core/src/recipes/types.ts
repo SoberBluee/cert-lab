@@ -13,6 +13,9 @@ interface CheckBase {
  * How much scheduling capacity a question takes away once it is set up: a worker ('node', e.g. cordoned,
  * tainted or NotReady), or room for every new Pod ('cluster', e.g. a broken scheduler). Other questions'
  * setups start Pods, so these are set up after them, scheduler-wide ones last, and fixed before them.
+ *
+ * A lab holds at most one 'node' question: two share a setup stage, so the later one is set up with a worker
+ * already out, and its rollouts hang, or it lands on that same worker.
  */
 export type SchedulingBlock = 'node' | 'cluster';
 

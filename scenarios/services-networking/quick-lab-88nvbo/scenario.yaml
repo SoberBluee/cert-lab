@@ -1,0 +1,144 @@
+id: quick-lab-88nvbo
+title: "Quick lab: Random"
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 35
+points: 20
+tags: [ troubleshooting, networkpolicy, dns, layered, statefulset, daemonset, headless, tolerations, volumeclaimtemplates, partition, hostpath, downward-api, maxsurge, ingress, gateway-api, httproute ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ secure, payments, vault, finance, pci, locked, private, restricted, zerotrust, segment ] }
+  Q1_APP: { oneOf: [ api, ledger, billing, auth, wallet, settle, clearing, risk, fraud, treasury ] }
+  Q1_FAULT: { oneOf: [ dns-egress-port, dns-namespace-selector, dns-policy-deleted, dns-udp-only, dns-pod-selector ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ ingress-port, ingress-from-label, ingress-namespace-and, ingress-pod-selector, ingress-port-443 ], hidden: true }
+  Q2_NS: { oneOf: [ stateful, data-tier, quorum, records, kv-store, agents, fleet, node-ops, cluster-svc, storage-ops ] }
+  Q2_STS: { oneOf: [ web, db, cache, kv, queue, ledger, search, session ] }
+  Q2_DS: { oneOf: [ node-probe, log-agent, net-watch, disk-agent, metrics-agent, trace-agent, node-exporter, audit-agent ] }
+  Q3_NS: { oneOf: [ shop, media, portal, storefront, edge, cdn, public, www, gateway, ingress-lab ] }
+  Q3_APP: { oneOf: [ web, store, blog, shop, api, assets, docs, portal, landing, media ] }
+  Q3_FAULT: { oneOf: [ route-parent, route-section, route-backend-port, route-parent-namespace, route-backend-name, route-path-prefix, route-weight-zero, route-filter-redirect ], hidden: true }
+  Q3_FAULT_2: { oneOf: [ controller-down, controller-nodeport, ingressclass-controller ], hidden: true }
+tasks:
+  - id: q1
+    title: Frontend cannot reach ${Q1_APP}
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 800
+        lane: q1
+    checks:
+      - id: q1-reachable
+        description: client gets the nginx page from http://${Q1_APP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- wget -qO- -T 3 http://${Q1_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-stranger-blocked
+        description: stranger still cannot reach ${Q1_APP}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec stranger -- wget -qO- -T 3 http://${Q1_APP} >/dev/null 2>&1 && echo open || echo blocked
+        expect: { equals: blocked }
+        weight: 2
+      - id: q1-default-deny
+        description: default-deny still selects every Pod for ingress and egress
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get networkpolicy default-deny -o jsonpath='{.spec.podSelector.matchLabels}|{.spec.policyTypes[*]}|{.spec.ingress}{.spec.egress}'
+        expect: { equals: "|Ingress Egress|" }
+        weight: 1
+      - id: q1-ingress-rule
+        description: ${Q1_APP}-ingress allows role=frontend on port 80
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get networkpolicy ${Q1_APP}-ingress -o jsonpath='{.spec.ingress[0].from[0].podSelector.matchLabels.role} {.spec.ingress[0].ports[0].port}'
+        expect: { equals: frontend 80 }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get networkpolicy, then kubectl -n ${Q1_NS} describe networkpolicy <name> for each: which Pods does it select, and what does it let in or out?"
+      - "Separate name resolution from the connection: kubectl -n ${Q1_NS} exec client -- nslookup ${Q1_APP}, then wget the Service IP and a Pod IP directly."
+      - A connection needs egress allowed at the client and ingress allowed at the server, on the port the Pod listens on. Check both ends.
+      - "Compare every selector with the real labels: kubectl get pods -A --show-labels and kubectl get ns --show-labels."
+    recipe: { category: netpol }
+  - id: q2
+    title: DaemonSet ${Q2_DS} on edge nodes
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - id: q2-spec
+        description: ${Q2_DS} runs httpd:2.4-alpine with label app=${Q2_DS}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get daemonset ${Q2_DS} -o jsonpath='{.spec.template.metadata.labels.app} {.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q2_DS} httpd:2.4-alpine" }
+        weight: 2
+      - id: q2-label
+        description: worker-2 is the only node labelled node-type=edge
+        type: kubectl
+        run: kubectl get nodes -l node-type=edge -o jsonpath='{.items[*].metadata.name}'
+        expect: { equals: worker-2 }
+        weight: 1
+      - id: q2-placement
+        description: ${Q2_DS} wants exactly one Pod, and it runs ready on worker-2
+        type: kubectl
+        run: echo "$(kubectl -n ${Q2_NS} get daemonset ${Q2_DS} -o jsonpath='{.status.desiredNumberScheduled}/{.status.numberReady}') $(kubectl -n ${Q2_NS} get pods -l app=${Q2_DS} --field-selector status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | xargs)"
+        expect: { equals: 1/1 worker-2 }
+        weight: 3
+        retrySeconds: 60
+    hints:
+      - A nodeSelector (or a required nodeAffinity) in the Pod template limits a DaemonSet to the nodes that match it.
+      - kubectl label node <node> key=value adds a label; kubectl get nodes --show-labels or -L key shows them.
+      - "kubectl -n ${Q2_NS} get daemonset ${Q2_DS}: DESIRED counts the nodes the DaemonSet targets."
+    recipe: { builder: workload-controllers, parts: [] }
+  - id: q3
+    title: ${Q3_APP} unreachable through the ingress
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        timeoutSeconds: 800
+    setupStage: 1
+    checks:
+      - id: q3-ingress-serves
+        description: www.${Q3_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: www.${Q3_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q3-route-serves
+        description: api.${Q3_NS}.lab returns the nginx welcome page
+        type: kubectl
+        run: 'curl -s -m 5 -H "Host: api.${Q3_NS}.lab" http://controlplane:30080/'
+        expect: { contains: Welcome to nginx }
+        weight: 2
+        retrySeconds: 30
+      - id: q3-spec-ingress
+        description: Ingress ${Q3_APP} still serves host www.${Q3_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get ingress ${Q3_APP} -o jsonpath='{.spec.rules[0].host}'
+        expect: { equals: "www.${Q3_NS}.lab" }
+        weight: 1
+      - id: q3-spec-route
+        description: HTTPRoute ${Q3_APP} still serves host api.${Q3_NS}.lab
+        type: kubectl
+        run: kubectl -n ${Q3_NS} get httproute ${Q3_APP} -o jsonpath='{.spec.hostnames[0]}'
+        expect: { equals: "api.${Q3_NS}.lab" }
+        weight: 1
+      - id: q3-spec-backend
+        description: Deployment and Service ${Q3_APP} are unchanged
+        type: kubectl
+        run: echo $(kubectl -n ${Q3_NS} get deployment ${Q3_APP} -o jsonpath='{.spec.replicas} {.spec.template.metadata.labels.app}') $(kubectl -n ${Q3_NS} get svc ${Q3_APP} -o jsonpath='{.spec.selector.app} {.spec.ports[0].port}')
+        expect: { equals: "2 ${Q3_APP} ${Q3_APP} 80" }
+        weight: 1
+    hints:
+      - "curl -v both hosts: Traefik answers 404 when no router matches the request, and 5xx when a router matches but its backend is broken."
+      - "kubectl -n ${Q3_NS} describe ingress ${Q3_APP} and kubectl -n ${Q3_NS} describe httproute ${Q3_APP}: read the Status conditions and the Events, then compare every name, host, path and port with what really exists."
+      - kubectl get ingressclass,gatewayclass and kubectl get gateway -A -o yaml show which classes, Gateways and listeners exist and what they accept.
+      - "When every host fails at once, suspect the controller rather than the objects: kubectl -n traefik get deploy,pods,svc, and the controller each IngressClass names."
+    recipe: { category: ingress }

@@ -143,6 +143,7 @@ const STUBS = [
   'dpkg-deb',
   'sysctl',
   'modprobe',
+  'tac',
 ];
 
 /** Stubs that must print something for the scripts that read them. */
@@ -177,7 +178,8 @@ function runWithStubs(bundle: ScenarioBundle, vars: Record<string, string>): str
   }
   for (const f of bundle.files.filter((x) => x.path.endsWith('.sh'))) {
     const file = join(dir, 'script.sh');
-    writeFileSync(file, f.content.replace('set -euo pipefail', 'set -u'));
+    // State files go to this run's folder: /var/tmp on this machine may hold another user's from an earlier run.
+    writeFileSync(file, f.content.replace('set -euo pipefail', 'set -u').replaceAll('/var/tmp/cka-q', `${dir}/cka-q`));
     const r = spawnSync('bash', [file], { env: { ...vars, PATH: `${bin}:${process.env.PATH}`, CKA_NODE: 'controlplane' } });
     const stderr = r.stderr.toString();
     assert.doesNotMatch(stderr, /unbound variable|syntax error|command not found/, `${f.path}: ${stderr}`);
@@ -463,15 +465,15 @@ describe('Troubleshoot track', () => {
   });
 
   it('sets up questions that start Pods before those that take workers away, and a broken scheduler last', () => {
-    // The mix of a mock whose Service question could not start its Pods: a worker tainted, the other drained.
-    const { build: res, issues } = build([troubleQ('controllers'), troubleQ('unschedulable'), troubleQ('services'), troubleQ('drain')]);
+    // The mix of a mock whose Service question could not start its Pods.
+    const { build: res, issues } = build([troubleQ('controllers'), troubleQ('unschedulable'), troubleQ('services')]);
     assert.deepEqual(issues, []);
     const stages = Object.fromEntries(scenarioOf(res.bundle).tasks.map((t: { id: string; setupStage?: number }) => [t.id, t.setupStage ?? 0]));
-    assert.deepEqual(stages, { q1: 3, q2: 2, q3: 1, q4: 2 });
-    // Fixed the other way round: the scheduler first, then the workers, then the Service.
+    assert.deepEqual(stages, { q1: 3, q2: 2, q3: 1 });
+    // Fixed the other way round: the scheduler first, then the worker, then the Service.
     const solution = res.bundle.files.find((f) => f.path === 'solution.sh')!.content;
     const at = (n: number) => solution.indexOf(`# Question ${n}:`);
-    assert.ok(at(1) < at(2) && at(2) < at(4) && at(4) < at(3), solution.split('\n').filter((l) => l.startsWith('# Question')).join(', '));
+    assert.ok(at(1) < at(2) && at(2) < at(3), solution.split('\n').filter((l) => l.startsWith('# Question')).join(', '));
   });
 
   it('a control plane question alone still lists its solution step', () => {
@@ -498,6 +500,26 @@ describe('Troubleshoot track', () => {
     });
     assert.equal(res, undefined);
     assert.match(errors.join('\n'), /Only one DNS question per lab/);
+  });
+});
+
+describe('Node reports', () => {
+  for (const id of ['nodes', 'nodeconfig', 'degraded']) {
+    it(`${id}: every fault records its cause at setup and writes it in its solution`, () => {
+      const category = CATEGORIES.find((c) => c.id === id)!;
+      const vars = Object.fromEntries([...category.fields.map((f) => [f.key, f.default]), ['NODE', 'worker-1'], ['FAULT', '']]);
+      for (const fault of category.faults(vars, '/tmp/state')) {
+        const cause = /printf '%s\\n' ([a-z-]+) >> "\/tmp\/state\.cause"/.exec(fault.break ?? '')?.[1];
+        assert.ok(cause, `${fault.id} records no cause`);
+        assert.ok(fault.fix?.includes(`echo ${cause} >> /opt/course/${id}/cause.txt`), `${fault.id} does not report ${cause}`);
+      }
+    });
+  }
+
+  it('the task names every word a fault can record', () => {
+    const { build: res } = build([troubleQ('degraded')]);
+    const text = res.bundle.files.find((f) => f.path === 'tasks/q1.md')?.content ?? '';
+    for (const word of ['kubelet', 'containerd', 'cni', 'firewall', 'disk', 'clock', 'node-registration', 'scheduling']) assert.ok(text.includes(`\`${word}\``), word);
   });
 });
 
@@ -569,9 +591,9 @@ describe('Hidden variables', () => {
 
 describe('Quick Create', () => {
   it('combines both tracks into one lab', () => {
-    // The control plane category is the lab's one API-breaking question.
-    const combinable = BUILDERS.filter((b) => !b.solo && !b.breaksApi);
-    const categories = CATEGORIES.filter((c) => !c.breaksApi || c.id === 'controlplane');
+    // The control plane category is the lab's one API-breaking question, and Nodes its one that takes a worker away.
+    const combinable = BUILDERS.filter((b) => !b.solo && !b.breaksApi && b.blocksScheduling !== 'node');
+    const categories = CATEGORIES.filter((c) => (!c.breaksApi || c.id === 'controlplane') && (c.blocksScheduling !== 'node' || c.id === 'nodes'));
     const qs = [...combinable.map((b, i) => createQ(b, [], [], i % 2 === 1)), ...categories.map((c) => troubleQ(c.id))];
     const { build: res, issues } = build(qs);
     assert.deepEqual(issues, []);
@@ -622,15 +644,67 @@ describe('Quick Create', () => {
     assert.deepEqual(def.solution, [{ node: 'controlplane', script: 'setup/q1-solution.sh', timeoutSeconds: 900 }]);
   });
 
-  it('etcd restore restarts the API server once etcd runs the restored data, or lists stay stale', () => {
-    const restore = BUILDERS.find((b) => b.id === 'etcd-restore')!;
-    const { bundle } = build([createQ(restore, [], [])]).build;
-    const script = bundle.files.find((f) => f.path === 'setup/q1-solution.sh')!.content;
-    const at = (s: string) => script.indexOf(s);
-    assert.ok(at('snapshot restore') >= 0 && at('snapshot restore') < at('crictl inspect'), script);
-    assert.ok(at('crictl inspect') < at('xargs -r crictl stop'), script);
-    assert.ok(at('xargs -r crictl stop') < script.lastIndexOf('readyz'), script);
-    assert.match(bundle.files.find((f) => f.path === 'tasks/q1.md')!.content, /no longer lists `after-backup`/);
+  it('allows one question that takes a worker away per lab, across tracks', () => {
+    const infra = BUILDERS.find((b) => b.id === 'infra')!;
+    for (const questions of [
+      [troubleQ('nodes'), troubleQ('drain')],
+      [troubleQ('unschedulable'), troubleQ('degraded')],
+      [createQ(infra, [], []), troubleQ('nodeconfig')],
+    ]) {
+      const { build: res, errors } = buildQuickBundle({ id: 'bad', title: 'Bad', questions });
+      assert.equal(res, undefined);
+      assert.match(errors.join('\n'), /Only one question per lab can take a worker away, and questions 1, 2 all do/);
+    }
+  });
+
+  it('tells the wizard what takes a worker away', () => {
+    const { builders, categories } = recipeCatalog();
+    assert.deepEqual(builders.filter((b) => b.takesWorker).map((b) => b.id), ['infra']);
+    assert.deepEqual(categories.filter((c) => c.takesWorker).map((c) => c.id).sort(), ['degraded', 'drain', 'nodeconfig', 'nodes', 'unschedulable']);
+  });
+
+  describe('a fault that takes a worker away, in a category that otherwise does not', () => {
+    const pool = (res: { bundle: ScenarioBundle }, n: number): string[] => scenarioOf(res.bundle).variables[`Q${n}_FAULT`].oneOf;
+    const stageOf = (res: { bundle: ScenarioBundle }, n: number) => scenarioOf(res.bundle).tasks[n - 1].setupStage ?? 0;
+
+    it('leaves the pool for a question that always does, wherever that question comes', () => {
+      for (const [n, questions] of [
+        [1, [troubleQ('daemonsets'), troubleQ('nodes')]],
+        [2, [troubleQ('nodes'), troubleQ('daemonsets')]],
+      ] as const) {
+        const { build: res, issues } = build([...questions]);
+        assert.deepEqual(issues, []);
+        assert.ok(!pool(res, n).includes('worker-taint'));
+        assert.ok(pool(res, n).includes('image-typo'));
+        // Without the fault it starts with the lab, before the worker is out.
+        assert.equal(stageOf(res, n), 0);
+      }
+    });
+
+    it('stays with the first of two questions that could roll it', () => {
+      const { build: res, issues } = build([troubleQ('daemonsets'), troubleQ('daemonsets')]);
+      assert.deepEqual(issues, []);
+      assert.ok(pool(res, 1).includes('worker-taint'));
+      assert.ok(!pool(res, 2).includes('worker-taint'));
+    });
+
+    it('stays in the pool of a lab that leaves the workers alone', () => {
+      const { build: res, issues } = build([troubleQ('daemonsets'), troubleQ('dns')]);
+      assert.deepEqual(issues, []);
+      assert.ok(pool(res, 1).includes('worker-taint'));
+    });
+
+    it('leaves every layer of a stacked question something to roll', () => {
+      const { build: res, issues } = build([{ ...troubleQ('daemonsets'), layers: 3 } as QuickQuestion, troubleQ('nodes')]);
+      assert.deepEqual(issues, []);
+      assert.equal(scenarioOf(res.bundle).tasks.length, 2);
+    });
+
+    it('is a clash when the question can roll nothing else', () => {
+      const { build: res, errors } = buildQuickBundle({ id: 'bad', title: 'Bad', questions: [troubleQ('daemonsets', ['worker-taint']), troubleQ('nodes')] });
+      assert.equal(res, undefined);
+      assert.match(errors.join('\n'), /take a worker away, and questions 1, 2 all do/);
+    });
   });
 
   it('a builder without manifests applies nothing', () => {
@@ -684,9 +758,10 @@ describe('Quick Create', () => {
     assert.match(ingressTask, /Ingress/);
     assert.doesNotMatch(ingressTask, /HTTPRoute|PriorityClass/);
 
-    const kubeletMd = build((kubelet.categories ?? []).map((c) => troubleQ(c.id, c.faults))).build.bundle.files.find((f) => f.path === 'solution.md')!.content;
-    assert.match(kubeletMd, /kubelet-stopped/);
-    assert.doesNotMatch(kubeletMd, /containerd-stopped|runtime-endpoint/);
+    // Each on its own: a lab holds one question that takes a worker away.
+    const kubeletMds = (kubelet.categories ?? []).map((c) => build([troubleQ(c.id, c.faults)]).build.bundle.files.find((f) => f.path === 'solution.md')!.content);
+    assert.match(kubeletMds[0], /kubelet-stopped/);
+    for (const md of kubeletMds) assert.doesNotMatch(md, /containerd-stopped|runtime-endpoint/);
 
     for (const topic of topics) {
       if (topic.group === 'create') {
@@ -847,7 +922,7 @@ describe('Task builders', () => {
   const taskBuilders = BUILDERS.filter((b) => b.fields[0]?.key === 'TASK');
 
   it('cover the curriculum gaps', () => {
-    assert.deepEqual(taskBuilders.map((b) => b.id).sort(), ['cluster-info', 'coredns', 'crds', 'dynamic-storage', 'gateway', 'infra', 'kubeconfig', 'kustomize', 'netops', 'observe', 'upgrade', 'workload-controllers', 'workload-ops']);
+    assert.deepEqual(taskBuilders.map((b) => b.id).sort(), ['audit', 'cluster-info', 'coredns', 'crds', 'dynamic-storage', 'gateway', 'infra', 'kubeconfig', 'kustomize', 'netops', 'observe', 'upgrade', 'workload-controllers', 'workload-ops', 'workload-patterns']);
   });
 
   for (const b of taskBuilders) {

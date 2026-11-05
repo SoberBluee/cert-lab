@@ -109,7 +109,7 @@ ${waitUnhealthy(NS, `app=${APP}`, 15)}
   // Quotas and LimitRanges refuse Pods at admission: they belong to Rejected Pods. These are the scheduler's.
   layers: [
     { name: 'what else runs in the namespace', faults: ['memory-hog', 'agent-anti-affinity'] },
-    { name: 'the Pod template', faults: ['node-affinity', 'priority-class', 'topology-spread-zone'] },
+    { name: 'the Pod template', faults: ['node-affinity', 'priority-class', 'topology-spread-zone', 'scheduler-name', 'node-name-gone', 'toleration-near-miss'] },
   ],
   faults: ({ NS, APP }) => [
     {
@@ -173,6 +173,33 @@ kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"template":{"spec":{"a
       wait: waitReady(NS, APP),
       explain:
         'The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`).',
+    },
+    {
+      id: 'scheduler-name',
+      label: 'The Pods ask for a scheduler that does not exist',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"template":{"spec":{"schedulerName":"batch-scheduler"}}}}'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"replace","path":"/spec/template/spec/schedulerName","value":"default-scheduler"}]'`,
+      wait: waitReady(NS, APP),
+      explain:
+        'The Pods stay `Pending`, and `describe pod` shows no Events at all: no scheduler ever looked at them. That silence is the clue. `kubectl get pod <pod> -o yaml` shows `schedulerName: batch-scheduler`, and no such scheduler runs in this cluster (`kubectl -n kube-system get pods`). Set `schedulerName` back to `default-scheduler`, or remove it.',
+    },
+    {
+      id: 'node-name-gone',
+      label: 'The Pods are bound to a node that does not exist',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"template":{"spec":{"nodeName":"worker-3"}}}}'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeName"}]'`,
+      wait: waitReady(NS, APP),
+      explain:
+        'The Pod template sets `nodeName: worker-3`, which skips the scheduler and binds each Pod straight to a node that does not exist. `kubectl get pods -o wide` shows them `Pending` on `worker-3`, with no scheduling Events, and every minute or so the Pod garbage collector deletes them and the ReplicaSet makes new ones, so their names and ages keep changing. Remove `nodeName`.',
+    },
+    {
+      id: 'toleration-near-miss',
+      label: 'The Pods tolerate the old name of the control plane taint',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"template":{"spec":{"nodeSelector":{"node-role.kubernetes.io/control-plane":""},"tolerations":[{"key":"node-role.kubernetes.io/master","operator":"Exists","effect":"NoSchedule"}]}}}}'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"},{"op":"remove","path":"/spec/template/spec/tolerations"}]'`,
+      wait: waitReady(NS, APP),
+      explain:
+        'The Pod template selects the control plane and tolerates `node-role.kubernetes.io/master`, the name that taint had years ago. It is `node-role.kubernetes.io/control-plane` now, so the toleration matches nothing: `describe pod` says `untolerated taint {node-role.kubernetes.io/control-plane: }`, and the workers fail the nodeSelector. `kubectl describe node controlplane` shows the real key. The spec wants no nodeSelector, so remove both settings; correcting the toleration key also gets the Pods running.',
     },
   ],
 };

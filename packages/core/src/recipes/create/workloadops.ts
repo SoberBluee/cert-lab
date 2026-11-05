@@ -5,15 +5,19 @@ import { courseDir, onCp, taskBuilder } from './tasks';
 const toMilli = `awk '{v=$1; if (v ~ /m$/) {sub(/m$/,"",v); print int(v)} else print int(v*1000)}'`;
 const toMi = `awk '{v=$1; if (v ~ /Ki$/) {sub(/Ki$/,"",v); print int(v/1024)} else if (v ~ /Mi$/) {sub(/Mi$/,"",v); print int(v)} else if (v ~ /Gi$/) {sub(/Gi$/,"",v); print int(v*1024)} else print int(v/1048576)}'`;
 
+/** The release the rollback task asks for, and where setup notes its revision and image. */
+const TARGET_RELEASE = '2.3.1';
+const rollbackState = (ns: string) => `/root/.cka-rollback-${ns}`;
+
 export const workloadOpsBuilder = taskBuilder({
   id: 'workload-ops',
   name: 'Workload operations',
-  description: 'Size requests from a node\'s capacity, configure a Job\'s completions and clean-up, rank a PriorityClass, issue a short-lived ServiceAccount token, and call the API from inside a Pod.',
+  description: 'Size requests from a node\'s capacity, configure a Job\'s completions and clean-up, rank a PriorityClass, issue a short-lived ServiceAccount token, call the API from inside a Pod, set quotas and defaults for a namespace, and roll back to a chosen revision.',
   domain: 'workloads',
   difficulty: 2,
   minutes: 8,
   points: 6,
-  tags: ['resources', 'job', 'priorityclass', 'serviceaccount-token', 'in-cluster-api'],
+  tags: ['resources', 'job', 'priorityclass', 'serviceaccount-token', 'in-cluster-api', 'resourcequota', 'limitrange', 'rollback'],
   fields: [
     nsField(['blog', 'cms', 'batch-jobs', 'build', 'ops', 'pipeline', 'release', 'platform-ops', 'ci', 'media-jobs']),
     selectField('NODE', 'Worker', ['worker-1', 'worker-2'], { randomizeByDefault: true }),
@@ -335,6 +339,163 @@ kubectl -n ${NS} exec api-contact -- sh -c 'D=/var/run/secrets/kubernetes.io/ser
           'A Pod\'s ServiceAccount token, the cluster CA and the namespace are mounted under /var/run/secrets/kubernetes.io/serviceaccount/.',
           'Inside the cluster the API server is https://kubernetes.default.svc; Secrets of a namespace are at /api/v1/namespaces/<namespace>/secrets.',
           'Send the token as the header "Authorization: Bearer <token>". alpine has wget: wget -qO- --header "..." --no-check-certificate <url>, run with kubectl exec and redirected on controlplane.',
+        ],
+      }),
+    },
+    'quota-limits': {
+      label: 'Give a namespace default resources and a quota',
+      make: ({ NS }) => ({
+        title: `Guard rails for ${NS}`,
+        text: `Namespace \`${NS}\` already runs Pod \`existing\`. The team needs guard rails in it:
+
+1. Create LimitRange \`container-defaults\`, so that a container with no resources set gets requests of \`50m\` CPU and \`32Mi\` memory, and limits of \`200m\` CPU and \`128Mi\` memory.
+2. Create ResourceQuota \`team-quota\` that allows at most \`2\` Pods and \`500m\` of requested CPU.
+3. Create Pod \`quota-probe\` with image \`nginx:1.27-alpine\` and no resources in its manifest.
+
+Any further Pod in the namespace must now be refused.`,
+        setup: [
+          `${createNs(NS)}
+kubectl -n "${NS}" delete resourcequota,limitrange --all >/dev/null
+kubectl -n "${NS}" delete pod --all --wait=true >/dev/null
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"existing"},"spec":{"terminationGracePeriodSeconds":1,"containers":[{"name":"app","image":"busybox:1.36","command":["sleep","infinity"],"resources":{"requests":{"cpu":"100m","memory":"32Mi"},"limits":{"cpu":"100m","memory":"32Mi"}}}]}}' >/dev/null
+kubectl -n "${NS}" wait --for=condition=Ready pod/existing --timeout=120s >/dev/null`,
+        ],
+        checks: [
+          {
+            id: 'limitrange',
+            description: 'container-defaults sets the default limits and requests',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} get limitrange container-defaults -o jsonpath='{.spec.limits[?(@.type=="Container")].default.cpu} {.spec.limits[?(@.type=="Container")].default.memory} {.spec.limits[?(@.type=="Container")].defaultRequest.cpu} {.spec.limits[?(@.type=="Container")].defaultRequest.memory}'`,
+            expect: { equals: '200m 128Mi 50m 32Mi' },
+            weight: 2,
+          },
+          {
+            id: 'quota',
+            description: 'team-quota allows 2 Pods and 500m of requested CPU',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} get resourcequota team-quota -o jsonpath='{.spec.hard.pods} {.spec.hard.requests\\.cpu}'`,
+            expect: { equals: '2 500m' },
+            weight: 1,
+          },
+          {
+            id: 'defaults',
+            description: 'quota-probe runs with the defaults',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} get pod quota-probe -o jsonpath='{.status.phase} {.spec.containers[0].resources.requests.cpu} {.spec.containers[0].resources.requests.memory} {.spec.containers[0].resources.limits.cpu} {.spec.containers[0].resources.limits.memory}'`,
+            expect: { equals: 'Running 50m 32Mi 200m 128Mi' },
+            weight: 2,
+            retrySeconds: 60,
+          },
+          {
+            id: 'refused',
+            description: 'the quota refuses a third Pod',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} run refused-probe --image=nginx:1.27-alpine --dry-run=server 2>&1`,
+            expect: { contains: 'exceeded quota' },
+            weight: 1,
+            retrySeconds: 30,
+          },
+        ],
+        solution: [
+          `kubectl apply -f - <<EOF
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-defaults
+  namespace: ${NS}
+spec:
+  limits:
+    - type: Container
+      default: { cpu: 200m, memory: 128Mi }
+      defaultRequest: { cpu: 50m, memory: 32Mi }
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: team-quota
+  namespace: ${NS}
+spec:
+  hard:
+    pods: "2"
+    requests.cpu: 500m
+EOF
+kubectl -n ${NS} run quota-probe --image=nginx:1.27-alpine
+kubectl -n ${NS} wait --for=condition=Ready pod/quota-probe --timeout=120s`,
+        ],
+        hints: [
+          'kubectl create quota team-quota --hard=pods=2,requests.cpu=500m is one line; a LimitRange has no such command, so write its YAML (kubectl explain limitrange.spec.limits).',
+          'default sets the limits, and defaultRequest the requests, of containers that give none.',
+          'A quota on requests.cpu refuses Pods without a CPU request, so the LimitRange has to be there first.',
+          'kubectl describe resourcequota shows Used against Hard.',
+        ],
+      }),
+    },
+    'rollback-revision': {
+      label: 'Find a revision by its contents and roll back to it',
+      make: ({ NS }) => ({
+        title: 'Roll back to a chosen release',
+        text: `Deployment \`billing\` in namespace \`${NS}\` has been released five times, and the last releases are bad. Each release sets the environment variable \`RELEASE\` in the Pod template.
+
+1. Find the revision in which \`RELEASE\` was \`${TARGET_RELEASE}\`, and write its number to \`/opt/course/rollback/revision.txt\` on \`controlplane\`.
+2. Roll the Deployment back to that revision.`,
+        setup: [
+          `${courseDir('rollback')}
+${createNs(NS)}
+kubectl -n "${NS}" delete deployment billing --ignore-not-found --wait=true >/dev/null
+others=($(shuf -e 2.2.0 2.3.0 2.3.2 2.4.0))
+target=$(shuf -i 2-3 -n 1)
+next=0
+for rev in 1 2 3 4 5; do
+  image=$(shuf -e nginx:1.26-alpine nginx:1.27-alpine nginx:1.28-alpine -n 1)
+  if [[ "$rev" == "$target" ]]; then
+    release=${TARGET_RELEASE}
+    echo "$rev $image" > ${rollbackState(NS)}
+  else
+    release=\${others[$next]}
+    next=$((next + 1))
+  fi
+  kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"billing"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"billing"}},"template":{"metadata":{"labels":{"app":"billing"}},"spec":{"terminationGracePeriodSeconds":1,"containers":[{"name":"web","image":"'"$image"'","env":[{"name":"RELEASE","value":"'"$release"'"}]}]}}}}' >/dev/null
+  kubectl -n "${NS}" rollout status deployment/billing --timeout=120s >/dev/null
+done`,
+        ],
+        setupTimeout: 420,
+        checks: [
+          onCp({
+            id: 'revision',
+            description: `revision.txt holds the revision that had RELEASE=${TARGET_RELEASE}`,
+            run: `[ "$(tr -d '[:space:]' < /opt/course/rollback/revision.txt 2>/dev/null)" = "$(awk '{print $1}' ${rollbackState(NS)})" ] && echo right || echo wrong`,
+            expect: { equals: 'right' },
+            weight: 2,
+          }),
+          onCp({
+            id: 'rolled-back',
+            description: `billing runs 2 ready replicas of that revision's image with RELEASE=${TARGET_RELEASE}`,
+            run: `[ "$(kubectl -n ${NS} get deployment billing -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas} {.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].env[?(@.name=="RELEASE")].value}')" = "2/2 $(awk '{print $2}' ${rollbackState(NS)}) ${TARGET_RELEASE}" ] && echo right || echo wrong`,
+            expect: { equals: 'right' },
+            weight: 3,
+            retrySeconds: 60,
+          }),
+          onCp({
+            id: 'renumbered',
+            description: 'the Deployment reached it by a rollback, which moved that revision to the top of the history',
+            run: `n=$(awk '{print $1}' ${rollbackState(NS)}); kubectl -n ${NS} rollout history deployment/billing | awk 'NR > 2 && NF {print $1}' | grep -qx "$n" && echo "still listed" || echo moved`,
+            expect: { equals: 'moved' },
+            weight: 1,
+          }),
+        ],
+        solution: [
+          `rev=
+for r in $(kubectl -n ${NS} rollout history deployment/billing | awk 'NR > 2 && NF {print $1}'); do
+  kubectl -n ${NS} rollout history deployment/billing --revision="$r" | grep -q 'RELEASE:.*${TARGET_RELEASE}' && rev=$r
+done
+echo "$rev" > /opt/course/rollback/revision.txt
+kubectl -n ${NS} rollout undo deployment/billing --to-revision="$rev"
+kubectl -n ${NS} rollout status deployment/billing --timeout=120s`,
+        ],
+        hints: [
+          'kubectl rollout history deployment/<name> lists the revisions; adding --revision=<n> prints the Pod template of one of them.',
+          'kubectl rollout undo goes back one revision unless you name another with --to-revision.',
+          'A rollback gets a new revision number, and the old number leaves the history: note it before you roll back.',
         ],
       }),
     },

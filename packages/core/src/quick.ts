@@ -19,6 +19,7 @@ import {
   getCategory,
   faultList,
   maxLayers,
+  workerFaults,
   type ChosenPart,
   type Choices,
   type FaultSlot,
@@ -109,6 +110,8 @@ function toYaml(def: Record<string, unknown>): string {
 interface Ctx {
   errors: string[];
   variables: Record<string, VariableDef>;
+  /** A question of the lab takes a worker away, so the rest must leave the workers alone. */
+  workerTaken: boolean;
 }
 
 /**
@@ -196,6 +199,14 @@ function buildCreate(q: Extract<QuickQuestion, { type: 'create' }>, n: number, c
   return composeCreate(builder, base.refs, addons, followUps);
 }
 
+const takesWorker = (out: QuestionOutput) => out.blocksScheduling === 'node';
+
+/** Whether the question takes a worker away whatever it rolls, so that it comes ahead of a single fault elsewhere in the lab. */
+function alwaysTakesWorker(q: QuickQuestion): boolean {
+  const recipe = q?.type === 'create' ? getBuilder(q.builder) : q?.type === 'troubleshoot' ? getCategory(q.category) : undefined;
+  return recipe?.blocksScheduling === 'node';
+}
+
 const partName = (a: PartBase[], b: PartBase[], id: string) => [...a, ...b].find((p) => p.id === id)?.name ?? id;
 
 function buildTrouble(q: Extract<QuickQuestion, { type: 'troubleshoot' }>, n: number, ctx: Ctx): QuestionOutput | undefined {
@@ -205,9 +216,12 @@ function buildTrouble(q: Extract<QuickQuestion, { type: 'troubleshoot' }>, n: nu
   const { refs } = resolveFields(cat.fields, q, `Q${n}`, `${where}, ${cat.name}`, ctx);
 
   const all = faultList(cat).map((f) => f.id);
-  const faults = q.faults === undefined ? all : Array.isArray(q.faults) ? [...new Set(q.faults)] : [];
-  if (!faults.length) ctx.errors.push(`${where}: keep at least one possible fault`);
-  for (const f of faults) if (!all.includes(f)) ctx.errors.push(`${where}: ${cat.name} has no fault "${f}"`);
+  const chosen = q.faults === undefined ? all : Array.isArray(q.faults) ? [...new Set(q.faults)] : [];
+  if (!chosen.length) ctx.errors.push(`${where}: keep at least one possible fault`);
+  for (const f of chosen) if (!all.includes(f)) ctx.errors.push(`${where}: ${cat.name} has no fault "${f}"`);
+  // With nothing left to roll, the question keeps its faults and the lab's limit reports the clash.
+  const spared = ctx.workerTaken ? chosen.filter((f) => !workerFaults(cat).includes(f)) : chosen;
+  const faults = spared.length ? spared : chosen;
 
   const depth = q.layers ?? 1;
   if (!Number.isInteger(depth) || depth < 1 || depth > QUICK_MAX_LAYERS) ctx.errors.push(`${where}: layers must be a whole number from 1 to ${QUICK_MAX_LAYERS}`);
@@ -232,6 +246,7 @@ function buildTrouble(q: Extract<QuickQuestion, { type: 'troubleshoot' }>, n: nu
   for (const [key] of hidden) v[key] = `\${Q${n}_${key}}`;
   if (ctx.errors.length) return;
   const out = composeTrouble(cat, v, slots, `/var/tmp/cka-q${n}`);
+  ctx.workerTaken ||= takesWorker(out);
   // Only the hidden variables the rolled faults use: a narrowed pool may need none of them.
   const used = JSON.stringify([out.setup, out.solution, out.solutionMd]);
   for (const [key, pool] of hidden) if (used.includes(v[key])) ctx.variables[`Q${n}_${key}`] = { oneOf: pool, hidden: true };
@@ -248,7 +263,7 @@ export function buildQuickBundle(req: QuickCreateRequest): {
 } {
   if (!Array.isArray(req.questions) || !req.questions.length) return { errors: ['Add at least one question.'] };
 
-  const ctx: Ctx = { errors: [], variables: {} };
+  const ctx: Ctx = { errors: [], variables: {}, workerTaken: req.questions.some(alwaysTakesWorker) };
   const built: { n: number; out: QuestionOutput; recipe: RecipeRef }[] = [];
   req.questions.forEach((q, i) => {
     const n = i + 1;
@@ -265,6 +280,10 @@ export function buildQuickBundle(req: QuickCreateRequest): {
     built.push({ n, out, recipe });
   });
   if (built.filter((b) => b.out.breaksApi).length > 1) ctx.errors.push('Only one control plane question per lab.');
+  const workerQuestions = built.filter((b) => takesWorker(b.out));
+  if (workerQuestions.length > 1) {
+    ctx.errors.push(`Only one question per lab can take a worker away, and questions ${workerQuestions.map((b) => b.n).join(', ')} all do: the later one would be set up with a worker already out.`);
+  }
   // A disruptive category breaks shared cluster state (e.g. DNS edits the single CoreDNS
   // ConfigMap/Deployment), so two questions in it can overwrite each other's fault: a second
   // Corefile edit may find the line the first one renamed already gone, and fail setup.

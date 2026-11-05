@@ -23,6 +23,9 @@ const confMap = (ns: string, app: string, file: string, broken: boolean) => `pri
   .join(' ')} > "${file}"
 kubectl -n "${ns}" create configmap "${app}-nginx" --from-file=default.conf="${file}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null`;
 
+/** The whole nginx.conf as a ConfigMap wants it: it includes mime.types, which the fault hides. */
+const NGINX_MAIN = ['user nginx;', 'worker_processes 1;', 'events { worker_connections 64; }', 'http {', '    include /etc/nginx/mime.types;', '    include /etc/nginx/conf.d/*.conf;', '}'];
+
 /** Sum of the restart counts of the Deployment's Pods. */
 const restarts = (ns: string, app: string) =>
   `kubectl -n "${ns}" get pods -l "app=${app}" -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\\n"}{end}' 2>/dev/null | awk '{s+=$1} END {print s+0}'`;
@@ -108,9 +111,9 @@ exit 1`,
       },
       {
         id: 'stable',
-        description: `${APP}'s Pods do not restart over 40 seconds`,
+        description: `${APP}'s Pods do not restart over 25 seconds`,
         type: 'kubectl',
-        run: `r() { kubectl -n ${NS} get pods -l app=${APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 40; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting`,
+        run: `r() { kubectl -n ${NS} get pods -l app=${APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 25; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting`,
         expect: { equals: 'stable' },
         weight: 2,
         retrySeconds: 90,
@@ -222,6 +225,41 @@ kubectl -n "${NS}" rollout restart "deployment/${APP}"`,
       wait: rollout(NS, APP),
       explain:
         'The memory limit is `4Mi`, less than nginx needs to start, so the kernel kills it: `describe pod` shows `Last State: Terminated, Reason: OOMKilled` (exit code 137) and the restart count climbs. Give the container a realistic limit, such as the `128Mi` it had (request `32Mi`).',
+    },
+    {
+      id: 'limitrange-default-oom',
+      label: 'A LimitRange gives containers without limits too little memory',
+      break: `kubectl -n "${NS}" apply -f - <<< ${sq('{"apiVersion":"v1","kind":"LimitRange","metadata":{"name":"namespace-defaults"},"spec":{"limits":[{"type":"Container","default":{"memory":"4Mi"},"defaultRequest":{"memory":"4Mi"}}]}}')} >/dev/null
+${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/resources"}]', 'json')}`,
+      fix: `kubectl -n "${NS}" delete limitrange namespace-defaults
+kubectl -n "${NS}" set resources "deployment/${APP}" -c web --requests=cpu=50m,memory=32Mi --limits=cpu=250m,memory=128Mi`,
+      wait: rollout(NS, APP),
+      explain: `The containers are \`OOMKilled\`, yet the Deployment sets no memory limit at all: \`kubectl -n ${NS} get deployment ${APP} -o yaml\` has no \`resources\`. The limit is on the Pod, not the template. \`kubectl -n ${NS} get pod <pod> -o yaml\` shows \`4Mi\`, and it comes from LimitRange \`namespace-defaults\` (\`kubectl -n ${NS} describe limitrange\`), which fills in defaults at admission for any container that gives none. Remove the LimitRange, or raise its default, or set real resources on the container. A LimitRange only touches new Pods, so the old ones have to be replaced.`,
+    },
+    {
+      id: 'configmap-hides-dir',
+      label: 'A ConfigMap is mounted over the whole nginx directory',
+      break: `printf '%s\\n' ${NGINX_MAIN.map((l) => `'${l}'`).join(' ')} > "${state}.nginx.conf"
+kubectl -n "${NS}" create configmap "${APP}-main" --from-file=nginx.conf="${state}.nginx.conf" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "${NS}" patch deployment "${APP}" -p ${sq(
+  `{"spec":{"template":{"spec":{"volumes":[{"name":"nginx-main","configMap":{"name":"${APP}-main"}}],"containers":[{"name":"web","volumeMounts":[{"name":"nginx-main","mountPath":"/etc/nginx"}]}]}}}}`,
+)}`,
+      fix: patch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/containers/0/volumeMounts/0","value":{"name":"nginx-main","mountPath":"/etc/nginx/nginx.conf","subPath":"nginx.conf"}}]', 'json'),
+      wait: rollout(NS, APP),
+      explain: `ConfigMap \`${APP}-main\` is meant to replace one file, \`/etc/nginx/nginx.conf\`, but it is mounted at \`/etc/nginx\`. A volume takes over its whole mount path, so the rest of that directory disappears: \`kubectl -n ${NS} logs <pod> --previous\` shows \`[emerg] open() "/etc/nginx/mime.types" failed (2: No such file or directory)\`, and the Pods go into \`CrashLoopBackOff\`. Mount the key as a single file: \`mountPath: /etc/nginx/nginx.conf\` with \`subPath: nginx.conf\`.`,
+    },
+    {
+      id: 'probe-timeout',
+      label: 'An exec liveness probe takes longer than its timeout',
+      break: patch(
+        NS,
+        APP,
+        '[{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe","value":{"exec":{"command":["sh","-c","sleep 3; wget -q -O /dev/null http://127.0.0.1/"]},"timeoutSeconds":1,"periodSeconds":5,"failureThreshold":2}}]',
+        'json',
+      ),
+      fix: patch(NS, APP, '[{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/timeoutSeconds","value":5}]', 'json'),
+      wait: rollout(NS, APP),
+      explain: `The liveness probe runs a command that needs about 3 seconds, and \`timeoutSeconds\` is \`1\`, so every probe is cut off and the kubelet kills a healthy container. Nothing in the logs is wrong. \`kubectl -n ${NS} describe pod <pod>\` shows \`Liveness probe failed: command timed out\`. Give the probe enough time: raise \`timeoutSeconds\` above what the command takes, or make the check faster.`,
     },
   ],
 };

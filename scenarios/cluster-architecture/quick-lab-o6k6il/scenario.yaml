@@ -1,0 +1,64 @@
+id: quick-lab-o6k6il
+title: "Quick lab: Cluster upgrade"
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 20
+points: 8
+tags: [ kubeadm, upgrade, drain ]
+base: bare
+nodes: { controlPlane: 1, workers: 2 }
+settleSeconds: 60
+draft: true
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+tasks:
+  - id: q1
+    title: Plan a cluster upgrade
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-kubeadm
+        description: kubeadm on controlplane is 1.37.1
+        run: kubeadm version -o short
+        expect: { equals: v1.37.1 }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-target
+        description: target.txt holds the version kubeadm upgrade plan offers
+        run: "[ \"$(tr -d ' \\n' < /opt/course/upgrade/target.txt 2>/dev/null)\" = \"$(kubeadm upgrade plan 2>/dev/null | grep -oE 'kubeadm upgrade apply v[0-9.]+' | head -1 | awk '{print $4}')\" ] && echo match || echo differs"
+        expect: { equals: match }
+        weight: 2
+        retrySeconds: 30
+      - type: ssh
+        node: controlplane
+        id: q1-current
+        description: current.txt holds the version the API server runs
+        run: "[ \"$(tr -d ' \\n' < /opt/course/upgrade/current.txt 2>/dev/null | sed 's/^v//')\" = \"$(kubectl version -o json | jq -r .serverVersion.gitVersion | sed 's/^v//')\" ] && echo match || echo differs"
+        expect: { equals: match }
+        weight: 1
+      - id: q1-not-applied
+        description: the API server and every kubelet still run 1.36
+        type: kubectl
+        run: echo "$(kubectl version -o json | jq -r .serverVersion.gitVersion) $(kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')" | tr ' ' '\n' | grep -vc "^v1.36\." || true
+        expect: { equals: "0" }
+        weight: 2
+      - id: q1-nodes-ready
+        description: every node is Ready
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "True" }
+        weight: 1
+        retrySeconds: 180
+    hints:
+      - apt-cache madison kubeadm lists the versions apt can install; the package is held, so apt-mark unhold it first.
+      - "kubeadm upgrade plan only reads: it prints the versions you could upgrade to and the kubeadm upgrade apply command for each."
+      - kubectl version shows the client and the server (API server) versions.
+    recipe: { builder: upgrade, parts: [] }

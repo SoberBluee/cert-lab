@@ -436,6 +436,71 @@ const configVolume: Addon = {
   },
 };
 
+const singleFile: Addon = {
+  id: 'single-file',
+  key: 'ONEFILE',
+  name: 'One key as a single file',
+  description: 'A ConfigMap key is mounted as one file in a directory that keeps its other files.',
+  points: 4,
+  fields: [
+    nameField('OBJ', 'ConfigMap name', ['app-banner', 'site-notice', 'tool-defaults', 'runtime-flags', 'app-motd', 'edge-settings', 'service-notes', 'host-banner', 'build-info', 'release-note']),
+    {
+      key: 'FILE',
+      label: 'Key (file name)',
+      type: 'text',
+      default: 'app.conf',
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$',
+      pool: ['app.conf', 'app-banner.txt', 'site.conf', 'release.txt', 'tool.ini', 'notice.txt', 'edge.cfg', 'build.info'],
+    },
+    {
+      key: 'VALUE',
+      label: 'File content (one word)',
+      type: 'text',
+      default: 'enabled',
+      pattern: '^[A-Za-z0-9._-]+$',
+      pool: ['enabled', 'v2', 'hello', 'production', 'canary', 'active', 'ready', 'stable'],
+      randomizeByDefault: true,
+    },
+  ],
+  apply(ctx, { OBJ, FILE, VALUE }) {
+    ctx.manifests.unshift({ apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: OBJ, namespace: ctx.ns }, data: { [FILE]: VALUE } });
+    const spec = ctx.podSpec();
+    spec.volumes = [...(spec.volumes ?? []), { name: 'single-file', configMap: { name: OBJ } }];
+    const c = ctx.container();
+    c.volumeMounts = [...(c.volumeMounts ?? []), { name: 'single-file', mountPath: `/etc/${FILE}`, subPath: FILE, readOnly: true }];
+    ctx.bullets.push(`Create a ConfigMap \`${OBJ}\` with the key \`${FILE}\` set to \`${VALUE}\`, and mount that key as the single file \`/etc/${FILE}\`, read-only. Every other file in \`/etc\` must stay as the image has it.`);
+    ctx.checks.push(
+      {
+        id: 'onefile-source',
+        description: `ConfigMap ${OBJ} has ${FILE}=${VALUE}`,
+        type: 'kubectl',
+        run: `kubectl -n ${ctx.ns} get configmap ${OBJ} -o go-template='{{index .data "${FILE}"}}'`,
+        expect: { equals: VALUE },
+        weight: 1,
+      },
+      {
+        id: 'onefile-mounted',
+        description: `/etc/${FILE} is a file that holds ${VALUE}`,
+        type: 'kubectl',
+        run: kexec(ctx, `cat /etc/${FILE}`),
+        expect: { equals: VALUE },
+        weight: 2,
+        retrySeconds: 30,
+      },
+      {
+        id: 'onefile-kept',
+        description: 'the rest of /etc is still there',
+        type: 'kubectl',
+        run: `${kexec(ctx, 'cat /etc/passwd')} | grep -c '^root:'`,
+        expect: { equals: '1' },
+        weight: 1,
+        retrySeconds: 30,
+      },
+    );
+    ctx.hints.push('A volumeMount with subPath mounts one key at a file path; without it, the volume takes over the whole mount path.');
+  },
+};
+
 const secretTypes: Addon = {
   id: 'secret-types',
   key: 'SECRETS',
@@ -806,7 +871,7 @@ export const podBuilder: Builder = {
     ]),
     selectField('IMAGE', 'Image', ['busybox:1.36', 'busybox:1.37', 'nginx:1.28-alpine', 'httpd:2.4-alpine', 'alpine:3.20']),
   ],
-  addons: [command, sidecar, envAddon, security, resourcesAddon, pvcMount, initContainer, configVolume, secretTypes, capabilities, execProbe, placement],
+  addons: [command, sidecar, envAddon, security, resourcesAddon, pvcMount, initContainer, configVolume, singleFile, secretTypes, capabilities, execProbe, placement],
   followUps: [labelFollowUp('label'), labelFollowUp('annotate'), updatePodImage, resizePod, saveLogs, copyOut],
   build(v) {
     const { NS, NAME, IMAGE } = v;
