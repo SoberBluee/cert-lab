@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { BuilderSummary, CategorySummary, CkaDomain, LabTopic, RecipeCatalog } from '@cka/schema';
-import { byCurriculum, MOCK_PLAN, pickWeakItems, type Item } from '../quickRandom';
+import { byCurriculum, MOCK_PLAN, MOCK_QUESTIONS, pickItems, pickMockItems, pickWeakItems, type Item } from '../quickRandom';
 
 /** Ten items per domain, so every domain could fill the first places on its own. */
 const items: Item[] = (Object.keys(MOCK_PLAN) as CkaDomain[]).flatMap((domain) =>
@@ -54,5 +54,42 @@ describe('quickRandom', () => {
     assert.deepEqual(ids(pickWeakItems(catalog, weak, 5)), ['dns', 'etcd-restore', 'helm', 'dns', 'helm']);
     // A create lab leaves the troubleshooting topic out.
     assert.deepEqual(ids(pickWeakItems(catalog, weak, 2, 'create')), ['etcd-restore', 'helm']);
+  });
+
+  describe('a question that takes a worker away', () => {
+    const takes = (id: string, domain: CkaDomain) => ({ id, domain, takesWorker: true, maxLayers: 1 }) as CategorySummary;
+    const workers = [takes('nodes', 'troubleshooting'), takes('drain', 'troubleshooting'), takes('unschedulable', 'troubleshooting')];
+    const infra = { id: 'infra', domain: 'cluster-architecture', takesWorker: true, addons: [], followUps: [] } as unknown as BuilderSummary;
+    const others = items.flatMap((i) => (i.kind === 'troubleshoot' ? [i.category] : []));
+    const catalog = { builders: [infra], categories: [...workers, ...others], topics: [] } as unknown as RecipeCatalog;
+    const pool: Item[] = [{ kind: 'create', builder: infra }, ...catalog.categories.map((category) => ({ kind: 'troubleshoot' as const, category }))];
+    const count = (xs: Item[]) => xs.filter((x) => of(x).takesWorker).length;
+
+    it('comes up once at most in a random lab, and the lab still fills', () => {
+      for (let run = 0; run < 200; run++) {
+        const lab = pickItems(catalog, 20);
+        assert.equal(lab.length, 20);
+        assert.ok(count(lab) <= 1, lab.map((x) => of(x).id).join(', '));
+      }
+    });
+
+    it('comes up once at most in a full mock, and the mock still fills', () => {
+      for (let run = 0; run < 200; run++) {
+        const mock = pickMockItems(pool);
+        assert.equal(mock.length, MOCK_QUESTIONS);
+        assert.ok(count(mock) <= 1, mock.map((x) => of(x).id).join(', '));
+      }
+    });
+
+    it('comes up once at most in weak spots', () => {
+      const topic = (id: string) => ({ id, label: id, domain: 'troubleshooting', tags: [], group: 'troubleshoot', categories: [{ id }] }) as LabTopic;
+      assert.deepEqual(pickWeakItems(catalog, [topic('nodes'), topic('drain'), topic('troubleshooting-0')], 3).map((x) => of(x).id), ['nodes', 'troubleshooting-0', 'troubleshooting-0']);
+    });
+
+    it('makes a topic of its own a one-question lab, while other topics repeat', () => {
+      const topic = (id: string) => ({ id, label: id, domain: 'troubleshooting', tags: [], group: 'troubleshoot', categories: [{ id }] }) as LabTopic;
+      assert.equal(pickItems(catalog, 3, 'troubleshoot', new Set(), topic('nodes')).length, 1);
+      assert.equal(pickItems(catalog, 3, 'troubleshoot', new Set(), topic('troubleshooting-0')).length, 3);
+    });
   });
 });

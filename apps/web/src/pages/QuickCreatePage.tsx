@@ -457,11 +457,13 @@ function AddQuestion({
   const all = [...builders, ...categories];
   const solo = builders.find((b) => b.solo && chosen.includes(b.id));
   const apiTaken = all.some((x) => x.breaksApi && chosen.includes(x.id));
+  const workerTaken = all.some((x) => x.takesWorker && chosen.includes(x.id));
   const disabled: Record<string, string> = {};
   for (const x of all) {
     if (solo) disabled[x.id] = `${solo.name} must be the only question in its lab.`;
     else if ('solo' in x && x.solo && chosen.length) disabled[x.id] = `${x.name} must be the only question in its lab; start a new lab for it.`;
     else if (x.breaksApi && apiTaken) disabled[x.id] = 'A lab can hold only one control plane question.';
+    else if (x.takesWorker && workerTaken) disabled[x.id] = 'A lab can hold only one question that takes a worker away.';
   }
   const label = 'text-[11px] font-semibold tracking-wide text-zinc-500 uppercase';
   return (

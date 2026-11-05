@@ -1,4 +1,5 @@
 import type { BuilderSummary, PartSummary } from '@cka/schema';
+import { auditBuilder } from './audit';
 import { hpaBuilder, vpaBuilder } from './autoscaling';
 import { certificatesBuilder, etcdBackupBuilder, etcdRestoreBuilder, installClusterBuilder } from './cluster';
 import { clusterInfoBuilder } from './clusterinfo';
@@ -15,6 +16,7 @@ import { kubeconfigBuilder } from './kubeconfig';
 import { kustomizeBuilder } from './kustomize';
 import { netopsBuilder } from './netops';
 import { observeBuilder } from './observe';
+import { workloadPatternsBuilder } from './patterns';
 import { podBuilder } from './pod';
 import { pvBuilder } from './pv';
 import { pvcBuilder } from './pvc';
@@ -50,8 +52,10 @@ export const BUILDERS: Builder[] = [
   infraBuilder,
   netopsBuilder,
   workloadOpsBuilder,
+  workloadPatternsBuilder,
   gatewayBuilder,
   clusterInfoBuilder,
+  auditBuilder,
   kubeconfigBuilder,
   workloadControllersBuilder,
   corednsBuilder,
@@ -84,6 +88,7 @@ export const builderSummaries = (): BuilderSummary[] =>
     followUps: b.followUps.map(partSummary),
     track: b.track ?? 'create',
     breaksApi: !!b.breaksApi,
+    takesWorker: b.blocksScheduling === 'node',
     base: b.base ?? 'cluster',
     solo: !!b.solo,
   }));

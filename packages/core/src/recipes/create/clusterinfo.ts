@@ -1,4 +1,4 @@
-import { nameField } from '../types';
+import { nameField, selectField } from '../types';
 import { courseDir, onCp, taskBuilder } from './tasks';
 
 /** The learner's kubeconfig, which per-question contexts also go into; grading uses admin.conf. */
@@ -15,17 +15,39 @@ const onWorkers = (cmd: string) => `for n in worker-1 worker-2; do runuser -u ub
 /** First line of the static Pod manifests this builder writes, so setup and checks can find them again. */
 const MARK = '# cka-lab static';
 
+const ETCD_MANIFEST = '/etc/kubernetes/manifests/etcd.yaml';
+
+/** The value of one flag of the etcd static Pod. Two dashes, so --peer-key-file does not match --key-file. */
+const etcdFlag = (flag: string) => `$(grep -oE -- '--${flag}=[^ "]+' ${ETCD_MANIFEST} | cut -d= -f2)`;
+
+const KUBELET_PKI = '/var/lib/kubelet/pki';
+
+/** Runs a command as root on a worker, from controlplane, for use inside a check or solution. */
+const onNode = (node: string, cmd: string) => `runuser -u ubuntu -- ssh -o StrictHostKeyChecking=accept-new ${node} sudo ${cmd}`;
+
+/** The CN of a certificate's issuer, read on the worker. */
+const issuerCn = (node: string, cert: string) => `$(${onNode(node, `openssl x509 -in ${cert} -noout -issuer`)} | sed -E 's/.*CN *= *//')`;
+
+/** The Extended Key Usage line of a certificate, read on the worker. */
+const usage = (node: string, cert: string) => `$(${onNode(node, `openssl x509 -in ${cert} -noout -ext extendedKeyUsage`)} | tail -1 | sed -E 's/^ +//')`;
+
+/** Passes when the file names `want`, a shell expression; the answer may keep openssl's own wording around it. */
+const names = (file: string, want: string) => `want=${want}; [ -n "$want" ] && grep -qF -- "$want" ${file} 2>/dev/null && echo ok || echo "want $want"`;
+
 export const clusterInfoBuilder = taskBuilder({
   id: 'cluster-info',
   name: 'Kubeconfig and cluster facts',
-  description: 'Read contexts, servers and certificates out of a kubeconfig, and find how the cluster network and the control plane are set up.',
+  description: 'Read contexts, servers and certificates out of a kubeconfig, and find how the cluster network, etcd, the kubelets and the control plane are set up.',
   domain: 'cluster-architecture',
   difficulty: 2,
   minutes: 7,
   points: 6,
-  tags: ['kubeconfig', 'contexts', 'certificates', 'cidr', 'kube-proxy', 'cni', 'static-pod'],
+  tags: ['kubeconfig', 'contexts', 'certificates', 'cidr', 'kube-proxy', 'cni', 'static-pod', 'etcd', 'kubelet'],
   track: 'cluster',
-  fields: [nameField('USER', 'Kubeconfig user', ['auditor', 'ops-lead', 'sre-oncall', 'release-mgr', 'qa-lead', 'sec-review', 'billing-ops', 'data-eng'])],
+  fields: [
+    nameField('USER', 'Kubeconfig user', ['auditor', 'ops-lead', 'sre-oncall', 'release-mgr', 'qa-lead', 'sec-review', 'billing-ops', 'data-eng']),
+    selectField('NODE', 'Worker', ['worker-1', 'worker-2'], { randomizeByDefault: true }),
+  ],
   tasks: {
     contexts: {
       label: 'List contexts, script the current one, decode a client certificate',
@@ -87,6 +109,120 @@ chown -R ubuntu:ubuntu /opt/course/kubeconfig`,
           'kubectl config get-contexts -o name prints only the context names.',
           'A kubeconfig is plain YAML: its current-context line can be read with grep, awk or sed.',
           'kubectl config view hides certificate data; --raw shows it. client-certificate-data is base64: base64 -d turns it into PEM.',
+        ],
+      }),
+    },
+    'etcd-facts': {
+      label: 'Read etcd\'s key, certificate expiry and client auth from how it runs',
+      make: () => ({
+        title: 'etcd facts',
+        text: `A security review wants to know how etcd is set up on \`controlplane\`. Write each answer, and nothing else, to a file in \`/opt/course/etcd/\` on \`controlplane\`:
+
+1. \`server-key\`: the full path of the private key etcd serves with
+2. \`server-cert-expiry\`: the date etcd's server certificate expires, as \`openssl\` prints it
+3. \`client-cert-auth\`: \`true\` or \`false\`, whether etcd requires client certificates
+4. \`data-dir\`: the directory on the host that holds etcd's data`,
+        setup: [courseDir('etcd')],
+        checks: [
+          onCp({
+            id: 'server-key',
+            description: 'server-key holds the path of etcd\'s server private key',
+            run: sameAs('/opt/course/etcd/server-key', etcdFlag('key-file')),
+            expect: { equals: 'ok' },
+            weight: 2,
+          }),
+          onCp({
+            id: 'cert-expiry',
+            description: 'server-cert-expiry holds the expiry date of etcd\'s server certificate',
+            run: names('/opt/course/etcd/server-cert-expiry', `"$(openssl x509 -in ${etcdFlag('cert-file')} -noout -enddate | cut -d= -f2)"`),
+            expect: { equals: 'ok' },
+            weight: 2,
+          }),
+          onCp({
+            id: 'client-auth',
+            description: 'client-cert-auth says whether etcd requires client certificates',
+            run: sameAs('/opt/course/etcd/client-cert-auth', etcdFlag('client-cert-auth')),
+            expect: { equals: 'ok' },
+            weight: 1,
+          }),
+          onCp({
+            id: 'data-dir',
+            description: 'data-dir holds the directory of etcd\'s data',
+            run: sameAs('/opt/course/etcd/data-dir', etcdFlag('data-dir')),
+            expect: { equals: 'ok' },
+            weight: 1,
+          }),
+        ],
+        solution: [
+          `m=${ETCD_MANIFEST}
+grep -oE -- '--key-file=[^ "]+' $m | cut -d= -f2 > /opt/course/etcd/server-key
+cert=$(grep -oE -- '--cert-file=[^ "]+' $m | cut -d= -f2)
+openssl x509 -in "$cert" -noout -enddate | cut -d= -f2 > /opt/course/etcd/server-cert-expiry
+grep -oE -- '--client-cert-auth=[^ "]+' $m | cut -d= -f2 > /opt/course/etcd/client-cert-auth
+grep -oE -- '--data-dir=[^ "]+' $m | cut -d= -f2 > /opt/course/etcd/data-dir`,
+        ],
+        hints: [
+          'etcd runs as a static Pod here, not as a service: systemctl has nothing to say about it. Its flags are in the manifest in /etc/kubernetes/manifests.',
+          'Peer flags look like client flags: --peer-key-file is not --key-file.',
+          'openssl x509 -in <file> -noout -enddate prints notAfter=<date>.',
+        ],
+      }),
+    },
+    'kubelet-certs': {
+      label: 'Compare the issuer and usage of a kubelet\'s two certificates',
+      make: ({ NODE }) => ({
+        title: `Kubelet certificates on ${NODE}`,
+        text: `The kubelet on \`${NODE}\` has one certificate to log in to the API server and another for its own HTTPS endpoint. Write each answer, and nothing else, to a file in \`/opt/course/kubelet/\` on \`controlplane\`:
+
+1. \`client-issuer\`: the Issuer of the kubelet's client certificate
+2. \`client-usage\`: the Extended Key Usage of that certificate
+3. \`server-issuer\`: the Issuer of the kubelet's serving certificate
+4. \`server-usage\`: the Extended Key Usage of that certificate`,
+        setup: [courseDir('kubelet')],
+        checks: [
+          onCp({
+            id: 'client-issuer',
+            description: 'client-issuer names the Issuer of the client certificate',
+            run: names('/opt/course/kubelet/client-issuer', `"${issuerCn(NODE, `${KUBELET_PKI}/kubelet-client-current.pem`)}"`),
+            expect: { equals: 'ok' },
+            weight: 2,
+          }),
+          onCp({
+            id: 'client-usage',
+            description: 'client-usage names the Extended Key Usage of the client certificate',
+            run: names('/opt/course/kubelet/client-usage', `"${usage(NODE, `${KUBELET_PKI}/kubelet-client-current.pem`)}"`),
+            expect: { equals: 'ok' },
+            weight: 1,
+          }),
+          onCp({
+            id: 'server-issuer',
+            description: 'server-issuer names the Issuer of the serving certificate',
+            run: names('/opt/course/kubelet/server-issuer', `"${issuerCn(NODE, `${KUBELET_PKI}/kubelet.crt`)}"`),
+            expect: { equals: 'ok' },
+            weight: 2,
+          }),
+          onCp({
+            id: 'server-usage',
+            description: 'server-usage names the Extended Key Usage of the serving certificate',
+            run: names('/opt/course/kubelet/server-usage', `"${usage(NODE, `${KUBELET_PKI}/kubelet.crt`)}"`),
+            expect: { equals: 'ok' },
+            weight: 1,
+          }),
+        ],
+        solution: [
+          `read_cert() { ${onNode(NODE, '"openssl x509 -in $1 -noout -issuer -ext extendedKeyUsage"')}; }
+read_cert ${KUBELET_PKI}/kubelet-client-current.pem > /tmp/client
+read_cert ${KUBELET_PKI}/kubelet.crt > /tmp/server
+grep '^issuer' /tmp/client > /opt/course/kubelet/client-issuer
+tail -1 /tmp/client | sed -E 's/^ +//' > /opt/course/kubelet/client-usage
+grep '^issuer' /tmp/server > /opt/course/kubelet/server-issuer
+tail -1 /tmp/server | sed -E 's/^ +//' > /opt/course/kubelet/server-usage
+chown -R ubuntu:ubuntu /opt/course/kubelet`,
+        ],
+        hints: [
+          `ssh ${NODE}, then look in the kubelet's directory for certificates: /var/lib/kubelet/pki.`,
+          'kubelet-client-current.pem is the client certificate; kubelet.crt is the serving certificate.',
+          'openssl x509 -in <file> -noout -issuer -ext extendedKeyUsage prints both answers. Do not expect the two certificates to share an issuer.',
         ],
       }),
     },

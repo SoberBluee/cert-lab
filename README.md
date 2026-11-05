@@ -17,7 +17,7 @@ Practise for IT certifications by doing the work, on real infrastructure that ru
 
 | Track | Prepares you for | What is in it | Status |
 | --- | --- | --- | --- |
-| [Kubernetes](#kubernetes-cka) | Certified Kubernetes Administrator (CKA) | 150 scenarios, a lab generator with 209 faults, full mock exams, 15 guided lessons, 7 quizzes | Ready |
+| [Kubernetes](#kubernetes-cka) | Certified Kubernetes Administrator (CKA) | 150 scenarios, a lab generator with 238 faults, full mock exams, 15 guided lessons, 7 quizzes | Ready |
 | [Linux](#linux) | The Linux side of the CKA and of everyday operations | 7 guided lessons on real nodes, an openssl quiz | Ready |
 | [AWS](#aws) | AWS Solutions Architect Associate (SAA-C03) | 10 scenarios across the four exam domains, on a local AWS emulator | Ready |
 | [System Labs](#system-labs) | Networking and system design fundamentals | 8 interactive topics, from IP and DNS to load balancing, caching and CDNs | In progress |
@@ -38,7 +38,7 @@ Practise for IT certifications by doing the work, on real infrastructure that ru
 
 A kubeadm-built Kubernetes 1.37 cluster on Ubuntu 24.04: one control plane and two workers, with Calico, Traefik (Ingress and Gateway API), Helm, metrics-server and the Vertical Pod Autoscaler.
 
-- **150 scenarios** and **Quick lab**, a generator that builds new questions from 26 build-task recipes and 209 faults in 23 troubleshooting categories, up to three faults stacked in one question.
+- **150 scenarios** and **Quick lab**, a generator that builds new questions from 29 build-task recipes and 238 faults in 27 troubleshooting categories, up to three faults stacked in one question.
 - **Full mock exams:** 17 questions weighted like the CKA curriculum, a fixed 120-minute timer and a kubeconfig context per question.
 - **Focus** scores every topic from your own attempts (attempts without hints count most), compares your minutes per question with exam pace, and builds a lab from your weak spots.
 - **Guided lessons** walk you through etcd, certificates, Jobs and CronJobs, admission control and layer-by-layer debugging on the live cluster, with questions along the way; **quizzes** drill error messages, paths, workloads, networking, storage, RBAC and cluster architecture.

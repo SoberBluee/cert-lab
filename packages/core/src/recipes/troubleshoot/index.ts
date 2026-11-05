@@ -5,8 +5,10 @@ import { controllersCategory } from './controllers';
 import { controlPlaneCategory } from './controlplane';
 import { cronJobsCategory } from './cronjobs';
 import { daemonSetsCategory } from './daemonsets';
+import { degradedCategory } from './degraded';
 import { dnsCategory } from './dns';
 import { drainCategory } from './drain';
+import { driftCategory } from './drift';
 import { gatewayCategory } from './gateway';
 import { hpaCategory } from './hpa';
 import { ingressCategory } from './ingress';
@@ -38,6 +40,7 @@ export const CATEGORIES: FaultCategory[] = [
   cronJobsCategory,
   daemonSetsCategory,
   statefulSetsCategory,
+  driftCategory,
   rbacCategory,
   servicesCategory,
   netpolCategory,
@@ -46,6 +49,7 @@ export const CATEGORIES: FaultCategory[] = [
   nodesCategory,
   storageCategory,
   nodeConfigCategory,
+  degradedCategory,
   controlPlaneCategory,
   apiAccessCategory,
   drainCategory,
@@ -61,6 +65,9 @@ export const getCategory = (id: string): FaultCategory | undefined => CATEGORIES
 
 /** Fault ids, independent of field values. */
 export const faultList = (c: FaultCategory) => c.faults(sample(c), '/tmp/x').map((f) => ({ id: f.id, label: f.label }));
+
+/** The faults that take a worker away in a category that otherwise leaves the workers alone. */
+export const workerFaults = (c: FaultCategory) => c.faults(sample(c), '/tmp/x').filter((f) => f.blocksScheduling === 'node').map((f) => f.id);
 
 const sample = (c: FaultCategory) =>
   Object.fromEntries([...c.fields.map((f) => [f.key, f.default]), ['FAULT', ''], ...Object.keys(c.hidden ?? {}).map((k) => [k, ''])]);
@@ -84,6 +91,7 @@ export const categorySummaries = (spoilers = false): CategorySummary[] =>
       track: c.track ?? 'troubleshoot',
       disruptive: !!c.disruptive,
       breaksApi: !!c.breaksApi,
+      takesWorker: c.blocksScheduling === 'node',
       faultCount: faults.length,
       maxLayers: maxLayers(c),
       ...(spoilers ? { faults } : {}),

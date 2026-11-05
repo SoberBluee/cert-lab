@@ -25,7 +25,10 @@ export interface Fault {
    * fixed like a disruptive category, so other questions are not verified while it is still broken.
    */
   disruptive?: boolean;
-  /** Takes scheduling capacity away when this fault is rolled; see SchedulingBlock. */
+  /**
+   * Takes scheduling capacity away when this fault is rolled; see SchedulingBlock. A 'node' fault leaves the
+   * pool of a question whose lab already has a question that takes a worker away.
+   */
   blocksScheduling?: SchedulingBlock;
   /** Solution text: what was wrong and how to spot it. */
   explain: string;

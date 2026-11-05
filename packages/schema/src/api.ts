@@ -309,6 +309,8 @@ export interface BuilderSummary {
   track: 'create' | 'cluster';
   /** May take the API server down; a lab holds at most one such question. */
   breaksApi: boolean;
+  /** Takes a worker away, whatever is rolled; a lab holds at most one such question. */
+  takesWorker: boolean;
   /** Snapshot the lab starts from. */
   base: Base;
   /** Must be the only question of its lab. */
@@ -335,6 +337,8 @@ export interface CategorySummary {
   disruptive: boolean;
   /** May take the API server down; a lab holds at most one such question. */
   breaksApi: boolean;
+  /** Takes a worker away, whatever is rolled; a lab holds at most one such question. */
+  takesWorker: boolean;
   faultCount: number;
   /** How many faults one question can stack (1 when the category has no layers). */
   maxLayers: number;

@@ -64,12 +64,12 @@ const reach = (ns: string, from: string, port: number) =>
 export const netopsBuilder = taskBuilder({
   id: 'netops',
   name: 'Service types and policies',
-  description: 'A LoadBalancer Service without a cloud, a Service for something outside the cluster, and the least permissive of several NetworkPolicies.',
+  description: 'A LoadBalancer Service without a cloud, a Service for something outside the cluster, the DNS names of Services and Pods, and the least permissive of several NetworkPolicies.',
   domain: 'services-networking',
   difficulty: 2,
   minutes: 8,
   points: 6,
-  tags: ['service', 'loadbalancer', 'endpointslice', 'networkpolicy'],
+  tags: ['service', 'loadbalancer', 'endpointslice', 'networkpolicy', 'dns', 'fqdn', 'headless'],
   fields: [
     nsField(['edge', 'legacy', 'bridge', 'gateway-ns', 'ingress-ns', 'public', 'partner', 'external', 'hybrid', 'dmz']),
     numberField('NODEPORT', 'Node port', ['31555', '31080', '30999', '32010', '30777', '31234'], 30000, 32767, { randomizeByDefault: true }),
@@ -216,6 +216,158 @@ EOF`,
           'A Service without a selector gets no endpoints from Kubernetes: you provide them yourself.',
           'An EndpointSlice belongs to a Service through the label kubernetes.io/service-name; its port name must match the Service port name.',
           'getent hosts controlplane prints the address to use.',
+        ],
+      }),
+    },
+    'fqdn-configmap': {
+      label: 'Fill a ConfigMap with the DNS names of Services and Pods',
+      make: ({ NS }) => ({
+        title: 'DNS names in a ConfigMap',
+        text: `Deployment \`resolver\` in namespace \`${NS}\` looks up the names in ConfigMap \`targets\`, which it mounts. The ConfigMap still holds placeholders. Set each key to the fully qualified domain name of what it is meant for, using this cluster's DNS domain:
+
+- \`service\`: Service \`api\`
+- \`headless\`: headless Service \`db\`
+- \`pod-by-hostname\`: Pod \`db-0\`, through its hostname and Service \`db\`
+- \`pod-by-ip\`: Pod \`web\`, through its IP address
+
+Every name must resolve from inside the \`resolver\` Pods. Do not change anything but the ConfigMap.`,
+        setup: [
+          `${createNs(NS)}
+kubectl -n "${NS}" delete deployment resolver --ignore-not-found --wait=false >/dev/null
+kubectl -n "${NS}" delete statefulset db --ignore-not-found --wait=false >/dev/null
+kubectl -n "${NS}" delete pod web --ignore-not-found --wait=true >/dev/null
+kubectl apply -f - <<EOF >/dev/null
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: targets
+  namespace: ${NS}
+data:
+  service: TODO
+  headless: TODO
+  pod-by-hostname: TODO
+  pod-by-ip: TODO
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: ${NS}
+  labels: { app: web }
+spec:
+  containers:
+    - name: web
+      image: nginx:1.27-alpine
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: ${NS}
+spec:
+  selector: { app: web }
+  ports: [{ port: 80 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  namespace: ${NS}
+spec:
+  clusterIP: None
+  selector: { app: db }
+  ports: [{ port: 80 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: ${NS}
+spec:
+  serviceName: db
+  replicas: 1
+  selector:
+    matchLabels: { app: db }
+  template:
+    metadata:
+      labels: { app: db }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: db
+          image: httpd:2.4-alpine
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resolver
+  namespace: ${NS}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: resolver }
+  template:
+    metadata:
+      labels: { app: resolver }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: resolver
+          image: busybox:1.36
+          command: ["sleep", "infinity"]
+          volumeMounts: [{ name: targets, mountPath: /etc/targets }]
+      volumes:
+        - name: targets
+          configMap: { name: targets }
+EOF
+kubectl -n "${NS}" wait --for=condition=Ready pod/web --timeout=180s >/dev/null
+kubectl -n "${NS}" rollout status statefulset/db --timeout=180s >/dev/null
+kubectl -n "${NS}" rollout status deployment/resolver --timeout=180s >/dev/null`,
+        ],
+        checks: [
+          {
+            id: 'services',
+            description: 'service and headless hold the FQDNs of api and db',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} get configmap targets -o jsonpath='{.data.service} {.data.headless}'`,
+            expect: { equals: `api.${NS}.svc.cluster.local db.${NS}.svc.cluster.local` },
+            weight: 2,
+          },
+          {
+            id: 'pod-by-hostname',
+            description: 'pod-by-hostname holds the FQDN of db-0 under Service db',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} get configmap targets -o jsonpath='{.data.pod-by-hostname}'`,
+            expect: { equals: `db-0.db.${NS}.svc.cluster.local` },
+            weight: 1,
+          },
+          {
+            id: 'pod-by-ip',
+            description: 'pod-by-ip holds the IP-based FQDN of Pod web',
+            type: 'kubectl',
+            run: `[ "$(kubectl -n ${NS} get configmap targets -o jsonpath='{.data.pod-by-ip}')" = "$(kubectl -n ${NS} get pod web -o jsonpath='{.status.podIP}' | tr . -).${NS}.pod.cluster.local" ] && echo right || echo wrong`,
+            expect: { equals: 'right' },
+            weight: 2,
+          },
+          {
+            id: 'resolve',
+            description: 'every name resolves from inside the resolver Pod',
+            type: 'kubectl',
+            run: `kubectl -n ${NS} exec deployment/resolver -- sh -c 'cd /etc/targets; for k in service headless pod-by-hostname pod-by-ip; do nslookup "$(cat $k)" >/dev/null 2>&1 && echo ok || echo "$k fails"; done' | sort -u | xargs`,
+            expect: { equals: 'ok' },
+            weight: 1,
+            retrySeconds: 120,
+          },
+        ],
+        solution: [
+          `ip=$(kubectl -n ${NS} get pod web -o jsonpath='{.status.podIP}' | tr . -)
+kubectl -n ${NS} patch configmap targets --type=merge -p "{\\"data\\":{\\"service\\":\\"api.${NS}.svc.cluster.local\\",\\"headless\\":\\"db.${NS}.svc.cluster.local\\",\\"pod-by-hostname\\":\\"db-0.db.${NS}.svc.cluster.local\\",\\"pod-by-ip\\":\\"$ip.${NS}.pod.cluster.local\\"}}"`,
+        ],
+        hints: [
+          'The cluster\'s DNS domain is in the Corefile (kubectl -n kube-system get configmap coredns -o yaml) and in the search line of any Pod\'s /etc/resolv.conf.',
+          'A Service is <service>.<namespace>.svc.<domain>; a Pod behind a headless Service is <hostname>.<service>.<namespace>.svc.<domain>.',
+          'A Pod by IP is <ip with dashes>.<namespace>.pod.<domain>. kubectl get pod -o wide shows the IP.',
+          'A mounted ConfigMap reaches the Pod after a minute or so, without a restart.',
         ],
       }),
     },

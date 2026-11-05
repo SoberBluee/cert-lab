@@ -219,6 +219,82 @@ kubectl -n ${NS} get pod pay-0 -o jsonpath='{.status.containerStatuses[?(@.name=
         ],
       }),
     },
+    'logs-replicas': {
+      label: 'Collect one container\'s errors from every replica',
+      make: ({ NS }) => ({
+        title: 'Errors across replicas',
+        text: `Deployment \`checkout\` in namespace \`${NS}\` runs 3 replicas with containers \`api\` and \`proxy\`. On \`controlplane\`:
+
+1. Write every line containing \`ERROR\` that container \`api\` logged, across all replicas, to \`/opt/course/logs/api-errors.txt\`, each line prefixed with its Pod and container name.
+2. Write the name of the Pod whose \`api\` container logged the most errors to \`/opt/course/logs/worst-pod.txt\`.`,
+        setup: [
+          `${courseDir('logs')}
+${createNs(NS)}
+kubectl -n "${NS}" delete deployment checkout --ignore-not-found --wait=true >/dev/null
+kubectl -n "${NS}" apply -f - <<'EOF' >/dev/null
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: checkout }
+  template:
+    metadata:
+      labels: { app: checkout }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: api
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              errors=$(( $(od -An -N1 -tu1 /dev/urandom) % 20 + 4 ))
+              i=0
+              while [ $i -lt 60 ]; do
+                echo "INFO request $i handled in $(( i % 7 + 3 ))ms"
+                if [ $i -lt $errors ]; then echo "ERROR payment gateway timeout on request $i"; fi
+                i=$(( i + 1 ))
+              done
+              sleep infinity
+        - name: proxy
+          image: busybox:1.36
+          command: ["sh", "-c", "echo 'ERROR proxy upstream api not ready yet'; echo 'INFO proxy listening on 8080'; sleep infinity"]
+EOF
+kubectl -n "${NS}" rollout status deployment/checkout --timeout=180s >/dev/null`,
+        ],
+        checks: [
+          onCp({
+            id: 'errors',
+            description: 'api-errors.txt holds every ERROR line of container api, prefixed with its Pod and container',
+            run: `f=/opt/course/logs/api-errors.txt; ok=yes; total=0; for p in $(kubectl -n ${NS} get pods -l app=checkout -o jsonpath='{.items[*].metadata.name}'); do n=$(kubectl -n ${NS} logs "$p" -c api | grep -c ERROR); total=$((total + n)); [ "$(grep -c "$p.*api.*ERROR" $f 2>/dev/null)" = "$n" ] || ok=no; done; [ "$ok" = yes ] && [ "$total" -gt 0 ] && [ "$(grep -c ERROR $f 2>/dev/null)" = "$total" ] && echo match || echo differs`,
+            expect: { equals: 'match' },
+            weight: 4,
+          }),
+          onCp({
+            id: 'worst',
+            description: 'worst-pod.txt names a Pod with the most errors',
+            run: `have=${firstWord('/opt/course/logs/worst-pod.txt')}; max=0; for p in $(kubectl -n ${NS} get pods -l app=checkout -o jsonpath='{.items[*].metadata.name}'); do n=$(kubectl -n ${NS} logs "$p" -c api | grep -c ERROR); [ "$n" -gt "$max" ] && max=$n; done; [ -n "$have" ] && [ "$(kubectl -n ${NS} logs "$have" -c api 2>/dev/null | grep -c ERROR)" = "$max" ] && echo right || echo wrong`,
+            expect: { equals: 'right' },
+            weight: 2,
+          }),
+        ],
+        solution: [
+          `kubectl -n ${NS} logs -l app=checkout -c api --prefix --tail=-1 | grep ERROR > /opt/course/logs/api-errors.txt
+for p in $(kubectl -n ${NS} get pods -l app=checkout -o jsonpath='{.items[*].metadata.name}'); do
+  echo "$(kubectl -n ${NS} logs "$p" -c api | grep -c ERROR) $p"
+done | sort -n | tail -1 | awk '{print $2}' > /opt/course/logs/worst-pod.txt`,
+        ],
+        hints: [
+          'kubectl logs -l <selector> reads every Pod the selector matches, and -c picks one container of each.',
+          'Compare what kubectl logs prints for one Pod by name and by selector: the defaults differ. kubectl logs --help lists the flag that sets how far back to read, and the one that prefixes each line.',
+          'grep -c ERROR counts the lines of one Pod: loop over the Pods, then sort.',
+        ],
+      }),
+    },
     'sorted-list': {
       label: 'List Pods by creation time and phase',
       make: ({ NS }) => ({

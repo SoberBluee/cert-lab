@@ -163,6 +163,19 @@ function randomQuestion(item: Item, plain = false, layers: Depth = 1): Question 
 }
 
 const info = (i: Item) => (i.kind === 'create' ? i.builder : i.category);
+
+/** What a lab holds at most one of: a question that can take the API server down, and one that takes a worker away. */
+function labLimits() {
+  let api = false;
+  let worker = false;
+  return {
+    allows: (x: BuilderSummary | CategorySummary) => !(x.breaksApi && api) && !(x.takesWorker && worker),
+    add: (x: BuilderSummary | CategorySummary) => {
+      api ||= x.breaksApi;
+      worker ||= x.takesWorker;
+    },
+  };
+}
 export const itemId = (i: Item) => {
   const base = `${i.kind}:${info(i).id}`;
   if (i.kind === 'create' && i.addons) return `${base}:${i.addons.join('+')}`;
@@ -225,8 +238,8 @@ export function byCurriculum(items: Item[], seen: ReadonlySet<string> = new Set(
 }
 
 /**
- * `n` items of `kind`: distinct while the catalog lasts, no solo builder unless n is 1, at most one
- * that breaks the API. Without a topic, domains are drawn by curriculum weight. Items not in `seen`
+ * `n` items of `kind`: distinct while the catalog lasts, no solo builder unless n is 1, within the
+ * lab's limits (see labLimits), so a topic of one such category gives a shorter lab. Without a topic, domains are drawn by curriculum weight. Items not in `seen`
  * come first, so successive labs work through the whole catalog before repeating anything.
  */
 export function pickItems(
@@ -243,16 +256,16 @@ export function pickItems(
       ? [...shuffle(items.filter((i) => !seen.has(itemId(i)))), ...shuffle(items.filter((i) => seen.has(itemId(i))))]
       : byCurriculum(items, seen);
   const out: Item[] = [];
-  let apiTaken = false;
+  const limits = labLimits();
   for (let pass = 0; out.length < n && pass < n; pass++) {
     const before = out.length;
     for (const item of order()) {
       if (out.length >= n) break;
       const x = info(item);
       if ('solo' in x && x.solo && n > 1) continue;
-      if (x.breaksApi && apiTaken) continue;
+      if (!limits.allows(x)) continue;
       if (pass === 0 && out.some((o) => info(o).id === x.id)) continue;
-      apiTaken ||= x.breaksApi;
+      limits.add(x);
       out.push(item);
     }
     if (out.length === before) break;
@@ -265,21 +278,21 @@ export const WEAK_SPOTS = 'weak-spots';
 
 /**
  * `n` items from the Focus topics that need work, most needed first: one item per topic in turn, then round
- * again, so a short list is practised more than once. No solo builder unless n is 1, at most one item that
- * breaks the API.
+ * again, so a short list is practised more than once. No solo builder unless n is 1, and within the lab's limits
+ * (see labLimits).
  */
 export function pickWeakItems(catalog: RecipeCatalog, topics: LabTopic[], n: number, kind: LabKind = 'random', layers: Depth = 1): Item[] {
   const lists = topics.map((t) => shuffle(itemPool(catalog, n, kind, t, layers))).filter((l) => l.length > 0);
   const out: Item[] = [];
-  let apiTaken = false;
+  const limits = labLimits();
   for (let round = 0; out.length < n && round < n; round++) {
     const before = out.length;
     for (const list of lists) {
       if (out.length >= n) break;
       const item = list[round % list.length];
       const x = info(item);
-      if (x.breaksApi && apiTaken) continue;
-      apiTaken ||= x.breaksApi;
+      if (!limits.allows(x)) continue;
+      limits.add(x);
       out.push(item);
     }
     if (out.length === before) break;
@@ -338,16 +351,10 @@ export const MOCK_PLAN: Record<CkaDomain, number> = {
 export const MOCK_MINUTES = 120;
 export const MOCK_QUESTIONS = Object.values(MOCK_PLAN).reduce((s, n) => s + n, 0);
 
-/**
- * A full mock exam: questions drawn per domain by MOCK_PLAN, distinct topics, at most one that can
- * take the API server down, in random order, with the exam's mix of one and two root causes. Like
- * randomLab, it prefers what has not come up lately.
- */
-export async function fullMock(catalog: RecipeCatalog): Promise<Question[]> {
-  const seen = loadSeen();
-  const pool = itemPool(catalog, MOCK_QUESTIONS, 'random');
+/** The items of a full mock: drawn per domain by MOCK_PLAN, distinct topics, within the lab's limits (see labLimits). */
+export function pickMockItems(pool: Item[], seen: ReadonlySet<string> = new Set()): Item[] {
   const out: Item[] = [];
-  let apiTaken = false;
+  const limits = labLimits();
   for (const [domain, want] of Object.entries(MOCK_PLAN) as [CkaDomain, number][]) {
     const inDomain = pool.filter((i) => info(i).domain === domain);
     const ordered = [...shuffle(inDomain.filter((i) => !seen.has(itemId(i)))), ...shuffle(inDomain.filter((i) => seen.has(itemId(i))))];
@@ -355,13 +362,24 @@ export async function fullMock(catalog: RecipeCatalog): Promise<Question[]> {
     for (const item of ordered) {
       if (taken >= want) break;
       const x = info(item);
-      if (x.breaksApi && apiTaken) continue;
+      if (!limits.allows(x)) continue;
       if (out.some((o) => info(o).id === x.id)) continue;
-      apiTaken ||= x.breaksApi;
+      limits.add(x);
       out.push(item);
       taken++;
     }
   }
+  return out;
+}
+
+/**
+ * A full mock exam: see pickMockItems, in random order, with the exam's mix of one and two root
+ * causes. Like randomLab, it prefers what has not come up lately.
+ */
+export async function fullMock(catalog: RecipeCatalog): Promise<Question[]> {
+  const seen = loadSeen();
+  const pool = itemPool(catalog, MOCK_QUESTIONS, 'random');
+  const out = pickMockItems(pool, seen);
   localStorage.setItem(SEEN_KEY, JSON.stringify([...nextSeen(seen, out, pool)]));
   return Promise.all(shuffle(out).map((item) => validRandomQuestion(item, 'mix')));
 }

@@ -148,7 +148,7 @@ ${waitUnhealthy(NS, `app=${APP}`)}`,
   }),
   // Probe and memory kills belong to Restarting Pods; this pool covers what keeps a Pod from starting.
   layers: [
-    { name: 'the container', faults: ['image-pull', 'bad-command', 'no-bash', 'configmap-key'] },
+    { name: 'the container', faults: ['image-pull', 'bad-command', 'no-bash', 'configmap-key', 'exits-cleanly'] },
     { name: 'startup and readiness', faults: ['init-container-stuck', 'readiness-path'] },
     { name: 'scheduling', faults: ['requests-too-large', 'node-selector'] },
   ],
@@ -251,6 +251,32 @@ kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.spec.paused}' | grep -
       wait: rollout(NS, APP),
       explain:
         'The Deployment is paused (`spec.paused: true`), so a template change made since never rolls out: the old Pods look fine, but `updatedReplicas` stays behind and `kubectl rollout status` waits for ever. `kubectl get deployment -o yaml` shows `paused: true`; `kubectl rollout resume` lets the rollout finish. The strategy also says `maxSurge: 0` with `maxUnavailable: 1`, which looks suspicious but is a valid strategy (one Pod at a time, no extras): it is not the cause.',
+    },
+    {
+      id: 'exits-cleanly',
+      label: 'The command finishes with exit code 0 (Completed, then CrashLoopBackOff)',
+      break: patch(NS, APP, `{"spec":{"template":{"spec":{"containers":[{"name":"web","command":["sh","-c","nginx -t && echo configuration ok"]}]}}}}`),
+      fix: `${patch(NS, APP, '[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]', 'json')}`,
+      wait: rollout(NS, APP),
+      explain:
+        'A `command` override tests the nginx configuration and stops there. It succeeds, so the container exits with code `0`: `kubectl get pods` flips between `Completed` and `CrashLoopBackOff`, and `describe pod` shows `Last State: Terminated, Reason: Completed, Exit Code: 0`. Nothing failed: a Deployment simply expects its containers to keep running, so its `restartPolicy: Always` starts them again. Remove the command so that nginx runs in the foreground.',
+    },
+    {
+      id: 'rollout-half-done',
+      label: 'A rollout hangs on a bad image while the old Pods keep serving',
+      // After the shell's scale-up, so that healthy Pods run when the bad rollout starts.
+      settle: `${rollout(NS, APP)}
+kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"progressDeadlineSeconds":30,"strategy":{"rollingUpdate":{"maxSurge":1,"maxUnavailable":0}}}}' >/dev/null
+kubectl -n "${NS}" set image "deployment/${APP}" web=nginx:1.99-alpine >/dev/null
+for _ in $(seq 1 45); do
+  [[ "$(kubectl -n "${NS}" get deployment "${APP}" -o jsonpath='{.status.conditions[?(@.type=="Progressing")].reason}')" == ProgressDeadlineExceeded ]] && exit 0
+  sleep 2
+done
+echo "the rollout of ${APP} did not hit its deadline" >&2
+exit 1`,
+      fix: `kubectl -n "${NS}" set image "deployment/${APP}" web=${IMAGE}`,
+      wait: rollout(NS, APP),
+      explain: `The app still answers, so this one is easy to miss: with \`maxUnavailable: 0\` the two old Pods stay up while the rollout waits for a new Pod that can never start, because \`nginx:1.99-alpine\` does not exist. \`kubectl -n ${NS} get pods\` shows one extra Pod in \`ImagePullBackOff\`, \`kubectl -n ${NS} rollout status deployment/${APP}\` reports \`exceeded its progress deadline\`, and the Deployment's \`Progressing\` condition says \`ProgressDeadlineExceeded\`. Put the image back, or run \`kubectl rollout undo\`.`,
     },
   ],
 };
