@@ -4,6 +4,8 @@ import type { Base, CkaDomain, Domain } from './scenario';
 
 export type SessionState = 'provisioning' | 'running' | 'grading' | 'completed' | 'failed';
 export type Mode = 'practice' | 'drill' | 'mock' | 'dry-run' | 'verify' | 'playground' | 'learn';
+/** Modes with a clock that a pause stops: the time an attempt takes, and an exam's countdown. */
+export const PAUSABLE_MODES: readonly Mode[] = ['practice', 'drill', 'mock'];
 
 export interface ScenarioStats {
   attempts: number;
@@ -97,11 +99,11 @@ export interface SessionView {
   readyAt?: string;
   /** Exam mode: when the exam is submitted automatically, later by the time spent paused. Absent while paused. */
   deadlineAt?: string;
-  /** Exam mode: when the exam was paused. The clock is stopped until it resumes. */
+  /** A lab with a clock (PAUSABLE_MODES): when it was paused. The clock is stopped until it resumes. */
   pausedAt?: string;
   /** Exam mode, while paused: milliseconds left on the clock. */
   timeLeftMs?: number;
-  /** Exam mode: seconds spent in pauses that have ended (every pause, once the exam ends). Not exam time. */
+  /** A lab with a clock: seconds spent in pauses that have ended (every pause, once it ends). Not counted as its time. */
   pausedS?: number;
   endedAt?: string;
   error?: string;
@@ -199,7 +201,7 @@ export interface AttemptRecord {
   startedAt: string;
   endedAt?: string;
   durationS?: number;
-  /** Exam mode: seconds the exam was paused, which durationS leaves out. */
+  /** Seconds the lab was paused, which durationS leaves out. */
   pausedS?: number;
   score?: number;
   maxScore?: number;

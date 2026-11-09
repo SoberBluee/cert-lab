@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { PLAYGROUNDS, type PlaygroundKind, type SessionView } from '@cka/schema';
+import { PAUSABLE_MODES, PLAYGROUNDS, type PlaygroundKind, type SessionView } from '@cka/schema';
 import { api, studioApi } from '../api';
 import { AttemptReviewView } from '../components/AttemptReviewView';
 import { GradeResultView } from '../components/GradeResultView';
@@ -47,20 +47,25 @@ const ResumeIcon = () => (
   </svg>
 );
 
-/** Exam mode, while paused: the time left and the way back, in place of the question. */
-function PausedExam({ session, resuming, onResume }: { session: SessionView; resuming: boolean; onResume: () => void }) {
+/** While a lab is paused: its clock and the way back, in place of the question. */
+function Paused({ session, resuming, onResume }: { session: SessionView; resuming: boolean; onResume: () => void }) {
   const now = useNow();
+  const exam = session.mode === 'mock';
   const since = new Date(session.pausedAt!);
   const at = since.toDateString() === new Date(now).toDateString() ? since.toLocaleTimeString() : since.toLocaleString();
+  // An exam shows the time it has left; any other lab the time it has taken, earlier pauses left out.
+  const clockS = exam
+    ? (session.timeLeftMs ?? 0) / 1000
+    : Math.max(0, (since.getTime() - Date.parse(session.readyAt ?? session.pausedAt!)) / 1000 - (session.pausedS ?? 0));
   return (
     <div className="flex flex-col items-center gap-5 py-10 text-center">
       <div>
-        <div className="font-mono text-5xl text-zinc-100 tabular-nums">{formatDuration((session.timeLeftMs ?? 0) / 1000)}</div>
-        <div className="mt-1 text-sm text-zinc-400">left on the clock</div>
+        <div className="font-mono text-5xl text-zinc-100 tabular-nums">{formatDuration(clockS)}</div>
+        <div className="mt-1 text-sm text-zinc-400">{exam ? 'left on the clock' : 'on the clock so far'}</div>
       </div>
       <Button variant="primary" className="px-5 py-2 text-base" disabled={resuming || session.state !== 'running'} onClick={onResume}>
         <ResumeIcon />
-        {resuming ? 'Checking the lab…' : 'Resume exam'}
+        {resuming ? 'Checking the lab…' : exam ? 'Resume exam' : 'Resume lab'}
       </Button>
       <div className="space-y-1 text-xs text-zinc-500">
         <p>
@@ -71,7 +76,7 @@ function PausedExam({ session, resuming, onResume }: { session: SessionView; res
           The questions and the terminal are hidden until you resume.{' '}
           {session.base === 'floci'
             ? "The lab's AWS resources stay as they are."
-            : 'The lab VMs keep running; on resume they are checked and their clocks synced before the timer restarts.'}
+            : 'The lab VMs keep running; on resume they are checked and their clocks synced before the clock restarts.'}
         </p>
       </div>
     </div>
@@ -228,8 +233,9 @@ function TaskPane(props: {
   const { session } = props;
   const exam = session.mode === 'mock';
   const playground = session.mode === 'playground';
-  // A paused exam hides its questions until it resumes.
-  const paused = exam && !!session.pausedAt && session.state === 'running';
+  const pausable = PAUSABLE_MODES.includes(session.mode);
+  // A paused lab hides its questions until it resumes.
+  const paused = pausable && !!session.pausedAt && session.state === 'running';
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
       <header className="space-y-2 border-b border-zinc-800 px-4 py-2.5">
@@ -251,20 +257,24 @@ function TaskPane(props: {
                   <ResumeIcon />
                   {props.resuming ? 'Checking the lab…' : 'Resume'}
                 </Button>
-              ) : exam ? (
-                <>
-                  <Button disabled={!props.canPause} onClick={props.onPause} title="Stop the clock and hide the questions until you resume">
-                    <PauseIcon />
-                    {props.pausing ? 'Pausing…' : 'Pause'}
-                  </Button>
-                  <Button variant="primary" disabled={!props.canSubmit} onClick={props.onSubmit}>
-                    {props.grading ? 'Submitting…' : 'Submit exam'}
-                  </Button>
-                </>
               ) : (
-                <Button variant="primary" shortcut="g" disabled={!props.canGrade} onClick={props.onGrade}>
-                  {props.grading ? 'Grading…' : 'Grade'}
-                </Button>
+                <>
+                  {pausable && (
+                    <Button disabled={!props.canPause} onClick={props.onPause} title="Stop the clock and hide the questions until you resume">
+                      <PauseIcon />
+                      {props.pausing ? 'Pausing…' : 'Pause'}
+                    </Button>
+                  )}
+                  {exam ? (
+                    <Button variant="primary" disabled={!props.canSubmit} onClick={props.onSubmit}>
+                      {props.grading ? 'Submitting…' : 'Submit exam'}
+                    </Button>
+                  ) : (
+                    <Button variant="primary" shortcut="g" disabled={!props.canGrade} onClick={props.onGrade}>
+                      {props.grading ? 'Grading…' : 'Grade'}
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -280,7 +290,7 @@ function TaskPane(props: {
           </div>
         )}
         {paused ? (
-          <PausedExam session={session} resuming={props.resuming} onResume={props.onResume} />
+          <Paused session={session} resuming={props.resuming} onResume={props.onResume} />
         ) : (
           !playground && <TaskBody session={session} active={props.active} onOpen={props.onOpen} />
         )}
@@ -317,11 +327,12 @@ function LabStatus({
 }) {
   const failed = session.state === 'failed';
   const paused = !!session.pausedAt && session.state === 'running';
+  const what = session.mode === 'mock' ? 'exam' : 'lab';
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
       <header className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 px-2 py-1.5">
         <h2 className="mr-2 shrink-0 px-2 text-sm font-semibold tracking-wide text-zinc-300 uppercase">
-          {failed ? 'Session failed' : paused ? 'Exam paused' : session.state === 'provisioning' ? 'Preparing the lab' : 'Terminal'}
+          {failed ? 'Session failed' : paused ? `${what === 'exam' ? 'Exam' : 'Lab'} paused` : session.state === 'provisioning' ? 'Preparing the lab' : 'Terminal'}
         </h2>
         <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">{actions}</div>
       </header>
@@ -333,7 +344,7 @@ function LabStatus({
           </Button>
         </div>
       ) : paused ? (
-        <div className="min-h-0 flex-1 p-4 text-sm text-zinc-500">The terminal is hidden until you resume the exam.</div>
+        <div className="min-h-0 flex-1 p-4 text-sm text-zinc-500">The terminal is hidden until you resume the {what}.</div>
       ) : (
         <div className="min-h-0 flex-1 p-4">
           <ProgressLog session={session} />
@@ -494,7 +505,7 @@ export function SessionPage() {
   const task = session?.tasks[activeTask] ?? session?.tasks[0];
 
   const state = session?.state;
-  // A paused exam hides its questions and terminal until it resumes.
+  // A paused lab hides its questions and terminal until it resumes.
   const paused = !!session?.pausedAt;
 
   // Minutes per question: tell the server which question is on screen while the lab runs, and
@@ -522,12 +533,15 @@ export function SessionPage() {
     if (t && !t.ready && state === 'running') openTask.mutate(t.id);
   };
   const exam = session?.mode === 'mock';
-  const canGrade = state === 'running' && !grade.isPending && !session?.preparingTask && !playground && !learn && !exam;
-  const canHint = (state === 'running' || state === 'grading') && !!task && task.hintsRevealed.length < task.hintsTotal && session?.mode === 'practice';
+  const canGrade = state === 'running' && !grade.isPending && !session?.preparingTask && !playground && !learn && !exam && !paused;
+  const canHint =
+    (state === 'running' || state === 'grading') && !!task && task.hintsRevealed.length < task.hintsTotal && session?.mode === 'practice' && !paused;
   const canReset = exam ? state === 'failed' : state === 'running' || state === 'failed';
-  const canSolution = !!session && session.mode === 'practice' && !session.solutionViewed && !!scenario.data?.hasSolution && state !== 'provisioning';
+  const canSolution =
+    !!session && session.mode === 'practice' && !session.solutionViewed && !!scenario.data?.hasSolution && state !== 'provisioning' && !paused;
   const canSubmit = exam && state === 'running' && !submit.isPending && !paused;
-  const canPause = exam && state === 'running' && !paused && !pause.isPending && !submit.isPending;
+  const canPause =
+    !!session && PAUSABLE_MODES.includes(session.mode) && state === 'running' && !paused && !pause.isPending && !submit.isPending && !grade.isPending;
 
   // aws labs have no VMs or snapshots: a reset is a fresh account, ending removes the session's resources.
   const aws = session?.base === 'floci';

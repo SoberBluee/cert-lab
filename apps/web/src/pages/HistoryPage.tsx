@@ -115,7 +115,7 @@ export function HistoryPage() {
                       <td className="py-2 pr-4 font-mono text-zinc-400">
                         {a.durationS !== undefined ? formatDuration(a.durationS) : '-'}
                         {a.pausedS ? (
-                          <div className="font-sans text-xs text-zinc-500" title="The exam was paused; the time above leaves the pauses out">
+                          <div className="font-sans text-xs text-zinc-500" title="The lab was paused; the time above leaves the pauses out">
                             paused {formatDuration(a.pausedS)}
                           </div>
                         ) : null}

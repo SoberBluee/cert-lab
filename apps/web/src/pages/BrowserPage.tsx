@@ -222,12 +222,13 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
           <div className="flex items-center gap-3 text-sm">
             <StateBadge state={session.state} />
             <span>
-              {session.pausedAt ? 'Exam paused' : 'Session in progress'}: <span className="font-medium text-zinc-100">{session.scenarioTitle}</span>
+              {session.pausedAt ? `${session.mode === 'mock' ? 'Exam' : 'Lab'} paused` : 'Session in progress'}:{' '}
+              <span className="font-medium text-zinc-100">{session.scenarioTitle}</span>
               {session.timeLeftMs !== undefined && <span className="text-zinc-400"> · {formatDuration(session.timeLeftMs / 1000)} left</span>}
             </span>
           </div>
           <Link to={sessionPath} className="text-sm font-medium text-sky-400 hover:text-sky-300">
-            {session.pausedAt ? 'Resume exam →' : 'Open session →'}
+            {session.pausedAt ? `Resume ${session.mode === 'mock' ? 'exam' : 'lab'} →` : 'Open session →'}
           </Link>
         </div>
       )}

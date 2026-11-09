@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { basename, join } from 'node:path';
 import {
+  PAUSABLE_MODES,
   visibleVars,
   type Driver,
   type PlaygroundKind,
@@ -61,11 +62,23 @@ const canReroll = (s: LoadedScenario) =>
     'oneOf' in v ? v.oneOf.length > 1 : 'range' in v ? v.range[1] > v.range[0] : 'node' in v ? v.node === 'any' || s.def.nodes.workers > 1 : true,
   );
 
+/** What a pause stops: an exam, or the lab of any other mode with a clock. */
+const pausedWhat = (mode: Mode) => (mode === 'mock' ? 'exam' : 'lab');
+const capitalized = (s: string) => s[0].toUpperCase() + s.slice(1);
+
+/** A lab with a clock: when it was paused, and the time spent in pauses that have ended. */
+function pauseTimes(row: SessionRow): Pick<SessionView, 'pausedAt' | 'pausedS'> {
+  return {
+    ...(row.pausedAt && { pausedAt: row.pausedAt }),
+    ...(row.pausedMs > 0 && { pausedS: Math.round(row.pausedMs / 1000) }),
+  };
+}
+
 /** Exam mode: the deadline while the clock runs, the time left while it is paused, and the time spent paused. */
 function examTimes(row: SessionRow, limitMs: number): Pick<SessionView, 'deadlineAt' | 'pausedAt' | 'timeLeftMs' | 'pausedS'> {
   return {
-    ...(row.pausedAt ? { pausedAt: row.pausedAt, timeLeftMs: clockLeftMs(row, limitMs) } : { deadlineAt: clockDeadline(row, limitMs) }),
-    ...(row.pausedMs > 0 && { pausedS: Math.round(row.pausedMs / 1000) }),
+    ...pauseTimes(row),
+    ...(row.pausedAt ? { timeLeftMs: clockLeftMs(row, limitMs) } : { deadlineAt: clockDeadline(row, limitMs) }),
   };
 }
 
@@ -131,7 +144,7 @@ export class SessionManager extends EventEmitter {
       attemptId: row.attemptId,
       startedAt: row.startedAt,
       readyAt: row.readyAt,
-      ...(row.mode === 'mock' && row.readyAt && s ? examTimes(row, examLimitMs(s)) : {}),
+      ...(row.mode === 'mock' ? (row.readyAt && s ? examTimes(row, examLimitMs(s)) : {}) : PAUSABLE_MODES.includes(row.mode) ? pauseTimes(row) : {}),
       endedAt: row.endedAt,
       error: row.error,
       progress: row.progress,
@@ -372,40 +385,47 @@ export class SessionManager extends EventEmitter {
     return this.end();
   }
 
-  /** Exam mode: stops the clock until resume. The lab keeps running; the UI hides the questions meanwhile. */
+  /**
+   * Stops the clock of a lab that has one (PAUSABLE_MODES): an exam's countdown, or the time an
+   * attempt takes. The lab keeps running; the UI hides the questions meanwhile.
+   */
   pause(): SessionView {
     const row = this.requireTasks();
-    if (row.mode !== 'mock') throw new OrchestratorError('Only an exam can be paused.', 409);
+    if (!PAUSABLE_MODES.includes(row.mode)) throw new OrchestratorError('This session has no clock to pause.', 409);
+    const what = pausedWhat(row.mode);
     if (row.pausedAt) return this.toView(row);
-    if (row.state !== 'running') throw new OrchestratorError(`Cannot pause while the exam is ${row.state}.`, 409);
-    if (clockLeftMs(row, examLimitMs(this.scenarioFor(row))) <= 0) throw new OrchestratorError('Time is up, so the exam can no longer be paused.', 409);
+    if (row.state !== 'running') throw new OrchestratorError(`Cannot pause while the ${what} is ${row.state}.`, 409);
+    if (row.mode === 'mock' && clockLeftMs(row, examLimitMs(this.scenarioFor(row))) <= 0) {
+      throw new OrchestratorError('Time is up, so the exam can no longer be paused.', 409);
+    }
     this.flushFocus(row, null);
     this.store.updateSession(row.id, { pausedAt: now() });
-    this.progress(row.id, 'Exam paused');
+    this.progress(row.id, `${capitalized(what)} paused`);
     return this.toView(this.store.getSession(row.id)!);
   }
 
   /**
-   * Exam mode: restarts the clock with the time that was left. The lab ran on through the pause, or
-   * slept with the Mac, so it is checked first; the exam stays paused if it does not answer.
+   * Restarts the clock where it stopped. The lab ran on through the pause, or slept with the Mac, so
+   * it is checked first; the lab stays paused if it does not answer.
    */
   async resume(): Promise<SessionView> {
     const row = this.requireTasks();
-    if (row.mode !== 'mock') throw new OrchestratorError('Only an exam can be paused and resumed.', 409);
+    if (!PAUSABLE_MODES.includes(row.mode)) throw new OrchestratorError('This session has no clock to pause or resume.', 409);
+    const what = pausedWhat(row.mode);
     if (!row.pausedAt) return this.toView(row);
-    if (row.state !== 'running') throw new OrchestratorError(`Cannot resume while the exam is ${row.state}.`, 409);
+    if (row.state !== 'running') throw new OrchestratorError(`Cannot resume while the ${what} is ${row.state}.`, 409);
     await this.checkLab(row);
     const cur = this.store.getSession(row.id);
     // Another resume may have won the race while the lab was checked.
     if (!cur || cur.pausedAt !== row.pausedAt) return this.toView(cur ?? row);
     const at = Date.now();
     this.store.updateSession(row.id, resumeClock(cur, at));
-    this.progress(row.id, `Exam resumed after a ${pauseLength(at - Date.parse(row.pausedAt))} pause`);
+    this.progress(row.id, `${capitalized(what)} resumed after a ${pauseLength(at - Date.parse(row.pausedAt))} pause`);
     return this.toView(this.store.getSession(row.id)!);
   }
 
   /**
-   * Before a paused exam's clock restarts: each node must answer, and its clock is stepped. The API
+   * Before a paused lab's clock restarts: each node must answer, and its clock is stepped. The API
    * server is not checked, since a question may have broken it on purpose.
    */
   private async checkLab(row: SessionRow): Promise<void> {
@@ -423,10 +443,11 @@ export class SessionManager extends EventEmitter {
     ).filter((f): f is string => Boolean(f));
     if (!failed.length) return;
     this.log.warn({ sessionId: row.id, failed }, 'lab did not answer on resume');
+    const exam = row.mode === 'mock';
     throw new OrchestratorError(
-      `The lab did not answer, so the exam stays paused (${failed[0]}${failed.length > 1 ? `, and ${failed.length - 1} more` : ''}). ` +
+      `The lab did not answer, so the ${pausedWhat(row.mode)} stays paused (${failed[0]}${failed.length > 1 ? `, and ${failed.length - 1} more` : ''}). ` +
         'Right after the Mac wakes up the VMs may need a minute: press Resume again. ' +
-        'If the Mac restarted or the VMs were stopped, the lab is gone: abandon the exam and take it again.',
+        `If the Mac restarted or the VMs were stopped, the lab is gone: ${exam ? 'abandon the exam and take it again' : 'end the session and start the lab again'}.`,
       503,
     );
   }
@@ -434,6 +455,7 @@ export class SessionManager extends EventEmitter {
   async grade(opts: GradeOptions = {}): Promise<GradeResult> {
     const row = this.requireTasks();
     if (row.mode === 'mock') throw new OrchestratorError('In exam mode, submit the exam to see your score.', 409);
+    if (row.pausedAt) throw new OrchestratorError('The lab is paused. Resume it before grading.', 409);
     return this.runGrade(row, opts);
   }
 
@@ -509,7 +531,7 @@ export class SessionManager extends EventEmitter {
   focus(taskId: string | null): SessionView {
     const row = this.requireTasks();
     if (taskId !== null && !this.scenarioFor(row).tasks.some((t) => t.id === taskId)) throw new OrchestratorError(`Unknown task "${taskId}".`, 404);
-    // A paused exam shows no question; pause() already stopped the one on screen.
+    // A paused lab shows no question; pause() already stopped the one on screen.
     if ((row.state === 'running' || row.state === 'grading') && !row.pausedAt) this.flushFocus(row, taskId);
     return this.toView(this.store.getSession(row.id)!);
   }
@@ -575,7 +597,7 @@ export class SessionManager extends EventEmitter {
    */
   openTask(taskId: string): StartResult {
     const row = this.requireTasks();
-    if (row.pausedAt) throw new OrchestratorError('The exam is paused. Resume it to open a question.', 409);
+    if (row.pausedAt) throw new OrchestratorError(`The ${pausedWhat(row.mode)} is paused. Resume it to open a question.`, 409);
     const task = this.scenarioFor(row).tasks.find((t) => t.id === taskId);
     if (!task) throw new OrchestratorError(`Unknown task "${taskId}".`, 404);
     if (row.state === 'running' && !isReady(row, taskId)) {
@@ -644,7 +666,7 @@ export class SessionManager extends EventEmitter {
     if (row.mode !== 'playground' && row.mode !== 'learn') this.flushFocus(this.store.getSession(row.id) ?? row, null);
     this.finalizeAttempt(row);
     const at = Date.now();
-    // An exam abandoned while paused ends with that pause counted in pausedMs.
+    // A lab ended while paused ends with that pause counted in pausedMs.
     this.store.updateSession(row.id, { state: 'completed', endedAt: new Date(at).toISOString(), ...(row.pausedAt ? resumeClock(row, at) : {}) });
     this.log.info({ sessionId: row.id }, 'session ended');
     this.emitChange(row.id);
@@ -652,7 +674,7 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Marks the attempt ended. Graded attempts keep the duration measured at the last grade. Durations
-   * leave out the time an exam spent paused, which is recorded on its own.
+   * leave out the time the lab spent paused, which is recorded on its own.
    */
   private finalizeAttempt(row: SessionRow) {
     const status = this.store.attemptStatus(row.attemptId);

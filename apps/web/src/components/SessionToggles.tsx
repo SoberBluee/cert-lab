@@ -7,14 +7,15 @@ import { SECTIONS, useSection } from '../section';
 export function ExamToggle({ session }: { session?: SessionView | null }) {
   const [exam, setExam] = useExamMode();
   const section = useSection();
-  if (session?.mode === 'mock' && session.pausedAt) {
+  if (session?.pausedAt) {
+    const what = session.mode === 'mock' ? 'exam' : 'lab';
     return (
       <Link
         to={`${SECTIONS[section].base}/session`}
-        title="Open the exam to resume it"
+        title={`Open the ${what} to resume it`}
         className="rounded-md border border-sky-700/70 bg-sky-950/50 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:border-sky-500 hover:text-sky-200"
       >
-        Exam paused
+        {what === 'exam' ? 'Exam' : 'Lab'} paused
       </Link>
     );
   }

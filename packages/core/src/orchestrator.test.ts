@@ -334,12 +334,12 @@ describe('pausing an exam', () => {
     assert.equal(attempt.pausedS, 2 * 3600);
   });
 
-  it('pauses only an exam with time left, and pausing twice is harmless', async (t) => {
+  it('pauses a lab with a clock, an exam only with time left, and pausing twice is harmless', async (t) => {
     frozen(t);
     const { sessions, start } = setup();
-    await start();
-    assert.throws(() => sessions.pause(), /Only an exam can be paused/);
-    await assert.rejects(sessions.resume(), /Only an exam/);
+    await (await sessions.startPlayground()).ready;
+    assert.throws(() => sessions.pause(), /no tasks/);
+    await assert.rejects(sessions.resume(), /no tasks/);
     await sessions.end();
     await start('mock');
     const first = sessions.pause();
@@ -349,6 +349,51 @@ describe('pausing an exam', () => {
     assert.equal((await sessions.resume()).deadlineAt, new Date(T0 + 6 * MIN).toISOString());
     t.mock.timers.tick(5 * MIN);
     assert.throws(() => sessions.pause(), /Time is up/);
+  });
+});
+
+describe('pausing a practice lab', () => {
+  const T0 = Date.parse('2026-10-27T09:00:00.000Z');
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+
+  it('leaves the pause out of its time, and refuses to grade or open a question until resumed', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: T0 });
+    const { sessions, start, store } = setup();
+    assert.equal((await start()).pausedAt, undefined);
+    t.mock.timers.tick(MIN);
+    const paused = sessions.pause();
+    assert.equal(paused.state, 'running');
+    assert.equal(paused.pausedAt, new Date(T0 + MIN).toISOString());
+    assert.equal(paused.deadlineAt, undefined);
+    assert.equal(paused.timeLeftMs, undefined);
+
+    t.mock.timers.tick(HOUR);
+    await assert.rejects(sessions.grade({ retry: false }), /The lab is paused\. Resume it before grading/);
+    assert.throws(() => sessions.openTask('q2'), /The lab is paused\. Resume it to open a question/);
+    const resumed = await sessions.resume();
+    assert.equal(resumed.pausedAt, undefined);
+    assert.equal(resumed.pausedS, 3600);
+    assert.deepEqual(
+      resumed.progress.slice(-2).map((p) => p.message),
+      ['Lab paused', 'Lab resumed after a 1 h 0 min pause'],
+    );
+
+    t.mock.timers.tick(30_000);
+    assert.equal((await sessions.grade({ retry: false })).elapsedS, 90);
+    await sessions.end();
+    const [attempt] = store.listAttempts();
+    assert.equal(attempt.durationS, 90);
+    assert.equal(attempt.pausedS, 3600);
+  });
+
+  it('says to start the lab again, not to retake an exam, when the lab is gone', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: T0 });
+    const { driver, sessions, start } = setup();
+    await start();
+    sessions.pause();
+    driver.down = true;
+    await assert.rejects(sessions.resume(), /so the lab stays paused .*end the session and start the lab again/);
   });
 });
 
