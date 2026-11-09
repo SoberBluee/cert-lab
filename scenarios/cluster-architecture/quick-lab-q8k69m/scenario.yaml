@@ -1,0 +1,58 @@
+id: quick-lab-q8k69m
+title: "Quick lab: Kubeconfig extraction"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 6
+points: 6
+tags: [ kubeconfig, contexts, certificates, openssl, jsonpath, auth-can-i, auth-whoami ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_USER: { oneOf: [ dev-laptop, oncall, audit-bot, release-mgr, qa-runner, data-pipeline, sre-jump, billing-svc ] }
+  Q1_CTX: { oneOf: [ prod-eu, prod-us, dev-sandbox, perf-lab, dr-east, edge-west, blue-team, research ] }
+  Q1_NS: { oneOf: [ payments, billing, checkout, inventory, reporting, identity, search, ledger ] }
+tasks:
+  - id: q1
+    title: Which context may delete Secrets in ${Q1_NS}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-context
+        description: context names the one context that may delete Secrets in ${Q1_NS}
+        run: want=$(for c in $(kubectl --kubeconfig /var/tmp/cka-kc-can-i-kubeconfig config get-contexts -o name); do if [ "$(kubectl --kubeconfig /var/tmp/cka-kc-can-i-kubeconfig --context "$c" auth can-i delete secrets -n ${Q1_NS} 2>/dev/null)" = yes ]; then echo "$c"; fi; done); [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/kc/can-i/context 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 3
+      - type: ssh
+        node: controlplane
+        id: q1-username
+        description: username holds the user name the API server sees for that context's user
+        run: c=$(for c in $(kubectl --kubeconfig /var/tmp/cka-kc-can-i-kubeconfig config get-contexts -o name); do if [ "$(kubectl --kubeconfig /var/tmp/cka-kc-can-i-kubeconfig --context "$c" auth can-i delete secrets -n ${Q1_NS} 2>/dev/null)" = yes ]; then echo "$c"; fi; done); want=$(kubectl --kubeconfig /var/tmp/cka-kc-can-i-kubeconfig --context "$c" auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null); [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/kc/can-i/username 2>/dev/null)" = "$want" ] && echo ok || echo "want $want"
+        expect: { equals: ok }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-current
+        description: that context is the current context of the kubeconfig
+        run: c=$(for c in $(kubectl --kubeconfig /var/tmp/cka-kc-can-i-kubeconfig config get-contexts -o name); do if [ "$(kubectl --kubeconfig /var/tmp/cka-kc-can-i-kubeconfig --context "$c" auth can-i delete secrets -n ${Q1_NS} 2>/dev/null)" = yes ]; then echo "$c"; fi; done); [ -n "$c" ] && [ "$(kubectl --kubeconfig /opt/course/kc/can-i/kubeconfig config current-context 2>/dev/null)" = "$c" ] && echo ok || echo "want $c"
+        expect: { equals: ok }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-unchanged
+        description: nothing else in the kubeconfig changed
+        run: v() { kubectl --kubeconfig "$1" config view --raw -o json 2>/dev/null | jq -S 'del(."current-context")'; }; a=$(v /opt/course/kc/can-i/kubeconfig); [ -n "$a" ] && [ "$a" = "$(v /var/tmp/cka-kc-can-i-kubeconfig)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - kubectl --kubeconfig <file> --context <context> runs a command as that context's user.
+      - kubectl auth can-i delete secrets -n ${Q1_NS} answers yes or no for the user doing the asking; try it with every context.
+      - kubectl auth whoami shows the user name the API server sees; kubectl config use-context changes the file's current-context.
+    recipe: { builder: kubeconfig, parts: [] }

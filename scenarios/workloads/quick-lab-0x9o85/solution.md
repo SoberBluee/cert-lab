@@ -1,0 +1,46 @@
+## Solution
+
+### Question 1: Pod ${Q1_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "${Q1_NAME}"
+  namespace: "${Q1_NS}"
+spec:
+  containers:
+    - name: main
+      image: "${Q1_IMAGE}"
+      command:
+        - sleep
+        - 1d
+EOF
+kubectl -n "${Q1_NS}" wait --for=condition=Ready "pod/${Q1_NAME}" --timeout=180s
+kubectl -n "${Q1_NS}" set image "pod/${Q1_NAME}" "main=${Q1_UPDATE_IMAGE}"
+timeout 180 bash -c 'until [[ "$(kubectl -n "$0" get pod "$1" -o jsonpath="{.status.containerStatuses[?(@.name==\"main\")].restartCount}")" -ge 1 ]] 2>/dev/null; do sleep 2; done' "${Q1_NS}" "${Q1_NAME}"
+kubectl -n "${Q1_NS}" wait --for=condition=Ready "pod/${Q1_NAME}" --timeout=120s
+```
+
+### Question 2: Pod ${Q2_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "${Q2_NAME}"
+  namespace: "${Q2_NS}"
+spec:
+  containers:
+    - name: main
+      image: "${Q2_IMAGE}"
+      command:
+        - sleep
+        - 1d
+EOF
+kubectl -n "${Q2_NS}" wait --for=condition=Ready "pod/${Q2_NAME}" --timeout=180s
+kubectl -n "${Q2_NS}" annotate pod "${Q2_NAME}" "${Q2_NOTE_KEY}=${Q2_NOTE_VALUE}" --overwrite
+kubectl -n "${Q2_NS}" label pod "${Q2_NAME}" "${Q2_LABEL_KEY}=${Q2_LABEL_VALUE}" --overwrite
+```

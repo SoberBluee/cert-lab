@@ -1,0 +1,15 @@
+## Solution
+
+### Question 1: Which context may delete Secrets in ${Q1_NS}
+
+```bash
+f=/opt/course/kc/can-i/kubeconfig
+# auth can-i asks as the user of the context given.
+c=$(for c in $(kubectl --kubeconfig $f config get-contexts -o name); do
+  if [ "$(kubectl --kubeconfig $f --context "$c" auth can-i delete secrets -n "${Q1_NS}")" = yes ]; then echo "$c"; fi
+done)
+echo "$c" > /opt/course/kc/can-i/context
+kubectl --kubeconfig $f --context "$c" auth whoami -o jsonpath='{.status.userInfo.username}' > /opt/course/kc/can-i/username
+kubectl --kubeconfig $f config use-context "$c"
+chown -R ubuntu:ubuntu /opt/course/kc/can-i
+```

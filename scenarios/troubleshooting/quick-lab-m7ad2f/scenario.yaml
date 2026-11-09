@@ -9,6 +9,7 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 60
+draft: true
 variables:
   Q1_NS: { oneOf: [ fleet, edge, infra ] }
   Q1_FAULT: { oneOf: [ kubelet-kubeconfig-server, kubelet-client-ca, runtime-endpoint, kubelet-config-flag, kubelet-kubeconfig-flag, kubelet-serving-cert, kubelet-max-pods ], hidden: true }

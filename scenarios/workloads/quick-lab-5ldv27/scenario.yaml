@@ -9,6 +9,7 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 30
+draft: true
 variables:
   Q1_NS: { oneOf: [ shop, billing, reports, rightsizing, finops, workloads, compute, media, batch, services ] }
   Q1_NAME: { oneOf: [ web, api, worker, renderer, encoder, processor, analyzer, indexer, compiler, transformer ] }

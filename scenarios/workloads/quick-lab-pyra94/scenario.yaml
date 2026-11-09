@@ -1,0 +1,59 @@
+id: quick-lab-pyra94
+title: "Quick lab: ConfigMaps and Secrets"
+domain: workloads
+difficulty: 1
+estimatedMinutes: 6
+points: 6
+tags: [ deployment, env ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ web, shop, team-a, frontend, store, apps, services, prod-web, edge, portal ] }
+  Q1_NAME: { oneOf: [ frontend, api, catalog, backend, gateway, cart, search, auth, payments, inventory ] }
+  Q1_IMAGE: { oneOf: [ nginx:1.26-alpine, nginx:1.27-alpine ] }
+  Q1_REPLICAS: { oneOf: [ 2, 3, 4 ] }
+  Q1_ENV_OBJ: { oneOf: [ app-config, app-settings, runtime-env, feature-flags, app-secrets, env-store, service-config, workload-env, runtime-flags, app-params ] }
+  Q1_ENV_KEY: { oneOf: [ LOG_LEVEL, MODE, REGION, APP_ENV, CLUSTER, STAGE, FEATURE_FLAG, TZ, ROLE, COLOR ] }
+  Q1_ENV_VALUE: { oneOf: [ debug, info, warn, error, prod, staging, canary, eu-west, us-east, primary ] }
+tasks:
+  - id: q1
+    title: Deployment ${Q1_NAME}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-ready
+        description: Deployment ${Q1_NAME} has ${Q1_REPLICAS} ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${Q1_REPLICAS}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-image
+        description: ${Q1_NAME} runs ${Q1_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment/${Q1_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q1_IMAGE}" }
+        weight: 1
+      - id: q1-env-source
+        description: Secret ${Q1_ENV_OBJ} has ${Q1_ENV_KEY}=${Q1_ENV_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get secret ${Q1_ENV_OBJ} -o jsonpath='{.data.${Q1_ENV_KEY}}' | base64 -d
+        expect: { equals: "${Q1_ENV_VALUE}" }
+        weight: 1
+      - id: q1-env-value
+        description: ${Q1_ENV_KEY} is ${Q1_ENV_VALUE} inside the container
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec deployment/${Q1_NAME} -- printenv ${Q1_ENV_KEY}
+        expect: { equals: "${Q1_ENV_VALUE}" }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl -n ${Q1_NS} create deployment ${Q1_NAME} --image=${Q1_IMAGE} --replicas=${Q1_REPLICAS} --dry-run=client -o yaml gives you a manifest to start from.
+      - "kubectl -n ${Q1_NS} create secret generic ${Q1_ENV_OBJ} --from-literal=${Q1_ENV_KEY}=${Q1_ENV_VALUE}; then env: [{name: ${Q1_ENV_KEY}, valueFrom: {secretKeyRef: {name: ${Q1_ENV_OBJ}, key: ${Q1_ENV_KEY}}}}]"
+    recipe: { builder: deployment, parts: [ env ] }

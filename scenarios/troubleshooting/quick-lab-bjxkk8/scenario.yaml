@@ -9,6 +9,7 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 60
+draft: true
 variables:
   Q1_NS: { oneOf: [ ops, core, platform, controlplane, etcd-lab, apiserver, scheduler, controller, cluster, mgmt ] }
   Q1_FAULT: { oneOf: [ scheduler-command, controller-manager-kubeconfig, scheduler-kubeconfig-path, scheduler-image-tag, controller-manager-sa-key, scheduler-manifest-removed, scheduler-manifest-yaml, controller-manager-command, scheduler-leader-elect ], hidden: true }

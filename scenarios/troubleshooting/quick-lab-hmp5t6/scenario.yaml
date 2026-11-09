@@ -1,0 +1,858 @@
+id: quick-lab-hmp5t6
+title: Full mock exam
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 120
+points: 113
+tags: [ troubleshooting, kubeconfig, kube-apiserver, static-pod, certificates, layered, dns, coredns, service, helm, manifest, endpoints, networkpolicy, storageclass, dynamic-provisioning, local-path, default-class, waitforfirstconsumer, pv, sort-by, pod, security, exec-probe, env, label, deployment, priority-class, scale, daemonset, tolerations, taints, rollout, pods, pvc, kustomize, overlays, patches, kubectl-top, logs, metrics-server, qos, crictl, events, api-resources, crd, operator, kubectl-explain, drain, pdb, disruption, etcd, backup, status-table, hpa, autoscaling, corefile ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_NS: { oneOf: [ ops, core, mgmt, control, api-lab, admin, cluster-ops, kube-system-lab, access, platform ] }
+  Q1_FAULT: { oneOf: [ kubeconfig-server-port, kubeconfig-wrong-ca, kubeconfig-current-context, kubeconfig-client-key, kubeconfig-server-host, kubeconfig-permissions ], hidden: true }
+  Q1_FAULT_2: { oneOf: [ apiserver-cert-file, apiserver-secure-port, apiserver-manifest-yaml ], hidden: true }
+  Q1_APISERVER_CERT: { oneOf: [ client-ca-file, tls-cert-file ], hidden: true }
+  Q2_NS: { oneOf: [ shop, intranet, search, portal, corp, dns-lab, lookup, resolve, cache-ns, edge-dns ] }
+  Q2_CLIENT: { oneOf: [ client, shell, toolbox, tester, debugger, checker, caller, consumer, runner, probe ] }
+  Q2_FAULT: { oneOf: [ corefile-typo, scaled-to-zero, cluster-domain, kube-dns-selector, client-dns-policy, corefile-loop, coredns-rbac, kube-dns-target-port, corefile-key, coredns-image, coredns-config-volume, coredns-memory-limit, coredns-hosts-plugin, coredns-ready-port ], hidden: true }
+  Q3_NS: { oneOf: [ apps, web, tools, charts, releases, helm-lab, deployments, services, platform, demo ] }
+  Q3_REL: { oneOf: [ frontend, shop, portal, api, backend, gateway, dashboard, console, admin, store ] }
+  Q3_VERSION: { oneOf: [ 1.0.0, 1.1.0 ] }
+  Q4_NS: { oneOf: [ store, edge, api, shop, retail, checkout, cdn, mesh, traffic, front ] }
+  Q4_APP: { oneOf: [ web, backend, gateway, api, cart, catalog, auth, proxy, orders, payments ] }
+  Q4_CLIENT: { oneOf: [ client, shell, toolbox, tester, debugger, checker, caller, consumer, runner, probe ] }
+  Q4_FAULT: { oneOf: [ selector-mismatch, target-port, named-port, network-policy, not-ready, selector-extra-label, service-port, service-protocol, kube-proxy-kubeconfig, selector-cleared, readiness-https, readiness-port-number, egress-network-policy, service-externalname, kube-proxy-config-mode ], hidden: true }
+  Q5_NS: { oneOf: [ cache-ns, data, scratch, build, artifacts, uploads, queue, media, search, feeds ] }
+  Q5_SC: { oneOf: [ local-fast, node-local, fast-local, local-ssd, local-std, hostdisk, local-nvme, edge-local, local-tier, local-default ] }
+  Q6_NS: { oneOf: [ apps, jobs, sandbox, workloads, demo, lab, temp, scratch, tools, debug ] }
+  Q6_NAME: { oneOf: [ worker, logger, toolbox, frontend, backend, database, cache, queue, scheduler, monitor, gateway, proxy, client, agent, runner ] }
+  Q6_IMAGE: { oneOf: [ busybox:1.36, busybox:1.37, nginx:1.28-alpine, httpd:2.4-alpine, alpine:3.20 ] }
+  Q6_SEC_USER: { oneOf: [ 1000, 2000, 3000, 1001, 1500, 2500, 4000, 5000 ] }
+  Q6_PROBE_PERIOD: { oneOf: [ 5, 10, 15 ] }
+  Q6_ENV_OBJ: { oneOf: [ app-config, app-settings, runtime-env, feature-flags, app-secrets, env-store, service-config, workload-env, runtime-flags, app-params ] }
+  Q6_ENV_KEY: { oneOf: [ LOG_LEVEL, MODE, REGION, APP_ENV, CLUSTER, STAGE, FEATURE_FLAG, TZ, ROLE, COLOR ] }
+  Q6_ENV_VALUE: { oneOf: [ debug, info, warn, error, prod, staging, canary, eu-west, us-east, primary ] }
+  Q6_LABEL_KEY: { oneOf: [ tier, team, env, app, role, zone, stage, component, version, owner ] }
+  Q6_LABEL_VALUE: { oneOf: [ backend, blue, prod, frontend, green, staging, canary, worker, api, batch ] }
+  Q7_NS: { oneOf: [ web, shop, team-a, frontend, store, apps, services, prod-web, edge, portal ] }
+  Q7_NAME: { oneOf: [ frontend, api, catalog, backend, gateway, cart, search, auth, payments, inventory ] }
+  Q7_IMAGE: { oneOf: [ nginx:1.26-alpine, nginx:1.27-alpine ] }
+  Q7_REPLICAS: { oneOf: [ 2, 3, 4 ] }
+  Q7_PRIO_CLASS: { oneOf: [ high-priority, critical-apps, batch-low, system-critical, platform-high, user-medium, best-effort, guaranteed, latency-sensitive, background ] }
+  Q7_PRIO_VALUE: { oneOf: [ 1000, 10000, 100000 ] }
+  Q7_SCALE_REPLICAS: { oneOf: [ 5, 6 ] }
+  Q8_NS: { oneOf: [ agents, observability, telemetry, monitoring, logging, security, edge-agents, platform-ops, node-svc, collectors ] }
+  Q8_DS: { oneOf: [ log-shipper, node-monitor, net-agent, disk-watch, metrics-relay, trace-collector, audit-forwarder, sec-scanner, cache-warmer, dns-probe ] }
+  Q8_FAULT: { oneOf: [ image-typo, readiness-port, cp-toleration-typo, hostname-affinity, hostport-conflict, ondelete-stale ], hidden: true }
+  Q8_WORKER: { oneOf: &a1 [ worker-1, worker-2 ], hidden: true }
+  Q9_NS: { oneOf: [ retail, media, portal, shop, catalog, orders, content, store, frontend, apps ] }
+  Q9_APP: { oneOf: [ storefront, ledger, checkout, cart, catalog, inventory, payments, search, recommend, notify ] }
+  Q9_FAULT: { oneOf: [ image-pull, bad-command, no-bash, configmap-key, exits-cleanly ], hidden: true }
+  Q9_FAULT_2: { oneOf: [ requests-too-large, node-selector ], hidden: true }
+  Q10_NS: { oneOf: [ assets, thumbnails, exports, imports, archive-ns, renders, logs-ns, mail, images, staging-data ] }
+  Q10_CLAIM: { oneOf: [ assets, renders, exports, store, blobs, cache, spool, drafts, outbox, vault ] }
+  Q10_FAULT: { oneOf: [ provisioner-typo, provisioner-down, no-class, rwop-taken, hostpath-missing, claim-elsewhere, pod-unschedulable ], hidden: true }
+  Q11_APP: { oneOf: [ shop, billing, ledger, portal, search, notify, catalog, reports, gateway, profile ] }
+  Q12_NS: { oneOf: [ perf, telemetry, insights, observe, usage, capacity, watchtower, signals, probe-ns, stats ] }
+  Q13_NS: { oneOf: [ shop, orders, billing, inventory, crm, ledger, payments, sales, reports, catalog ] }
+  Q14_NS: { oneOf: [ maintain, fleet, ops, upgrade, rolling, cluster-ops, node-ops, infra, platform, sre ] }
+  Q14_APP: { oneOf: [ checkout, cart, orders, payments, inventory, shipping, notify, search, catalog, loyalty ] }
+  Q14_FAULT: { oneOf: [ pdb-min-available, pdb-max-unavailable-0 ], hidden: true }
+  Q14_FAULT_2: { oneOf: [ bare-pod, emptydir-pod ], hidden: true }
+  Q14_NODE: { oneOf: *a1, hidden: true }
+  Q15_BACKUP: { oneOf: [ /opt/backups/etcd.db, /srv/etcd/snapshot.db, /root/etcd-backup.db, /var/backups/etcd-snap.db, /opt/etcd/backup.db, /mnt/backups/etcd.db, /home/ubuntu/etcd.db, /var/lib/etcd-backups/snap.db ] }
+  Q15_MARKER: { oneOf: [ backup-marker, pre-backup, audit-mark, snap-token, etcd-check, restore-proof, cluster-stamp, backup-id, snap-label, verify-cm ] }
+  Q15_STATUS_FILE: { oneOf: [ /opt/backups/etcd-status.txt, /root/etcd-status.txt, /srv/etcd/status.txt ] }
+  Q16_NS: { oneOf: [ shop, storefront, media, scale, traffic, web-tier, frontend, api-tier, loadtest, elastic ] }
+  Q16_APP: { oneOf: [ web, api, frontend, gateway, catalog, search, checkout, cdn, proxy, edge ] }
+  Q16_FAULT: { oneOf: [ no-cpu-request, target-name, target-kind, max-one, metrics-server-down, metrics-apiservice, metrics-kubelet-tls ], hidden: true }
+  Q17_NS: { oneOf: [ lookup, resolver, names, dns-lab, records, zones, directory, catalog, registry, gateway-ns ] }
+  Q17_DOMAIN: { oneOf: [ cka.lab, exam.lab, corp.lab, k8s.lab ] }
+  Q17_ZONE: { oneOf: [ corp.internal, office.internal, hq.internal, branch.internal ] }
+  Q17_HOST: { oneOf: [ legacy-db.internal, old-erp.internal, mainframe.internal, billing-db.internal ] }
+  Q17_IP: { oneOf: [ 198.51.100.20, 198.51.100.37, 198.51.100.54, 198.51.100.71 ] }
+setup:
+  - node: controlplane
+    script: setup/contexts.sh
+solution:
+  - node: controlplane
+    script: setup/q1-solution.sh
+    timeoutSeconds: 900
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 1800
+tasks:
+  - id: q1
+    title: kubectl stopped working
+    points: 8
+    context: k8s-lab
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 800
+    setupStage: 4
+    checks:
+      - id: q1-api-ready
+        description: the API server reports ready
+        type: kubectl
+        run: kubectl get --raw /readyz
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-user-kubectl
+        description: kubectl works with /root/.kube/config and /home/ubuntu/.kube/config
+        type: kubectl
+        run: "{ kubectl --kubeconfig /root/.kube/config get --raw /readyz 2>/dev/null || echo fail; echo; sudo -u ubuntu -H kubectl --kubeconfig /home/ubuntu/.kube/config get --raw /readyz 2>/dev/null || echo fail; echo; } | xargs"
+        expect: { equals: ok ok }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-components
+        description: node controlplane and its etcd, kube-apiserver, kube-controller-manager and kube-scheduler are Ready
+        type: kubectl
+        run: "{ kubectl get node controlplane -o jsonpath='controlplane={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}'; kubectl -n kube-system get pods -l tier=control-plane -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type==\"Ready\")].status}{\"\\n\"}{end}' | sort; } | xargs"
+        expect: { equals: controlplane=True etcd-controlplane=True kube-apiserver-controlplane=True kube-controller-manager-controlplane=True kube-scheduler-controlplane=True }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-web-ready
+        description: web runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment web -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 2/2 }
+        weight: 1
+        retrySeconds: 120
+      - id: q1-manifests
+        description: /etc/kubernetes/manifests holds only the four control plane manifests
+        type: ssh
+        node: controlplane
+        run: ls /etc/kubernetes/manifests | sort | xargs
+        expect: { equals: etcd.yaml kube-apiserver.yaml kube-controller-manager.yaml kube-scheduler.yaml }
+        weight: 1
+    hints:
+      - 'Read the exact kubectl error: "connection refused", "x509: certificate signed by unknown authority" and a hang point at different places.'
+      - Is the API server up at all? curl -k https://127.0.0.1:6443/readyz, ss -ltnp | grep 6443, and crictl ps -a | grep kube-apiserver (as root).
+      - "If the kube-apiserver container is missing or keeps exiting: crictl logs <container-id>, journalctl -u kubelet | grep -i apiserver, and compare the flags in /etc/kubernetes/manifests/kube-apiserver.yaml with the files in /etc/kubernetes/pki."
+      - "If the API server is healthy, the kubeconfig is wrong: compare the server and certificate-authority-data in ~/.kube/config with /etc/kubernetes/admin.conf (kubectl config view --raw)."
+    recipe: { category: apiaccess }
+  - id: q2
+    title: Name resolution broken
+    points: 7
+    context: k8s-blue
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q2-short-name
+        description: ${Q2_CLIENT} gets the nginx page from http://web
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec ${Q2_CLIENT} -- wget -qO- -T 3 http://web
+        expect: { contains: nginx }
+        weight: 2
+        retrySeconds: 60
+      - id: q2-fqdn
+        description: ${Q2_CLIENT} resolves web.${Q2_NS}.svc.cluster.local to the Service IP
+        type: kubectl
+        run: ip=$(kubectl -n ${Q2_NS} get svc web -o jsonpath='{.spec.clusterIP}'); kubectl -n ${Q2_NS} exec ${Q2_CLIENT} -- nslookup -type=a web.${Q2_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolves || echo fails
+        expect: { equals: resolves }
+        weight: 2
+        retrySeconds: 60
+      - id: q2-coredns-ready
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+      - id: q2-corefile
+        description: The Corefile serves cluster.local and forwards to /etc/resolv.conf
+        type: kubectl
+        run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE 'kubernetes cluster\.local |forward \. /etc/resolv\.conf'
+        expect: { equals: "2" }
+        weight: 1
+      - id: q2-kube-dns-service
+        description: Service kube-dns selects the CoreDNS Pods
+        type: kubectl
+        run: kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.selector.k8s-app}'
+        expect: { equals: kube-dns }
+        weight: 1
+    hints:
+      - "Is it DNS at all? From ${Q2_CLIENT}, compare nslookup web with nslookup web.${Q2_NS}.svc.cluster.local, and both with a lookup sent straight to a CoreDNS Pod IP: nslookup <name> <pod-ip>."
+      - "Work outwards from the client: kubectl -n ${Q2_NS} exec ${Q2_CLIENT} -- cat /etc/resolv.conf, then kubectl -n kube-system get svc,endpointslices -l k8s-app=kube-dns, then the CoreDNS Pods."
+      - "CoreDNS Pods that are missing, crashing or never ready say why: kubectl -n kube-system get deploy,pods -l k8s-app=kube-dns, then describe and logs."
+      - CoreDNS reads its configuration from a ConfigMap and needs permission to watch the cluster; both are in kube-system.
+    recipe: { category: dns }
+  - id: q3
+    title: Helm release ${Q3_REL}
+    points: 4
+    context: k8s-green
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - type: kubectl
+        id: q3-release
+        description: release ${Q3_REL} is deployed from chart webapp-${Q3_VERSION}
+        run: helm -n ${Q3_NS} list -o json | jq -r '.[] | select(.name == "${Q3_REL}") | .status + "/" + .chart'
+        expect: { equals: "deployed/webapp-${Q3_VERSION}" }
+        weight: 2
+      - type: kubectl
+        id: q3-ready
+        description: 1 replica of ${Q3_REL} is ready
+        run: kubectl -n ${Q3_NS} get deployment -l app.kubernetes.io/instance=${Q3_REL} -o jsonpath='{.items[0].status.readyReplicas}'
+        expect: { equals: "1" }
+        weight: 1
+        retrySeconds: 90
+      - id: q3-manifest
+        description: /opt/course/helm/${Q3_REL}-manifest.yaml holds the release's Deployment
+        type: ssh
+        node: controlplane
+        run: "grep -q 'kind: Deployment' \"/opt/course/helm/${Q3_REL}-manifest.yaml\" 2>/dev/null && grep -q 'app.kubernetes.io/instance: ${Q3_REL}' \"/opt/course/helm/${Q3_REL}-manifest.yaml\" && echo ok || echo missing"
+        expect: { equals: ok }
+        weight: 1
+    hints:
+      - helm repo add lab http://controlplane:8879, then helm search repo lab/webapp --versions.
+      - helm install <release> <chart> --version <v> -n <namespace>
+      - helm get manifest <release> prints what Helm applied for the current revision.
+    recipe: { builder: helm, parts: [ manifest ] }
+  - id: q4
+    title: Service ${Q4_APP} unreachable
+    points: 6
+    context: k8s-infra
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q4-reachable
+        description: ${Q4_CLIENT} gets the nginx page from http://${Q4_APP}
+        type: kubectl
+        run: kubectl -n ${Q4_NS} exec ${Q4_CLIENT} -- wget -qO- -T 3 http://${Q4_APP}
+        expect: { contains: nginx }
+        weight: 3
+        retrySeconds: 30
+      - id: q4-endpoints
+        description: Service ${Q4_APP} has 2 ready endpoints
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get endpointslices -l kubernetes.io/service-name=${Q4_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | grep -c true
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 30
+      - id: q4-spec-service
+        description: Service ${Q4_APP} is a ClusterIP Service on port 80
+        type: kubectl
+        run: kubectl -n ${Q4_NS} get svc ${Q4_APP} -o jsonpath='{.spec.type} {.spec.ports[0].port}'
+        expect: { equals: ClusterIP 80 }
+        weight: 1
+      - id: q4-spec-deployment
+        description: Deployment ${Q4_APP} is the original one, with 2 replicas, its image and a readiness probe
+        type: kubectl
+        run: "[ ! -f /var/tmp/cka-q4.uid ] || [ \"$(kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q4.uid)\" ] || { echo recreated; exit 0; }; echo \"$(kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}') $([ -n \"$(kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe}')\" ] && echo probe || echo none)\""
+        expect: { equals: 2 nginx:1.27-alpine probe }
+        weight: 1
+    hints:
+      - "Split the path into hops and test each one from ${Q4_CLIENT}: does the name resolve, does the Service IP answer, does a Pod IP answer? kubectl -n ${Q4_NS} get svc,endpointslices,pods -o wide gives you the addresses."
+      - "kubectl -n ${Q4_NS} describe svc ${Q4_APP} and kubectl -n ${Q4_NS} get endpointslices: an empty or not-ready endpoint list sends you to the Pods; a healthy one sends you further along the path."
+      - "Compare what the Service selects and forwards to with what the Pods really carry and listen on: kubectl -n ${Q4_NS} get pods --show-labels and kubectl -n ${Q4_NS} get deployment ${Q4_APP} -o yaml."
+      - "When the namespace looks right, look at what sits between the client and the Pods: NetworkPolicies, and the node component that turns Service IPs into Pod IPs (kubectl -n kube-system get ds,pods)."
+    recipe: { category: services }
+  - id: q5
+    title: Default StorageClass with local-path
+    points: 6
+    context: k8s-data
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        lane: q5
+    checks:
+      - id: q5-class
+        description: StorageClass ${Q5_SC} uses rancher.io/local-path, WaitForFirstConsumer and reclaim Delete
+        type: kubectl
+        run: kubectl get storageclass ${Q5_SC} -o jsonpath='{.provisioner} {.volumeBindingMode} {.reclaimPolicy}'
+        expect: { equals: rancher.io/local-path WaitForFirstConsumer Delete }
+        weight: 2
+      - id: q5-only-default
+        description: ${Q5_SC} is the only default StorageClass
+        type: kubectl
+        run: kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' | xargs
+        expect: { equals: "${Q5_SC}" }
+        weight: 1
+      - id: q5-claim
+        description: PVC cache in ${Q5_NS} is Bound through ${Q5_SC}
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get pvc cache -o jsonpath='{.status.phase} {.spec.storageClassName}'
+        expect: { equals: "Bound ${Q5_SC}" }
+        weight: 1
+        retrySeconds: 60
+      - id: q5-pod
+        description: Pod cache-app runs with the claim at /cache
+        type: kubectl
+        run: kubectl -n ${Q5_NS} get pod cache-app -o jsonpath='{.status.phase} {.spec.volumes[*].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+        expect: { matches: ^Running cache .*/cache }
+        weight: 1
+        retrySeconds: 60
+      - id: q5-local
+        description: the volume was provisioned on the node the Pod runs on
+        type: kubectl
+        run: pv=$(kubectl -n ${Q5_NS} get pvc cache -o jsonpath='{.spec.volumeName}'); [ -n "$pv" ] && [ "$(kubectl get pv "$pv" -o jsonpath='{.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]}')" = "$(kubectl -n ${Q5_NS} get pod cache-app -o jsonpath='{.spec.nodeName}')" ] && echo local || echo elsewhere
+        expect: { equals: local }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - kubectl get storageclass marks the default class with (default); the annotation storageclass.kubernetes.io/is-default-class decides it.
+      - "A claim without storageClassName gets the default class when it is created, not later: make the class the default first."
+      - With WaitForFirstConsumer a claim stays Pending until a Pod that uses it is scheduled; then the volume is created for that Pod's node.
+    recipe: { builder: dynamic-storage, parts: [] }
+  - id: q6
+    title: Pod ${Q6_NAME}
+    points: 10
+    context: k8s-edge
+    setup:
+      - node: controlplane
+        script: setup/q6.sh
+        lane: q6
+    checks:
+      - id: q6-running
+        description: Pod ${Q6_NAME} is Running and ready
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get pod ${Q6_NAME} -o jsonpath='{.status.phase}/{.status.conditions[?(@.type=="Ready")].status}'
+        expect: { equals: Running/True }
+        weight: 2
+        retrySeconds: 30
+      - id: q6-image
+        description: main runs ${Q6_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get pod/${Q6_NAME} -o jsonpath='{.spec.containers[0].name}/{.spec.containers[0].image}'
+        expect: { equals: "main/${Q6_IMAGE}" }
+        weight: 1
+      - id: q6-sec-user
+        description: the container runs as uid ${Q6_SEC_USER}
+        type: kubectl
+        run: kubectl -n ${Q6_NS} exec pod/${Q6_NAME} -- id -u
+        expect: { equals: "${Q6_SEC_USER}" }
+        weight: 1
+        retrySeconds: 20
+      - id: q6-sec-readonly
+        description: root filesystem is read-only and escalation is off
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get pod/${Q6_NAME} -o jsonpath='{.spec.containers[0].securityContext.readOnlyRootFilesystem}/{.spec.containers[0].securityContext.allowPrivilegeEscalation}'
+        expect: { equals: true/false }
+        weight: 1
+      - id: q6-probe
+        description: liveness probe runs ls / every ${Q6_PROBE_PERIOD}s
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get pod/${Q6_NAME} -o jsonpath='{.spec.containers[0].livenessProbe.exec.command[*]}/{.spec.containers[0].livenessProbe.periodSeconds}'
+        expect: { equals: "ls //${Q6_PROBE_PERIOD}" }
+        weight: 1
+      - id: q6-env-source
+        description: Secret ${Q6_ENV_OBJ} has ${Q6_ENV_KEY}=${Q6_ENV_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get secret ${Q6_ENV_OBJ} -o jsonpath='{.data.${Q6_ENV_KEY}}' | base64 -d
+        expect: { equals: "${Q6_ENV_VALUE}" }
+        weight: 1
+      - id: q6-env-value
+        description: ${Q6_ENV_KEY} is ${Q6_ENV_VALUE} inside the container
+        type: kubectl
+        run: kubectl -n ${Q6_NS} exec pod/${Q6_NAME} -- printenv ${Q6_ENV_KEY}
+        expect: { equals: "${Q6_ENV_VALUE}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q6-label
+        description: ${Q6_NAME} has the label ${Q6_LABEL_KEY}=${Q6_LABEL_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q6_NS} get pod ${Q6_NAME} -o jsonpath='{.metadata.labels.${Q6_LABEL_KEY}}'
+        expect: { equals: "${Q6_LABEL_VALUE}" }
+        weight: 1
+    hints:
+      - kubectl -n ${Q6_NS} run ${Q6_NAME} --image=${Q6_IMAGE} --dry-run=client -o yaml -- sleep 1d gives you a manifest to start from.
+      - "securityContext on the container: runAsUser, readOnlyRootFilesystem, allowPrivilegeEscalation."
+      - "livenessProbe: {exec: {command: [ls, /]}, periodSeconds: N}"
+      - "kubectl -n ${Q6_NS} create secret generic ${Q6_ENV_OBJ} --from-literal=${Q6_ENV_KEY}=${Q6_ENV_VALUE}; then env: [{name: ${Q6_ENV_KEY}, valueFrom: {secretKeyRef: {name: ${Q6_ENV_OBJ}, key: ${Q6_ENV_KEY}}}}]"
+      - kubectl label --help
+    recipe: { builder: pod, parts: [ security, exec-probe, env, label ] }
+  - id: q7
+    title: Deployment ${Q7_NAME}
+    points: 6
+    context: k8s-north
+    setup:
+      - node: controlplane
+        script: setup/q7.sh
+        lane: q7
+    checks:
+      - id: q7-image
+        description: ${Q7_NAME} runs ${Q7_IMAGE}
+        type: kubectl
+        run: kubectl -n ${Q7_NS} get deployment/${Q7_NAME} -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: { equals: "${Q7_IMAGE}" }
+        weight: 1
+      - id: q7-prio-class
+        description: PriorityClass ${Q7_PRIO_CLASS} has value ${Q7_PRIO_VALUE}
+        type: kubectl
+        run: kubectl get priorityclass ${Q7_PRIO_CLASS} -o jsonpath='{.value}/{.globalDefault}'
+        expect: { matches: "^${Q7_PRIO_VALUE}/(false)?$" }
+        weight: 1
+      - id: q7-prio-pods
+        description: the Pods run with priority ${Q7_PRIO_VALUE}
+        type: kubectl
+        run: kubectl -n ${Q7_NS} get pods -l app=${Q7_NAME} -o jsonpath='{.items[0].spec.priorityClassName}/{.items[0].spec.priority}'
+        expect: { equals: "${Q7_PRIO_CLASS}/${Q7_PRIO_VALUE}" }
+        weight: 1
+        retrySeconds: 30
+      - id: q7-scale-spec
+        description: ${Q7_NAME} asks for ${Q7_SCALE_REPLICAS} replicas
+        type: kubectl
+        run: kubectl -n ${Q7_NS} get deployment ${Q7_NAME} -o jsonpath='{.spec.replicas}'
+        expect: { equals: "${Q7_SCALE_REPLICAS}" }
+        weight: 1
+      - id: q7-scale-ready
+        description: ${Q7_NAME} has ${Q7_SCALE_REPLICAS} ready replicas
+        type: kubectl
+        run: kubectl -n ${Q7_NS} get deployment ${Q7_NAME} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "${Q7_SCALE_REPLICAS}" }
+        weight: 2
+        retrySeconds: 30
+    hints:
+      - kubectl -n ${Q7_NS} create deployment ${Q7_NAME} --image=${Q7_IMAGE} --replicas=${Q7_REPLICAS} --dry-run=client -o yaml gives you a manifest to start from.
+      - kubectl create priorityclass ${Q7_PRIO_CLASS} --value=${Q7_PRIO_VALUE}; then priorityClassName in the Pod spec.
+      - kubectl -n ${Q7_NS} scale deployment ${Q7_NAME} --replicas=${Q7_SCALE_REPLICAS}
+    recipe: { builder: deployment, parts: [ priority-class, scale ] }
+  - id: q8
+    title: DaemonSet ${Q8_DS} is not running everywhere
+    points: 8
+    context: k8s-web
+    setup:
+      - node: controlplane
+        script: setup/q8.sh
+        timeoutSeconds: 400
+        lane: q8
+    checks:
+      - id: q8-everywhere
+        description: ${Q8_DS} has a ready Pod on every node, controlplane included
+        type: kubectl
+        run: n=$(kubectl get nodes --no-headers | wc -l | tr -d ' '); s=$(kubectl -n ${Q8_NS} get daemonset ${Q8_DS} -o jsonpath='{.status.desiredNumberScheduled}/{.status.numberReady}'); [ "$s" = "$n/$n" ] && echo everywhere || echo "$s of $n nodes"
+        expect: { equals: everywhere }
+        weight: 3
+        retrySeconds: 90
+      - id: q8-current
+        description: every Pod of ${Q8_DS} runs its current template, and template changes roll out on their own
+        type: kubectl
+        run: kubectl -n ${Q8_NS} get daemonset ${Q8_DS} -o jsonpath='{.spec.updateStrategy.type} {.status.updatedNumberScheduled}/{.status.desiredNumberScheduled}'
+        expect: { matches: "^RollingUpdate ([1-9][0-9]*)/\\1$" }
+        weight: 1
+        retrySeconds: 60
+      - id: q8-spec
+        description: ${Q8_DS} keeps image nginx:1.27-alpine, its resource requests and a readiness probe
+        type: kubectl
+        run: c='{.spec.template.spec.containers[0]'; echo "$(kubectl -n ${Q8_NS} get daemonset ${Q8_DS} -o jsonpath="$c.image} $c.resources.requests.cpu} $c.resources.requests.memory}") $([ -n "$(kubectl -n ${Q8_NS} get daemonset ${Q8_DS} -o jsonpath="$c.readinessProbe}")" ] && echo readiness)"
+        expect: { equals: nginx:1.27-alpine 10m 16Mi readiness }
+        weight: 1
+      - id: q8-control-plane-taint
+        description: controlplane keeps its NoSchedule taint
+        type: kubectl
+        run: kubectl get node controlplane -o jsonpath='{.spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].effect}'
+        expect: { equals: NoSchedule }
+        weight: 1
+      - id: q8-others
+        description: every other DaemonSet of ${Q8_NS} still runs all its Pods
+        type: kubectl
+        run: ok=yes; for d in $(cat /var/tmp/cka-q8.others); do r=$(kubectl -n ${Q8_NS} get daemonset "$d" -o jsonpath='{.status.numberReady}' 2>/dev/null); w=$(kubectl -n ${Q8_NS} get daemonset "$d" -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null); [ -n "$w" ] && [ "$r" = "$w" ] || ok=no; done; echo $ok
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 60
+      - id: q8-same-daemonset
+        description: ${Q8_DS} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q8_NS} get daemonset ${Q8_DS} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q8.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q8_NS} get daemonset ${Q8_DS}: compare DESIRED with the number of nodes, and READY and UP-TO-DATE with DESIRED."
+      - kubectl -n ${Q8_NS} get pods -l app=${Q8_DS} -o wide shows which nodes have a Pod; kubectl -n ${Q8_NS} describe pod <pod> says why one is Pending, not ready or failing.
+      - "kubectl describe node <node> | grep Taints, then kubectl -n ${Q8_NS} get daemonset ${Q8_DS} -o yaml: tolerations, affinity, ports and the update strategy decide where Pods may run and when they are replaced."
+      - kubectl -n ${Q8_NS} rollout status daemonset/${Q8_DS} and kubectl -n ${Q8_NS} rollout history daemonset/${Q8_DS} show whether the Pods run the current template.
+    recipe: { category: daemonsets }
+  - id: q9
+    title: Unhealthy Deployment ${Q9_APP}
+    points: 8
+    context: k8s-west
+    setup:
+      - node: controlplane
+        script: setup/q9.sh
+        timeoutSeconds: 800
+        lane: q9
+    checks:
+      - id: q9-ready
+        description: ${Q9_APP} has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q9-stable
+        description: ${Q9_APP}'s Pods do not restart over 20 seconds
+        type: kubectl
+        run: r() { kubectl -n ${Q9_NS} get pods -l app=${Q9_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'; }; a=$(r); sleep 20; b=$(r); [ -n "$a" ] && [ "$a" = "$b" ] && echo stable || echo restarting
+        expect: { equals: stable }
+        weight: 1
+        retrySeconds: 60
+      - id: q9-serves
+        description: ${Q9_APP} serves HTTP on port 80
+        type: kubectl
+        run: kubectl -n ${Q9_NS} exec deployment/${Q9_APP} -- wget -qO- -T 3 http://localhost:80/
+        expect: { contains: nginx }
+        weight: 1
+      - id: q9-spec-resources
+        description: ${Q9_APP} keeps its image, and requests and limits for CPU and memory
+        type: kubectl
+        run: kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.cpu} {.spec.template.spec.containers[0].resources.limits.memory}'
+        expect: { matches: ^nginx:1\.27-alpine \S+ \S+ \S+ \S+$ }
+        weight: 1
+      - id: q9-spec-probes
+        description: ${Q9_APP} keeps a readiness and a liveness probe
+        type: kubectl
+        run: c='{.spec.template.spec.containers[0]'; r=$(kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o jsonpath="$c.readinessProbe}"); l=$(kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o jsonpath="$c.livenessProbe}"); echo "$([ -n "$r" ] && echo readiness) $([ -n "$l" ] && echo liveness)"
+        expect: { equals: readiness liveness }
+        weight: 1
+      - id: q9-spec-config
+        description: the running Pods read APP_MODE=production from ConfigMap ${Q9_APP}-config
+        type: kubectl
+        run: echo "$(kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_MODE")].valueFrom.configMapKeyRef.name}') $(kubectl -n ${Q9_NS} exec deployment/${Q9_APP} -- printenv APP_MODE 2>/dev/null)"
+        expect: { equals: "${Q9_APP}-config production" }
+        weight: 1
+        retrySeconds: 30
+      - id: q9-same-deployment
+        description: ${Q9_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q9.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q9_NS} get deployment,replicaset,pods -l app=${Q9_APP} -o wide: are Pods missing, Pending, crashing, running but not ready, or is an old and a new ReplicaSet stuck side by side?"
+      - "kubectl -n ${Q9_NS} describe pod <pod>: the container state, the last termination reason and the Events usually name the problem."
+      - kubectl -n ${Q9_NS} logs <pod> --previous shows why a crashed container exited; kubectl -n ${Q9_NS} rollout status deployment/${Q9_APP} shows whether a rollout is progressing.
+      - "kubectl -n ${Q9_NS} get deployment ${Q9_APP} -o yaml: read the strategy, the Pod template and its references (images, probes, resources, ConfigMap keys) critically."
+    recipe: { category: pods }
+  - id: q10
+    title: Pod ${Q10_CLAIM}-app never starts
+    points: 5
+    context: k8s-alpha
+    setup:
+      - node: controlplane
+        script: setup/q10.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q10-bound
+        description: PVC ${Q10_CLAIM} is Bound through StorageClass ${Q10_CLAIM}-local
+        type: kubectl
+        run: kubectl -n ${Q10_NS} get pvc ${Q10_CLAIM} -o jsonpath='{.status.phase} {.spec.storageClassName}'
+        expect: { equals: "Bound ${Q10_CLAIM}-local" }
+        weight: 2
+        retrySeconds: 60
+      - id: q10-running
+        description: Pod ${Q10_CLAIM}-app runs with claim ${Q10_CLAIM} at /data
+        type: kubectl
+        run: kubectl -n ${Q10_NS} get pod ${Q10_CLAIM}-app -o jsonpath='{.status.phase} {.spec.volumes[?(@.persistentVolumeClaim)].persistentVolumeClaim.claimName} {.spec.containers[0].volumeMounts[*].mountPath}'
+        expect: { matches: "^Running ${Q10_CLAIM} .*/data" }
+        weight: 2
+        retrySeconds: 60
+      - id: q10-provisioned
+        description: the volume was provisioned by rancher.io/local-path
+        type: kubectl
+        run: pv=$(kubectl -n ${Q10_NS} get pvc ${Q10_CLAIM} -o jsonpath='{.spec.volumeName}'); [ -n "$pv" ] && kubectl get pv "$pv" -o jsonpath='{.metadata.annotations.pv\.kubernetes\.io/provisioned-by}' || echo none
+        expect: { equals: rancher.io/local-path }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - "kubectl -n ${Q10_NS} describe pod ${Q10_CLAIM}-app: is it waiting to be scheduled, waiting for its claim, or failing to mount? The Events say which."
+      - "kubectl -n ${Q10_NS} describe pvc ${Q10_CLAIM}: the Events of a Pending claim say who is supposed to provision it, and what they are waiting for."
+      - "Compare the claim and the StorageClass with what the provisioner really offers: kubectl get storageclass, kubectl -n local-path-storage logs deploy/local-path-provisioner."
+      - "Many fields of StorageClasses, claims and Pods cannot be edited: delete and re-create them with the same names."
+    recipe: { category: provisioning }
+  - id: q11
+    title: Install an agent with Kustomize
+    points: 6
+    context: k8s-beta
+    setup:
+      - node: controlplane
+        script: setup/q11.sh
+        lane: q11
+    checks:
+      - id: q11-everywhere
+        description: ${Q11_APP}-agent runs a ready Pod on all 3 nodes
+        type: kubectl
+        run: kubectl -n ${Q11_APP}-agents get daemonset ${Q11_APP}-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
+        expect: { equals: 3/3 }
+        weight: 3
+        retrySeconds: 90
+      - type: ssh
+        node: controlplane
+        id: q11-patched
+        description: kustomization.yaml patches the DaemonSet with a toleration
+        run: kubectl kustomize /opt/course/kustomize/${Q11_APP}-agent 2>/dev/null | grep -q 'node-role.kubernetes.io/control-plane' && grep -qE '^patches:|^patchesStrategicMerge:|^patchesJson6902:' /opt/course/kustomize/${Q11_APP}-agent/kustomization.yaml && echo patched || echo missing
+        expect: { equals: patched }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q11-files-kept
+        description: daemonset.yaml and namespace.yaml were not edited
+        run: sha256sum --quiet -c /root/.cka-kustomize-${Q11_APP}-agent.sums >/dev/null 2>&1 && echo unchanged || echo changed
+        expect: { equals: unchanged }
+        weight: 1
+    hints:
+      - kubectl describe node controlplane shows the taint that keeps the agent away.
+      - "patches: in kustomization.yaml takes a strategic merge patch file, or an inline JSON 6902 patch with a target."
+      - kubectl kustomize <dir> prints the patched DaemonSet, so you can check the toleration before applying.
+    recipe: { builder: kustomize, parts: [] }
+  - id: q12
+    title: Errors of a crashed container
+    points: 6
+    context: k8s-ops
+    setup:
+      - node: controlplane
+        script: setup/q12.sh
+        lane: q12
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q12-errors
+        description: errors.txt holds exactly the ERROR lines of the crashed api container
+        run: "[ \"$(grep -v '^ *$' /opt/course/logs/errors.txt 2>/dev/null)\" = \"$(kubectl -n ${Q12_NS} logs pay-0 -c api --previous | grep ERROR)\" ] && echo match || echo differs"
+        expect: { equals: match }
+        weight: 4
+      - type: ssh
+        node: controlplane
+        id: q12-exit-code
+        description: exit-code.txt holds the exit code of the crashed instance
+        run: "[ \"$(tr -d ' \\n' < /opt/course/logs/exit-code.txt 2>/dev/null)\" = \"$(kubectl -n ${Q12_NS} get pod pay-0 -o jsonpath='{.status.containerStatuses[?(@.name==\"api\")].lastState.terminated.exitCode}')\" ] && echo match || echo differs"
+        expect: { equals: match }
+        weight: 2
+    hints:
+      - kubectl logs <pod> -c <container> picks one container of a multi-container Pod.
+      - kubectl logs --previous (-p) shows the output of the container instance before the last restart.
+      - "kubectl describe pod shows Last State: Terminated with its Exit Code; so does .status.containerStatuses[].lastState."
+    recipe: { builder: observe, parts: [] }
+  - id: q13
+    title: Install an operator without its CRDs
+    points: 6
+    context: k8s-delta
+    setup:
+      - node: controlplane
+        script: setup/q13.sh
+        lane: q13
+    checks:
+      - id: q13-release
+        description: release db-operator runs chart db-operator-1.2.0 in namespace operators
+        type: kubectl
+        run: helm -n operators list -o json | jq -r '.[] | select(.name == "db-operator") | .status + "/" + .chart'
+        expect: { equals: deployed/db-operator-1.2.0 }
+        weight: 2
+      - id: q13-operator-ready
+        description: the operator Deployment is ready
+        type: kubectl
+        run: kubectl -n operators get deployment db-operator -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "1" }
+        weight: 1
+        retrySeconds: 60
+      - id: q13-no-crds
+        description: the chart installed no CRD of its own (no backups.db.example.lab)
+        type: kubectl
+        run: kubectl get crd backups.db.example.lab >/dev/null 2>&1 && echo installed || echo skipped
+        expect: { equals: skipped }
+        weight: 1
+      - id: q13-database
+        description: Database orders in ${Q13_NS} has 2 replicas
+        type: kubectl
+        run: kubectl -n ${Q13_NS} get databases.db.example.lab orders -o jsonpath='{.spec.replicas}'
+        expect: { equals: "2" }
+        weight: 2
+    hints:
+      - helm repo add <name> <url>, then helm search repo <name>/db-operator --versions.
+      - helm show chart and helm pull --untar let you look inside a chart before installing it; CRDs live in its crds/ directory.
+      - helm install has a flag that leaves the crds/ directory out.
+    recipe: { builder: crds, parts: [] }
+  - id: q14
+    title: Node drain is stuck
+    points: 8
+    context: k8s-east
+    setup:
+      - node: controlplane
+        script: setup/q14.sh
+        timeoutSeconds: 800
+    setupStage: 2
+    checks:
+      - id: q14-cordoned
+        description: exactly one worker is cordoned
+        type: kubectl
+        run: kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.spec.unschedulable}{"\n"}{end}' | grep -c '^true$' || true
+        expect: { equals: "1" }
+        weight: 2
+      - id: q14-right-node
+        description: the cordoned worker is the one labelled maintenance=due
+        type: kubectl
+        run: kubectl get nodes -l maintenance=due -o jsonpath='{range .items[*]}{.spec.unschedulable}{end}'
+        expect: { equals: "true" }
+        weight: 2
+      - id: q14-empty
+        description: no Pod of ${Q14_NS} remains on a cordoned worker
+        type: kubectl
+        run: kubectl -n ${Q14_NS} get pods -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | xargs -I{} kubectl get node {} -o jsonpath='{.spec.unschedulable}{"\n"}' | grep -c '^true$' || true
+        expect: { equals: "0" }
+        weight: 2
+        retrySeconds: 60
+      - id: q14-ready
+        description: ${Q14_APP} still has 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q14_NS} get deployment ${Q14_APP} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 2
+        retrySeconds: 120
+    hints:
+      - kubectl get nodes -l maintenance=due names the worker; kubectl -n ${Q14_NS} get pods -o wide shows what runs on it.
+      - "kubectl drain <node> --ignore-daemonsets reports every Pod it will not evict, and why: read each line. Some blockers only need a flag; others need a change."
+      - "Evictions respect PodDisruptionBudgets: kubectl -n ${Q14_NS} get pdb shows ALLOWED DISRUPTIONS."
+      - "An evicted Pod is recreated by its controller: if a replacement stays Pending, kubectl -n ${Q14_NS} describe pod says what keeps it off the other nodes."
+    recipe: { category: drain }
+  - id: q15
+    title: Back up etcd
+    points: 6
+    context: k8s-batch
+    setup:
+      - node: controlplane
+        script: setup/q15.sh
+        lane: q15
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q15-snapshot-size
+        description: ${Q15_BACKUP} exists and is larger than 1 MB
+        run: stat -c %s "${Q15_BACKUP}" 2>/dev/null || echo 0
+        expect: { gte: 1000000 }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q15-snapshot-valid
+        description: ${Q15_BACKUP} is a valid etcd snapshot
+        run: ETCDCTL_API=3 etcdctl snapshot status "${Q15_BACKUP}" -w json 2>/dev/null | jq -r '.totalKey > 0'
+        expect: { equals: "true" }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q15-snapshot-fresh
+        description: The snapshot contains ConfigMap ${Q15_MARKER}
+        run: grep -qa -- "/registry/configmaps/default/${Q15_MARKER}" "${Q15_BACKUP}" 2>/dev/null && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q15-status-table
+        description: ${Q15_STATUS_FILE} holds the snapshot status as a table
+        run: rev=$(ETCDCTL_API=3 etcdctl snapshot status "${Q15_BACKUP}" -w json 2>/dev/null | jq -r .revision); grep -q "TOTAL KEYS" "${Q15_STATUS_FILE}" 2>/dev/null && grep -qw -- "$rev" "${Q15_STATUS_FILE}" && echo table || echo missing
+        expect: { equals: table }
+        weight: 1
+    hints:
+      - "The endpoint and certificate paths are in /etc/kubernetes/manifests/etcd.yaml: --listen-client-urls, --trusted-ca-file, --cert-file and --key-file."
+      - ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save <file>
+      - etcdctl snapshot status <file> -w table prints the hash, revision, total keys and size.
+    recipe: { builder: etcd-backup, parts: [ status-table ] }
+  - id: q16
+    title: Autoscaler ${Q16_APP} not working
+    points: 7
+    context: k8s-core
+    setup:
+      - node: controlplane
+        script: setup/q16.sh
+        timeoutSeconds: 400
+    setupStage: 1
+    checks:
+      - id: q16-hpa-spec
+        description: the autoscaler targets Deployment ${Q16_APP} between 2 and 6 replicas at 50% CPU
+        type: kubectl
+        run: kubectl -n ${Q16_NS} get hpa ${Q16_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q16_APP}/2/6/50" }
+        weight: 1
+      - id: q16-hpa-active
+        description: the autoscaler reads current metrics (ScalingActive)
+        type: kubectl
+        run: kubectl -n ${Q16_NS} get hpa ${Q16_APP} -o jsonpath='{.status.conditions[?(@.type=="ScalingActive")].status}'
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 120
+      - id: q16-hpa-metric
+        description: it reports the current CPU utilization
+        type: kubectl
+        run: kubectl -n ${Q16_NS} get hpa ${Q16_APP} -o jsonpath='{.status.currentMetrics[?(@.resource.name=="cpu")].resource.current.averageUtilization}' | grep -qE '^[0-9]+$' && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+        retrySeconds: 120
+      - id: q16-ready
+        description: ${Q16_APP} has at least 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q16_NS} get deployment ${Q16_APP} -o jsonpath='{.status.readyReplicas}'
+        expect: { gte: 2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q16-spec
+        description: ${Q16_APP} keeps its image and has a CPU request
+        type: kubectl
+        run: kubectl -n ${Q16_NS} get deployment ${Q16_APP} -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].resources.requests.cpu}'
+        expect: { matches: ^nginx:1\.27-alpine \S+$ }
+        weight: 1
+      - id: q16-same-deployment
+        description: ${Q16_APP} was not deleted or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q16_NS} get deployment ${Q16_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q16.uid)\" ] && echo same || echo recreated"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q16_NS} get hpa ${Q16_APP}: TARGETS shows <unknown> when the autoscaler cannot read metrics; MINPODS and MAXPODS show its range."
+      - "kubectl -n ${Q16_NS} describe hpa ${Q16_APP}: the Conditions and Events say why it cannot scale."
+      - "kubectl top pods -n ${Q16_NS}: when this fails, the problem is the metrics pipeline (kubectl get apiservice, then the Deployment and Service behind it), not the autoscaler."
+    recipe: { category: hpa }
+  - id: q17
+    title: Change the upstream DNS server
+    points: 6
+    context: k8s-gamma
+    setup:
+      - node: controlplane
+        script: setup/q17.sh
+        timeoutSeconds: 600
+        lane: q17
+    checks:
+      - id: q17-upstream
+        description: intranet.${Q17_ZONE} resolves to ${Q17_IP} through the company server
+        type: kubectl
+        run: kubectl -n ${Q17_NS} exec dns-test -- nslookup intranet.${Q17_ZONE} 2>/dev/null | grep -qw '${Q17_IP}' && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 3
+        retrySeconds: 90
+      - id: q17-cluster-local
+        description: web.${Q17_NS}.svc.cluster.local still resolves to the ClusterIP of web
+        type: kubectl
+        run: ip=$(kubectl -n ${Q17_NS} get service web -o jsonpath='{.spec.clusterIP}'); [ -n "$ip" ] && kubectl -n ${Q17_NS} exec dns-test -- nslookup web.${Q17_NS}.svc.cluster.local 2>/dev/null | grep -qw "$ip" && echo resolved || echo unresolved
+        expect: { equals: resolved }
+        weight: 1
+        retrySeconds: 90
+      - id: q17-forward
+        description: CoreDNS forwards to the company server and no longer to /etc/resolv.conf
+        type: kubectl
+        run: ip=$(kubectl -n corp-dns get service resolver -o jsonpath='{.spec.clusterIP}'); c=$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}'); [ -n "$ip" ] && grep -E '^ *forward \. ' <<< "$c" | grep -qw "$ip" && ! grep -qE 'forward \. /etc/resolv\.conf' <<< "$c" && echo yes || echo no
+        expect: { equals: yes }
+        weight: 1
+      - id: q17-coredns
+        description: CoreDNS runs 2 ready replicas
+        type: kubectl
+        run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - "In the .:53 server block, the forward plugin says where names outside the cluster go: forward . /etc/resolv.conf asks the node's resolvers."
+      - "kubectl -n corp-dns get service resolver gives the address to forward to: the forward plugin takes IP addresses, not names."
+      - CoreDNS reloads a changed Corefile after a while; kubectl -n kube-system rollout restart deployment/coredns applies it at once, and kubectl -n kube-system logs deploy/coredns shows a Corefile that does not parse.
+    recipe: { builder: coredns, parts: [] }

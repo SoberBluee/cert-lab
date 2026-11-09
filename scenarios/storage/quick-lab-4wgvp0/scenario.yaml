@@ -9,6 +9,7 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 30
+draft: true
 variables:
   Q1_NS: { oneOf: [ cache-ns, data, scratch, build, artifacts, uploads, queue, media, search, feeds ] }
   Q1_SC: { oneOf: [ local-fast, node-local, fast-local, local-ssd, local-std, hostdisk, local-nvme, edge-local, local-tier, local-default ] }

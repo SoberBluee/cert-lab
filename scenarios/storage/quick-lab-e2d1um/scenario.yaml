@@ -9,6 +9,7 @@ base: cluster
 nodes: { controlPlane: 1, workers: 2 }
 context: kubernetes-admin@kubernetes
 settleSeconds: 30
+draft: true
 variables:
   Q1_NS: { oneOf: [ assets, thumbnails, exports, imports, archive-ns, renders, logs-ns, mail, images, staging-data ] }
   Q1_CLAIM: { oneOf: [ assets, renders, exports, store, blobs, cache, spool, drafts, outbox, vault ] }
