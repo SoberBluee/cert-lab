@@ -41,12 +41,13 @@ export const hookSteps = (nodes: string[]): Step[] => nodes.map((node) => ({ nod
 
 /**
  * Runs a lesson command the way a learner would: as ubuntu in its home directory. The command is
- * then appended to the command log, since non-interactive shells skip the bashrc hook.
+ * then appended to the command log, since non-interactive shells skip the bashrc hook. Drivers may
+ * feed this script on stdin, so the command gets none: an ssh in it would swallow the lines after it.
  */
 export function runAsLearner(driver: Driver, sessionId: string, node: string, command: string, log = true): Promise<ExecResult> {
   const script = [
     'cd /home/ubuntu',
-    'sudo -u ubuntu -H bash -c "$CKA_LEARN_CMD"',
+    'sudo -u ubuntu -H bash -c "$CKA_LEARN_CMD" </dev/null',
     'rc=$?',
     log ? `printf '0\\t%s\\t%s\\t%s\\n' "$(date +%s)" "$rc" "$(printf '%s' "$CKA_LEARN_CMD" | head -n1 | tr '\\t' ' ')" >> ${COMMAND_LOG}` : '',
     'exit $rc',

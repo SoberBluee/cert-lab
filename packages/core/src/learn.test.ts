@@ -7,7 +7,7 @@ import pino from 'pino';
 import { FakeDriver } from '@cka/driver-fake';
 import { LessonStepSchema, type ExecOptions, type ExecResult, type LearnProgress } from '@cka/schema';
 import { COMMAND_LOG, commandMatches, initialProgress, LearnWatcher, normalizeCommand, parseCommandLog, type LoggedCommand } from './learn';
-import { LessonLibrary, toLessonView, type LoadedLesson } from './lessons';
+import { LessonLibrary, lessonScenario, toLessonView, type LoadedLesson } from './lessons';
 import { lintLessons } from './lint';
 import { ScenarioLibrary } from './scenarios';
 import { SessionManager } from './session';
@@ -64,6 +64,14 @@ describe('shipped lessons', () => {
         if (first.startsWith('kubectl ')) assert.ok(commandMatches(s, first.replace(/^kubectl/, 'k')), `${l.def.id}/${s.id}: k alias`);
       }
     }
+  });
+
+  it('run on the snapshot they name, without a kube context on plain Ubuntu', () => {
+    const def = (id: string) => lessonScenario(library.get(id)!).def;
+    assert.equal(def('etcd-restore').base, 'cluster');
+    assert.equal(def('etcd-restore').context, 'kubernetes-admin@kubernetes');
+    assert.equal(def('linux-iptables').base, 'os');
+    assert.equal(def('linux-iptables').context, undefined);
   });
 });
 
@@ -200,6 +208,7 @@ describe('LearnWatcher', () => {
     const run = f.driver.runs.find((r) => r.env?.CKA_LEARN_CMD);
     assert.equal(run?.env?.CKA_LEARN_CMD, 'echo a');
     assert.match(run!.script, /sudo -u ubuntu/);
+    assert.match(run!.script, /<\/dev\/null/, 'a command must not read the script the driver feeds on stdin');
     assert.doesNotMatch(run!.script, new RegExp(COMMAND_LOG));
   });
 

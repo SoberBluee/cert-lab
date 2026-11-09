@@ -1,0 +1,388 @@
+id: linux-iptables
+title: Debug a blocked port with iptables
+summary: Learn tables, chains, DROP against REJECT and rule order, then find out why one web server stops answering when ping, the service and iptables -L all look fine, and remove what keeps breaking it.
+track: linux
+topic: firewall
+base: os
+estimatedMinutes: 25
+setup:
+  - node: worker-1
+    run: |
+      iptables -F INPUT
+      iptables -t raw -F PREROUTING
+      systemctl stop lab-web 2>/dev/null || true
+      systemctl reset-failed lab-web 2>/dev/null || true
+      install -d /srv/web && echo 'hello from worker-1' > /srv/web/index.html
+      systemd-run --unit lab-web --property=Restart=always python3 -m http.server 8080 --directory /srv/web >/dev/null
+      # The fault. Packets on lo go through raw PREROUTING too, so lo is left out: the service must still answer on localhost.
+      cat > /usr/local/sbin/host-baseline <<'EOF'
+      #!/usr/bin/env bash
+      # Site hardening baseline: keeps these rules in place.
+      while true; do
+        iptables -t raw -C PREROUTING ! -i lo -p tcp --dport 8080 -j DROP 2>/dev/null ||
+          iptables -t raw -I PREROUTING ! -i lo -p tcp --dport 8080 -j DROP
+        sleep 20
+      done
+      EOF
+      chmod 755 /usr/local/sbin/host-baseline
+      cat > /etc/systemd/system/host-baseline.service <<'EOF'
+      [Unit]
+      Description=Site hardening baseline
+      After=network-online.target
+
+      [Service]
+      ExecStart=/usr/local/sbin/host-baseline
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now host-baseline >/dev/null 2>&1
+      for _ in $(seq 1 15); do
+        iptables -t raw -C PREROUTING ! -i lo -p tcp --dport 8080 -j DROP 2>/dev/null && break
+        sleep 1
+      done
+      iptables -t raw -C PREROUTING ! -i lo -p tcp --dport 8080 -j DROP
+  - node: worker-2
+    run: |
+      iptables -F INPUT
+      systemctl stop lab-web 2>/dev/null || true
+      systemctl reset-failed lab-web 2>/dev/null || true
+      install -d /srv/web && echo 'hello from worker-2' > /srv/web/index.html
+      systemd-run --unit lab-web --property=Restart=always python3 -m http.server 8080 --directory /srv/web >/dev/null
+  - node: controlplane
+    run: |
+      # The comparison steps run over SSH from here: fail now rather than diff against nothing.
+      # -n, because this script arrives on stdin and ssh would swallow the rest of it.
+      for n in worker-1 worker-2; do runuser -u ubuntu -- ssh -n -o BatchMode=yes "$n" true; done
+      # A monitoring probe: live traffic for the counters and tcpdump to show.
+      systemctl stop lab-probe 2>/dev/null || true
+      systemctl reset-failed lab-probe 2>/dev/null || true
+      systemd-run --unit lab-probe --property=Restart=always bash -c 'while true; do for h in worker-1 worker-2; do curl -s -m 2 -o /dev/null "http://$h:8080/"; done; sleep 3; done' >/dev/null
+steps:
+  - id: read-filter
+    title: Read the firewall on a healthy server
+    explain: |
+      These machines are plain Ubuntu, with no Kubernetes. `worker-1` and `worker-2` each run a small web server on port **8080**, and `controlplane` is a client, with a monitoring probe that requests both every few seconds.
+
+      iptables rules live in **tables**, and each table has **chains**. A chain is an ordered list of rules that packets walk through at one point in their journey. Incoming packets for this machine go through these, in order:
+
+      ```
+      raw     PREROUTING
+      mangle  PREROUTING
+      nat     PREROUTING
+      (routing decision)
+      mangle  INPUT
+      filter  INPUT
+      the application
+      ```
+
+      Part 1 uses `filter`, the table for ordinary firewall rules. Switch the terminal to **worker-2** and list it. It is empty, and each chain's `policy ACCEPT` is what happens to a packet that no rule matches.
+    command: sudo iptables -L -n -v
+    node: worker-2
+    match: '^iptables\b(?!.*\s-t\b).*\s-[a-zA-Z]*[LS]\b'
+  - id: add-drop
+    title: Drop traffic to port 8080
+    explain: |
+      Read the rule left to right: `-A INPUT` appends to the INPUT chain, `-p tcp --dport 8080` is what to match, and `-j DROP` is what to do with a match. Rules take effect at once.
+    command: sudo iptables -A INPUT -p tcp --dport 8080 -j DROP
+    node: worker-2
+    match: '^iptables\b(?=.*\s-[AI]\s+INPUT\b)(?=.*--dport\s+8080\b)(?=.*-j\s+DROP\b)'
+    check:
+      id: drop-rule
+      description: INPUT on worker-2 drops port 8080
+      type: ssh
+      node: worker-2
+      run: iptables -C INPUT -p tcp --dport 8080 -j DROP && echo present || echo missing
+      expect: { equals: present }
+  - id: see-timeout
+    title: See what DROP looks like from the client
+    explain: |
+      Switch to **controlplane**. `-m 3` gives up after 3 seconds, and `-sS` hides the progress bar but keeps errors. DROP sends nothing back, so the client cannot tell the packet was thrown away. It waits, then **times out**.
+    command: curl -sS -m 3 http://worker-2:8080/
+    match: '^curl\b.*worker-2:8080'
+    allowFailure: true
+    check:
+      id: drop-times-out
+      description: worker-2:8080 times out from controlplane
+      type: ssh
+      node: controlplane
+      run: curl -s -m 3 -o /dev/null http://worker-2:8080/; echo $?
+      expect: { equals: '28' }
+  - id: replace-reject
+    title: Replace the rule with REJECT
+    explain: |
+      On **worker-2**. `-R INPUT 1` replaces rule number 1 of the chain. REJECT throws the packet away too, but tells the sender.
+    command: sudo iptables -R INPUT 1 -p tcp --dport 8080 -j REJECT
+    node: worker-2
+    match: '^iptables\b(?=.*\s-[RAI]\s+INPUT\b)(?=.*--dport\s+8080\b)(?=.*-j\s+REJECT\b)'
+    check:
+      id: no-drop-left
+      description: no DROP rule is left in INPUT on worker-2
+      type: ssh
+      node: worker-2
+      run: iptables -S INPUT | grep -c -- '-j DROP' || true
+      expect: { equals: '0' }
+  - id: see-refused
+    title: See what REJECT looks like from the client
+    explain: |
+      On **controlplane**, the same command now fails at once: compare the 1 or 2 ms in the message with the 3 seconds of the timeout. This version of `curl` says `Couldn't connect to server`, and most other tools call the same thing **Connection refused**.
+    command: curl -sS -m 3 http://worker-2:8080/
+    match: '^curl\b.*worker-2:8080'
+    allowFailure: true
+    check:
+      id: reject-refused
+      description: worker-2:8080 refuses the connection
+      type: ssh
+      node: controlplane
+      run: curl -s -m 3 -o /dev/null http://worker-2:8080/; echo $?
+      expect: { equals: '7' }
+  - id: read-the-failure
+    title: Read the failure
+    question:
+      prompt: |
+        A `curl` to a port fails within a millisecond or two with `Couldn't connect to server`, which other tools call `Connection refused`. What does that tell you?
+      choices:
+        - A firewall silently dropped the packets
+        - Something answered, so the host is reachable, but nothing listens on that port or a rule rejected it
+        - The host is down
+        - The name did not resolve
+      answer: 1
+      why: |
+        A refusal is a reply, so the packet got there. It comes from a REJECT rule, or from the kernel because nothing listens on the port. DROP sends nothing back, so you get a timeout, and a host that is down also ends in a timeout or `No route to host`. A name that does not resolve fails with `Could not resolve host`. How a connection fails tells you how far it got, so read the error before you guess.
+  - id: insert-accept
+    title: Let one client through
+    explain: |
+      On **worker-2**. The first rule that matches wins, and the rest of the chain is skipped. `-A` adds to the end, behind the REJECT, where it would never be reached. `-I INPUT 1` inserts at the top. `-s` matches the sender.
+    command: sudo iptables -I INPUT 1 -p tcp -s controlplane --dport 8080 -j ACCEPT
+    node: worker-2
+    match: '^iptables\b(?=.*\s-I\s+INPUT\b)(?=.*--dport\s+8080\b)(?=.*-j\s+ACCEPT\b)'
+    check:
+      id: accept-works
+      description: controlplane reaches worker-2:8080 again
+      type: ssh
+      node: controlplane
+      run: curl -s -m 3 http://worker-2:8080/ || true
+      expect: { contains: hello from worker-2 }
+  - id: counters
+    title: Read the counters
+    explain: |
+      `-v` adds `pkts` and `bytes` for each rule, and `--line-numbers` the rule numbers. Run it twice. The probe from controlplane makes rule 1's `pkts` climb, and nothing reaches rule 2 any more.
+
+      This is the fastest way to prove which rule is catching traffic: if its counter climbs while the problem happens, you have found it.
+    command: sudo iptables -L INPUT -n -v --line-numbers
+    node: worker-2
+    match: '^iptables\b(?=.*\s-[a-zA-Z]*L\b)(?=.*\s-[a-zA-Z]*v)'
+  - id: flush
+    title: Clean up
+    explain: |
+      `-F INPUT` flushes every rule in the chain. Take care on a remote machine: with a chain policy of DROP, a flush also removes the rule that lets your SSH session in. Here the policy is ACCEPT, so it is safe.
+    command: sudo iptables -F INPUT
+    node: worker-2
+    match: '^iptables\b(?!.*\s-t\b).*\s-F\b'
+    check:
+      id: input-empty
+      description: INPUT on worker-2 has no rules
+      type: ssh
+      node: worker-2
+      run: iptables -S INPUT | grep -c -- '^-A' || true
+      expect: { equals: '0' }
+  - id: symptom
+    title: "Part 2: reproduce the problem"
+    explain: |
+      **The ticket:** "The web service on `worker-1` is down, but `worker-2` is fine. Fix it in a way that survives a reboot."
+
+      Do not guess at a cause yet. Work outwards from what you can prove, one layer at a time. Start by seeing the failure yourself, on **controlplane**. It is a timeout, so something is staying silent.
+    command: curl -sS -m 3 http://worker-1:8080/
+    match: '^curl\b.*worker-1:8080'
+    allowFailure: true
+    check:
+      id: worker-1-blocked
+      description: worker-1:8080 times out from controlplane
+      type: ssh
+      node: controlplane
+      run: curl -s -m 3 -o /dev/null http://worker-1:8080/; echo $?
+      expect: { equals: '28' }
+  - id: ping
+    title: Is the machine reachable?
+    explain: |
+      The name resolves and worker-1 answers, so the machine is up and the network works. You also reached it with SSH when you opened its terminal. That rules out DNS and routing, and leaves the port itself.
+    command: ping -c 2 worker-1
+    match: '^ping\b.*worker-1'
+  - id: localhost
+    title: Is the service itself working?
+    explain: |
+      Switch to **worker-1** and test from the inside. `localhost` skips the network, so an answer proves the service is running and listening. `sudo ss -tlnp` shows the same thing from the kernel's side.
+
+      The service is fine, and so is the network. The problem is in between.
+    command: curl -sS -m 3 http://localhost:8080/
+    node: worker-1
+    match: '^curl\b.*(localhost|127\.0\.0\.1):8080'
+  - id: tcpdump
+    title: Do the requests reach the machine?
+    explain: |
+      `tcpdump` shows packets as they arrive, **before** the firewall sees them. `-n` skips name lookups, `-i any` listens on every interface, and `-c 4` stops after 4 packets. The probe from controlplane provides the traffic.
+
+      Look at the flags. `[S]` is a connection request. You only ever see `[S]` coming in, repeated, and no `[S.]` reply going out. So the packets reach the machine, and the working service never answers them: they are lost inside this host.
+    command: sudo timeout 15 tcpdump -ni any -c 4 tcp port 8080
+    node: worker-1
+    match: '^(timeout\s+\S+\s+)?tcpdump\b.*8080'
+    allowFailure: true
+  - id: list-filter
+    title: Check the firewall
+    explain: |
+      The obvious next step. Compare it with the rules you added to worker-2 in Part 1: this says there are no rules at all, and every policy is ACCEPT.
+
+      Most people stop here and decide it cannot be the firewall.
+    command: sudo iptables -L -n -v
+    node: worker-1
+    match: '^iptables\b(?!.*\s-t\b).*\s-[a-zA-Z]*[LS]\b'
+  - id: what-next
+    title: What next?
+    question:
+      prompt: |
+        On worker-1 the service answers on `localhost`, `tcpdump` shows requests arriving with no reply, and `iptables -L` lists no rules. What do you check next?
+      choices:
+        - Restart the web service, because it must have hung
+        - The `nameserver` in `/etc/resolv.conf`
+        - The other iptables tables, because `iptables -L` only shows `filter`
+        - The client, because the server looks healthy
+      answer: 2
+      why: |
+        Without `-t`, iptables only works on the `filter` table. Rules in `raw`, `mangle` and `nat` do not appear, however many there are. It is not the service, which answered on `localhost`. It is not DNS: `tcpdump` shows the client already found the right address. It is not the client either, because `worker-2` answers it.
+  - id: iptables-save
+    title: See every table at once
+    explain: |
+      `iptables-save` prints all the tables, each starting with a `*name` line. This is the command to reach for when you are hunting, because nothing can hide from it.
+
+      Find the `*raw` table and the rule in its PREROUTING chain. `raw` is the first stop on the path you saw at the start, so this rule drops the packet long before `filter`. `! -i lo` means "on any interface but loopback", which is why `localhost` still worked.
+    command: sudo iptables-save
+    node: worker-1
+    match: '^iptables-save\b'
+  - id: diff-rules
+    title: Compare with the healthy server
+    explain: |
+      When a twin of the broken machine works, every difference is a clue. Switch to **controlplane**, which can SSH to both workers. `ssh <host> <command>` runs a command over there, and `<( )` hands each command's output to `diff` as if it were a file. `grep` keeps only the rules, the `-A` lines.
+
+      On a real server with hundreds of rules, this finds in one command what reading would take minutes to find. `<` marks a line that is only on worker-1. `diff` exits 1 when it finds differences, which is fine here.
+    command: |-
+      diff <(ssh worker-1 sudo iptables-save | grep -- '^-A') <(ssh worker-2 sudo iptables-save | grep -- '^-A')
+    match: '^diff\b.*iptables-save'
+    allowFailure: true
+  - id: prove-it
+    title: Prove the rule is catching the traffic
+    explain: |
+      Back on **worker-1**. A rule being there does not prove it is the cause. Name the table with `-t raw`, and run this twice: `pkts` climbs with each probe. Now you know, and you have not changed anything yet.
+    command: sudo iptables -t raw -L PREROUTING -n -v --line-numbers
+    node: worker-1
+    match: '^iptables\b(?=.*-t\s*raw\b)(?=.*\s-[a-zA-Z]*L\b)'
+    check:
+      id: counter-climbs
+      description: the rule's packet counter climbs on worker-1
+      type: ssh
+      node: worker-1
+      run: |-
+        c() { iptables -t raw -L PREROUTING -n -v -x | awk '/dpt:8080/ {print $1}'; }; a=$(c); sleep 7; b=$(c); [ -n "$a" ] && [ "$b" -gt "$a" ] && echo climbing || echo "still at $b"
+      expect: { equals: climbing }
+  - id: delete-rule
+    title: Delete the rule
+    explain: |
+      `-D PREROUTING 1` deletes rule number 1 of the chain. Every iptables command needs `-t raw` here, or it acts on `filter`.
+    command: sudo iptables -t raw -D PREROUTING 1
+    node: worker-1
+    match: '^iptables\b(?=.*-t\s*raw\b)(?=.*\s-D\s+PREROUTING\b)'
+  - id: came-back
+    title: Check that it stayed gone
+    explain: |
+      It did not. Wait about 20 seconds and repeat this command until the rule is listed again: something is putting it back.
+
+      That is what "survives a reboot" is warning you about. iptables rules live in the kernel and vanish when a machine restarts, so a rule that keeps existing has a source. Deleting it only treats the symptom.
+    command: sudo iptables -t raw -S PREROUTING
+    node: worker-1
+    match: '^iptables\b(?=.*-t\s*raw\b)(?=.*\s-[a-zA-Z]*[SL]\b)'
+    check:
+      id: rule-back
+      description: the rule is back in raw PREROUTING on worker-1
+      type: ssh
+      node: worker-1
+      run: iptables -t raw -C PREROUTING ! -i lo -p tcp --dport 8080 -j DROP 2>/dev/null && echo back || echo gone
+      expect: { equals: back }
+      retrySeconds: 45
+  - id: find-source
+    title: Find what puts it back
+    explain: |
+      Rules usually come from a systemd service, a cron job, `ufw`, or a saved file loaded at boot such as `/etc/iptables/rules.v4`. Use the same trick as before: on **controlplane**, compare the enabled services of the two workers.
+
+      `host-baseline.service` is only on worker-1. Without a twin to compare with, `sudo grep -rl iptables /etc/systemd/system /usr/local/sbin /etc/cron*` on the broken machine searches the usual places.
+    command: |-
+      diff <(ssh worker-1 systemctl list-unit-files --state=enabled --no-legend | awk '{print $1}') <(ssh worker-2 systemctl list-unit-files --state=enabled --no-legend | awk '{print $1}')
+    match: '^diff\b.*list-unit-files|^systemctl\b.*list-unit|^grep\b.*iptables'
+    allowFailure: true
+  - id: read-source
+    title: Read it before you touch it
+    explain: |
+      Back on **worker-1**. `systemctl cat` prints a unit file, and `ExecStart` says what it runs. The script checks for the rule every 20 seconds and adds it back, so stopping the service is what will end this.
+
+      On a real server, find out why it exists first: a rule like this may be there on purpose.
+    command: systemctl cat host-baseline && cat /usr/local/sbin/host-baseline
+    node: worker-1
+    match: '^systemctl cat\b.*host-baseline|^cat\b.*host-baseline'
+  - id: disable
+    title: Stop it, for good
+    explain: |
+      `disable` stops it starting at the next boot, and `--now` also stops it right away. Forgetting one of the two is a classic mistake: `stop` alone comes back after a reboot.
+    command: sudo systemctl disable --now host-baseline
+    node: worker-1
+    match: '^systemctl\b(?=.*\bdisable\b)(?=.*--now\b)(?=.*host-baseline)'
+    check:
+      id: baseline-off
+      description: host-baseline is stopped and disabled on worker-1
+      type: ssh
+      node: worker-1
+      run: echo "$(systemctl is-enabled host-baseline 2>/dev/null) $(systemctl is-active host-baseline 2>/dev/null)"
+      expect: { equals: disabled inactive }
+  - id: remove
+    title: Remove it
+    explain: |
+      Delete the unit and its script so nothing can start it again, then `daemon-reload` so systemd forgets the unit.
+    command: sudo rm -f /etc/systemd/system/host-baseline.service /usr/local/sbin/host-baseline && sudo systemctl daemon-reload
+    node: worker-1
+    match: '^rm\b.*host-baseline'
+    check:
+      id: baseline-gone
+      description: the host-baseline unit and script are gone
+      type: ssh
+      node: worker-1
+      run: ls /etc/systemd/system/host-baseline.service /usr/local/sbin/host-baseline 2>/dev/null | wc -l
+      expect: { equals: '0' }
+  - id: delete-for-good
+    title: Delete the rule for the last time
+    explain: |
+      Stopping the service leaves its rule in the kernel, so delete it again. This time nothing puts it back.
+    command: sudo iptables -t raw -D PREROUTING 1
+    node: worker-1
+    match: '^iptables\b(?=.*-t\s*raw\b)(?=.*\s-D\s+PREROUTING\b)'
+    check:
+      id: rule-gone
+      description: no rule on worker-1 mentions port 8080
+      type: ssh
+      node: worker-1
+      run: iptables-save | grep -c -- '--dport 8080' || true
+      expect: { equals: '0' }
+  - id: fixed
+    title: Confirm from the client
+    explain: |
+      On **controlplane**, test the way the user would. The same request that started all this now gets its answer.
+
+      That was the whole method: reproduce it, prove each layer in turn (network, service, packets arriving), read the firewall with `iptables-save` rather than `iptables -L`, compare with a healthy twin, prove the rule with its counter, then remove the rule **and** whatever puts it back.
+    command: curl -sS -m 3 http://worker-1:8080/
+    match: '^curl\b.*worker-1:8080'
+    check:
+      id: worker-1-answers
+      description: worker-1 answers on port 8080
+      type: ssh
+      node: controlplane
+      run: curl -s -m 3 http://worker-1:8080/ || true
+      expect: { contains: hello from worker-1 }
+      retrySeconds: 10

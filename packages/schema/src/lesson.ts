@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LESSON_TRACKS } from './constants';
+import { LESSON_TRACKS, VM_BASES } from './constants';
 import { CheckSchema, NodeNameSchema, StepSchema } from './scenario';
 
 export const LESSON_TOPICS = ['certificates', 'etcd', 'cluster', 'jobs', 'admission', 'troubleshooting', 'openssl', 'firewall', 'systemd', 'networking', 'files'] as const;
@@ -78,6 +78,8 @@ export const LessonSchema = z
     summary: z.string().min(1),
     track: LessonTrackSchema.default('cka'),
     topic: LessonTopicSchema,
+    /** Snapshot the lesson runs on: a running cluster, or os for plain Ubuntu without Kubernetes. */
+    base: z.enum(VM_BASES).default('cluster'),
     estimatedMinutes: z.number().positive(),
     setup: z.array(StepSchema).default([]),
     steps: z.array(LessonStepSchema).min(1),

@@ -61,7 +61,7 @@ export class LessonLibrary {
 export const LEARN_PREFIX = 'learn:';
 const LESSON_NODES = ['controlplane', 'worker-1', 'worker-2'];
 
-/** A lesson as a task-free scenario on the cluster image: the command-log hook, then the lesson's setup. */
+/** A lesson as a task-free scenario on its snapshot: the command-log hook, then the lesson's setup. */
 export function lessonScenario(l: LoadedLesson): LoadedScenario {
   return {
     def: {
@@ -73,9 +73,9 @@ export function lessonScenario(l: LoadedLesson): LoadedScenario {
       estimatedMinutes: l.def.estimatedMinutes,
       points: 1,
       tags: [],
-      base: 'cluster',
+      base: l.def.base,
       nodes: { controlPlane: 1, workers: 2 },
-      context: 'kubernetes-admin@kubernetes',
+      context: l.def.base === 'cluster' ? 'kubernetes-admin@kubernetes' : undefined,
       settleSeconds: 0,
       draft: false,
       variables: {},
