@@ -11,6 +11,11 @@ import { registerTerminal } from './terminal';
 const PORT = Number(process.env.CKA_PORT ?? 4317);
 const HOST = process.env.CKA_HOST ?? '127.0.0.1';
 const WEB_DIST = join(repoRoot, 'apps', 'web', 'dist');
+/**
+ * npm run dev starts this API through its dev:api script, beside Vite. The web app is Vite's then, and
+ * WEB_DIST whatever was last built, so browsers that open this port are sent to Vite instead.
+ */
+const VITE_DEV = process.env.npm_lifecycle_event === 'dev:api';
 
 const orch = createOrchestrator('api');
 const { sessions, library, lessons, quizzes, store, log } = orch;
@@ -222,7 +227,12 @@ app.get<{ Querystring: { scenarioId?: string; domain?: string; limit?: string } 
   return { attempts };
 });
 
-if (existsSync(WEB_DIST)) {
+if (VITE_DEV) {
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api/')) return reply.status(404).send({ error: `No route ${req.method} ${req.url}` });
+    return reply.redirect(`http://${req.hostname}:${VITE_PORT}${req.url}`);
+  });
+} else if (existsSync(WEB_DIST)) {
   await app.register(fastifyStatic, { root: WEB_DIST });
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith('/api/')) return reply.status(404).send({ error: `No route ${req.method} ${req.url}` });
@@ -237,7 +247,8 @@ try {
   await app.listen({ port: PORT, host: HOST });
   log.info({ port: PORT, driver: orch.driver.name }, 'api listening');
   console.log(`cka-lab API on http://${HOST}:${PORT} (driver: ${orch.driver.name})`);
-  if (existsSync(WEB_DIST)) console.log(`UI on http://${HOST}:${PORT}`);
+  if (VITE_DEV) console.log(`UI on http://${HOST}:${VITE_PORT} (Vite); this port sends browsers there`);
+  else if (existsSync(WEB_DIST)) console.log(`UI on http://${HOST}:${PORT}`);
 } catch (e) {
   console.error(`Could not start the API: ${(e as Error).message}`);
   process.exit(1);

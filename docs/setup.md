@@ -53,7 +53,7 @@ Per-node build logs go to `~/.cka-lab/logs/build-*.log`. To rebuild from scratch
 ## Running
 
 ```bash
-npm run dev          # API on :4317 + UI on http://localhost:5173 (hot reload)
+npm run dev          # API on :4317 + UI on http://localhost:5173 (hot reload); :4317 sends browsers to it
 # or
 npm start            # builds the UI and serves everything from http://127.0.0.1:4317
 ```
