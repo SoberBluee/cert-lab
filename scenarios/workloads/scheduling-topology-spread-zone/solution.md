@@ -7,7 +7,7 @@ This run's fault: **`${Q1_FAULT}`**.
 <!-- fault Q1_FAULT=topology-spread-zone -->
 #### Topology spread requires a zone label no node has (`topology-spread-zone`)
 
-The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`).
+The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`). Labelling the nodes would get the Pods running too, but the task says not to change any node, and a zone label should say where a node really is.
 
 ```bash
 kubectl -n "${Q1_NS}" patch deployment "${Q1_APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/topologySpreadConstraints"}]'

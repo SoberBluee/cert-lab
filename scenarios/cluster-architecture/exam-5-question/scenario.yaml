@@ -79,7 +79,7 @@ tasks:
         type: kubectl
         run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
         expect: { equals: 2/2/2 }
-        weight: 3
+        weight: 2
         retrySeconds: 60
       - id: q2-spec
         description: replicas, image and requests match the spec
@@ -92,6 +92,12 @@ tasks:
         type: kubectl
         run: "[ \"$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid}')\" = \"$(cat /var/tmp/cka-q2.uid)\" ] && echo same || echo recreated"
         expect: { equals: same }
+        weight: 1
+      - id: q2-no-added-label
+        description: ${Q2_APP} does not rely on a node label added for it
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.topologySpreadConstraints[*].topologyKey} {.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[*].matchExpressions[*].key}'
+        expect: { matches: "^(?!.*(topology\\.kubernetes\\.io/zone|disktype)).*$" }
         weight: 1
     hints:
       - "kubectl -n ${Q2_NS} get deployment,replicaset,pods -o wide: are Pods missing altogether, or do they exist and stay Pending?"

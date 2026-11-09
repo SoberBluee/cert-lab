@@ -720,7 +720,7 @@ kubectl -n "${Q7_NS}" patch deployment "${Q7_APP}" --type=json -p '[{"op":"remov
 <!-- fault Q7_FAULT=node-affinity -->
 #### Required node affinity matches no node (`node-affinity`)
 
-The Pod template requires nodes labelled `disktype=ssd`, and no node has that label, so the Pods stay Pending with "didn't match Pod's node affinity/selector". The spec allows any node: remove the affinity.
+The Pod template requires nodes labelled `disktype=ssd`, and no node has that label, so the Pods stay Pending with "didn't match Pod's node affinity/selector". The spec allows any node: remove the affinity. Labelling a node would get the Pods running too, but the task says not to change any node.
 
 ```bash
 kubectl -n "${Q7_NS}" patch deployment "${Q7_APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/affinity"}]'
@@ -740,7 +740,7 @@ kubectl -n "${Q7_NS}" patch deployment "${Q7_APP}" --type=json -p '[{"op":"remov
 <!-- fault Q7_FAULT=topology-spread-zone -->
 #### Topology spread requires a zone label no node has (`topology-spread-zone`)
 
-The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`).
+The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`). Labelling the nodes would get the Pods running too, but the task says not to change any node, and a zone label should say where a node really is.
 
 ```bash
 kubectl -n "${Q7_NS}" patch deployment "${Q7_APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/topologySpreadConstraints"}]'

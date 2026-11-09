@@ -79,7 +79,7 @@ ${waitUnhealthy(NS, `app=${APP}`, 15)}
         type: 'kubectl',
         run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'`,
         expect: { equals: '2/2/2' },
-        weight: 3,
+        weight: 2,
         retrySeconds: 60,
       },
       {
@@ -96,6 +96,16 @@ ${waitUnhealthy(NS, `app=${APP}`, 15)}
         type: 'kubectl',
         run: `[ "$(kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.metadata.uid}')" = "$(cat ${state}.uid)" ] && echo same || echo recreated`,
         expect: { equals: 'same' },
+        weight: 1,
+      },
+      // The task forbids changing nodes, and labelling one would satisfy these two faults. This reads the
+      // template, not the nodes, because another question in the lab may label nodes for its own reasons.
+      {
+        id: 'no-added-label',
+        description: `${APP} does not rely on a node label added for it`,
+        type: 'kubectl',
+        run: `kubectl -n ${NS} get deployment ${APP} -o jsonpath='{.spec.template.spec.topologySpreadConstraints[*].topologyKey} {.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[*].matchExpressions[*].key}'`,
+        expect: { matches: '^(?!.*(topology\\.kubernetes\\.io/zone|disktype)).*$' },
         weight: 1,
       },
     ],
@@ -154,7 +164,7 @@ kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"template":{"spec":{"a
       fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/affinity"}]'`,
       wait: waitReady(NS, APP),
       explain:
-        'The Pod template requires nodes labelled `disktype=ssd`, and no node has that label, so the Pods stay Pending with "didn\'t match Pod\'s node affinity/selector". The spec allows any node: remove the affinity.',
+        'The Pod template requires nodes labelled `disktype=ssd`, and no node has that label, so the Pods stay Pending with "didn\'t match Pod\'s node affinity/selector". The spec allows any node: remove the affinity. Labelling a node would get the Pods running too, but the task says not to change any node.',
     },
     {
       id: 'priority-class',
@@ -172,7 +182,7 @@ kubectl -n "${NS}" patch deployment "${APP}" -p '{"spec":{"template":{"spec":{"a
       fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/topologySpreadConstraints"}]'`,
       wait: waitReady(NS, APP),
       explain:
-        'The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`).',
+        'The Pod template sets a topology spread constraint on `topology.kubernetes.io/zone` with `whenUnsatisfiable: DoNotSchedule`, but no node carries that label, so Pods stay Pending. The spec allows any node: remove `topologySpreadConstraints` (or switch `topologyKey` to a label that exists, such as `kubernetes.io/hostname`). Labelling the nodes would get the Pods running too, but the task says not to change any node, and a zone label should say where a node really is.',
     },
     {
       id: 'scheduler-name',
