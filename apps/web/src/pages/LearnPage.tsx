@@ -26,7 +26,7 @@ const TRACKS: Record<LessonTrack, { intro: string; topics: Topics }> = {
     topics: {
       certificates: { name: 'Certificates', blurb: 'openssl, kubeadm certs and CertificateSigningRequests' },
       etcd: { name: 'etcd', blurb: 'etcdctl and etcdutl: back up and restore the cluster state' },
-      cluster: { name: 'Cluster', blurb: 'kubeadm and control plane chores' },
+      cluster: { name: 'Cluster', blurb: 'kubeadm, CoreDNS and control plane chores' },
       jobs: { name: 'Jobs and CronJobs', blurb: 'run work to completion and on a schedule, then find out why it did not' },
       admission: { name: 'Admission control', blurb: 'quotas, LimitRanges, Pod Security and webhooks: what refuses a Pod, and how to tell' },
       troubleshooting: {

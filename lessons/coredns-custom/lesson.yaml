@@ -1,0 +1,400 @@
+id: coredns-custom
+title: "Customise CoreDNS: domains, records, aliases and forwarding"
+summary: Exam tasks about CoreDNS are edits to the Corefile in ConfigMap coredns. Back it up, then add a second cluster domain, a static record with hosts, an alias for a Service with rewrite and a stub domain with its own server block. Along the way, see why hosts needs fallthrough, what a typo does, and how to restore the backup.
+topic: cluster
+estimatedMinutes: 30
+setup:
+  - node: controlplane
+    timeoutSeconds: 300
+    run: |
+      set -euo pipefail
+      kubectl run dnstest --image=busybox:1.36 --restart=Never -- sleep infinity >/dev/null
+      kubectl create namespace prod >/dev/null
+      kubectl -n prod create service clusterip db --tcp=5432:5432 >/dev/null
+      # The "company DNS server": a second CoreDNS that only knows corp.example, at a fixed ClusterIP.
+      img=$(kubectl -n kube-system get deployment coredns -o jsonpath='{.spec.template.spec.containers[0].image}')
+      kubectl create namespace corp-dns >/dev/null
+      cat <<EOF | kubectl apply -f - >/dev/null
+      apiVersion: v1
+      kind: ConfigMap
+      metadata: { name: corp-dns, namespace: corp-dns }
+      data:
+        Corefile: |
+          corp.example:1053 {
+              hosts {
+                  10.50.0.10 ldap.corp.example
+                  10.50.0.11 git.corp.example
+              }
+              log
+          }
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: corp-dns, namespace: corp-dns }
+      spec:
+        replicas: 1
+        selector: { matchLabels: { app: corp-dns } }
+        template:
+          metadata: { labels: { app: corp-dns } }
+          spec:
+            containers:
+              - name: coredns
+                image: ${img}
+                imagePullPolicy: IfNotPresent
+                args: [-conf, /etc/coredns/Corefile]
+                volumeMounts: [{ name: config, mountPath: /etc/coredns }]
+            volumes: [{ name: config, configMap: { name: corp-dns } }]
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata: { name: corp-dns, namespace: corp-dns }
+      spec:
+        clusterIP: 10.96.100.53
+        selector: { app: corp-dns }
+        ports:
+          - { name: dns, port: 53, targetPort: 1053, protocol: UDP }
+          - { name: dns-tcp, port: 53, targetPort: 1053, protocol: TCP }
+      EOF
+      kubectl wait --for=condition=Ready pod/dnstest --timeout=180s >/dev/null
+      kubectl -n corp-dns rollout status deployment corp-dns --timeout=180s >/dev/null
+      out=''
+      for _ in $(seq 1 30); do
+        out=$(kubectl exec dnstest -- nslookup ldap.corp.example 10.96.100.53 2>/dev/null || true)
+        [[ "$out" == *10.50.0.10* ]] && break
+        sleep 2
+      done
+      [[ "$out" == *10.50.0.10* ]] || { echo "the corp.example DNS server does not answer" >&2; exit 1; }
+steps:
+  - id: read-corefile
+    title: Find the CoreDNS configuration
+    explain: |
+      CoreDNS reads one file, the **Corefile**, from ConfigMap `coredns` in `kube-system`. It is mounted into the Pods at `/etc/coredns/Corefile`. Every exam task about CoreDNS configuration is an edit to this ConfigMap.
+
+      `.:53 { ... }` is a **server block**: it serves every zone (`.`) on port 53. Each line inside it turns on a plugin:
+
+      - `kubernetes cluster.local in-addr.arpa ip6.arpa` answers for Services and Pods in the zones it names.
+      - `forward . /etc/resolv.conf` sends every other name to the node's resolver.
+      - `cache 30` caches answers, `errors` logs failures, and `health` and `ready` serve the probes.
+      - `reload` re-reads the Corefile when it changes, and `loop` stops forwarding loops.
+    command: kubectl -n kube-system get configmap coredns -o yaml
+    match: '^kubectl\b(?=.*\b(get|describe|edit)\b)(?=.*\b(cm|configmaps?)\b)(?=.*\bcoredns\b)'
+  - id: backup
+    title: Back up the ConfigMap before you change it
+    explain: |
+      CoreDNS tasks often start with "make a backup at this path". Save the whole ConfigMap as YAML to `~/coredns-backup.yaml`, and edit only the live object. If an edit breaks DNS, the backup is your way back. You will restore it at the end of this lesson.
+    command: kubectl -n kube-system get configmap coredns -o yaml > ~/coredns-backup.yaml
+    check:
+      id: backup-saved
+      description: ~/coredns-backup.yaml holds the original ConfigMap
+      type: file
+      path: /home/ubuntu/coredns-backup.yaml
+      contains: kubernetes cluster.local
+  - id: q-reload
+    title: How does a change reach CoreDNS?
+    question:
+      prompt: You change the Corefile in the ConfigMap and save it. What do the running CoreDNS Pods do?
+      choices:
+        - "Nothing: a Pod only reads a ConfigMap when it starts, so you must delete them"
+        - They pick it up on their own after about a minute, because the kubelet updates the mounted file and the `reload` plugin reloads it
+        - They restart at once, because a Deployment watches the ConfigMaps it mounts
+        - The API server pushes the new Corefile to CoreDNS straight away
+      answer: 1
+      why: |
+        The kubelet updates a ConfigMap mounted as a volume in place, within about a minute (not when it is mounted with `subPath`). The `reload` plugin checks the file every 30 seconds and reloads it when it has changed. On this cluster that took about 65 seconds and logged `[INFO] Reloading complete`.
+
+        In the exam, don't wait: `kubectl -n kube-system rollout restart deployment coredns` applies the change now. Either way, read the logs afterwards.
+  - id: custom-before
+    title: "Task 1: resolve Services under a second domain"
+    explain: |
+      A common exam task: *make `SERVICE.NAMESPACE.svc.custom-domain` resolve exactly like `SERVICE.NAMESPACE.svc.cluster.local`, in addition to it.* First, see that it fails today. CoreDNS forwards `custom-domain` upstream like any other name, and the answer is `NXDOMAIN`.
+
+      Test with full names. busybox's `nslookup` does not apply the Pod's search list to a name that already has a dot, so `nslookup kubernetes.default` fails here even when DNS works.
+    command: kubectl exec dnstest -- nslookup kubernetes.default.svc.custom-domain
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)(?=.*custom-domain)'
+    allowFailure: true
+  - id: custom-edit
+    title: Add custom-domain to the kubernetes plugin
+    explain: |
+      The `kubernetes` plugin answers for every zone on its line. Add `custom-domain` and keep `cluster.local`:
+
+      ```
+      kubernetes custom-domain cluster.local in-addr.arpa ip6.arpa {
+      ```
+
+      Run `kubectl -n kube-system edit configmap coredns`. The Corefile sits in a YAML block (`Corefile: |`), so keep every line indented under it and use spaces, not tabs. If you save YAML that does not parse, `kubectl edit` reopens the file with the error at the top. This step turns green when the ConfigMap has the new line.
+    command: kubectl -n kube-system get configmap coredns -o yaml | sed 's/kubernetes cluster.local/kubernetes custom-domain cluster.local/' | kubectl replace -f -
+    check:
+      id: custom-domain-line
+      description: the kubernetes plugin serves custom-domain as well as cluster.local
+      type: kubectl
+      run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -E '^[[:space:]]*kubernetes[[:space:]]' || true
+      expect: { matches: 'kubernetes\s(?=.*\bcustom-domain\b)(?=.*\bcluster\.local\b)' }
+  - id: restart
+    title: Restart CoreDNS to apply it now
+    explain: |
+      `rollout restart` replaces the Pods a few at a time, so DNS keeps answering while it runs. `rollout status` waits until the new Pods are ready. This step turns green when both new Pods are ready.
+    command: kubectl -n kube-system rollout restart deployment coredns && kubectl -n kube-system rollout status deployment coredns
+    match: '^kubectl\b(?=.*\b(rollout\s+restart|delete)\b)(?=.*\b(coredns|kube-dns)\b)'
+    check:
+      id: coredns-rolled
+      description: CoreDNS runs 2 ready replicas of the new version
+      type: kubectl
+      run: kubectl -n kube-system get deployment coredns -o jsonpath='{.status.updatedReplicas}/{.status.readyReplicas}/{.status.replicas}'
+      expect: { equals: 2/2/2 }
+      retrySeconds: 90
+  - id: custom-after
+    title: Test the new domain
+    explain: |
+      `kubernetes.default.svc.custom-domain` now returns `10.96.0.1`, the same answer as `kubernetes.default.svc.cluster.local`. If you still get `NXDOMAIN`, try again after a few seconds: the old Pods answer for a short time while they shut down.
+    command: kubectl exec dnstest -- nslookup kubernetes.default.svc.custom-domain
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)(?=.*custom-domain)'
+    allowFailure: true
+    check:
+      id: custom-domain-resolves
+      description: kubernetes.default.svc.custom-domain resolves to 10.96.0.1
+      type: kubectl
+      run: kubectl exec dnstest -- nslookup kubernetes.default.svc.custom-domain 2>/dev/null | grep -A1 '^Name:' | tail -1
+      expect: { matches: '10\.96\.0\.1$' }
+      retrySeconds: 90
+  - id: q-replace
+    title: Why keep cluster.local?
+    question:
+      prompt: "A colleague did the same task by changing the line to `kubernetes custom-domain in-addr.arpa ip6.arpa`, without `cluster.local`. What breaks?"
+      choices:
+        - "Nothing: from now on Pods find Services under custom-domain"
+        - Every lookup of a `.svc.cluster.local` name, so Pods can no longer reach Services by name
+        - Only lookups of external names such as example.com
+        - CoreDNS refuses to start, because cluster.local is required
+      answer: 1
+      why: |
+        The kubelet still writes `search default.svc.cluster.local svc.cluster.local cluster.local` into every Pod's `/etc/resolv.conf`, from its `clusterDomain` setting. CoreDNS would stop answering for that zone and forward those names upstream, which answers `NXDOMAIN`. "In addition to" means: add the new zone and keep the old one.
+  - id: hosts-add
+    title: "Task 2: add a static record with the hosts plugin"
+    explain: |
+      Next task: *every Pod must resolve `legacy-db.internal` to `192.168.50.20`*, a server outside the cluster. The `hosts` plugin serves records written the same way as in `/etc/hosts`. Add this block inside `.:53 { }`, for example just above `prometheus :9153`:
+
+      ```
+      hosts {
+         192.168.50.20 legacy-db.internal
+      }
+      ```
+
+      Leave out `fallthrough` for now, to see why it matters. Then restart CoreDNS as before. This step turns green when the ConfigMap has the record.
+    command: |
+      kubectl -n kube-system get configmap coredns -o yaml | sed 's/^\( *\)prometheus :9153$/\1hosts {\n\1   192.168.50.20 legacy-db.internal\n\1}\n&/' | kubectl replace -f -
+      kubectl -n kube-system rollout restart deployment coredns && kubectl -n kube-system rollout status deployment coredns
+    check:
+      id: hosts-record
+      description: the Corefile has a hosts record for legacy-db.internal
+      type: kubectl
+      run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -cE '192\.168\.50\.20[[:space:]]+legacy-db\.internal' || true
+      expect: { equals: '1' }
+  - id: hosts-test
+    title: Test the new record
+    explain: |
+      `legacy-db.internal` returns `192.168.50.20`. Is the task done? Not until you have checked that the rest of DNS still works.
+    command: kubectl exec dnstest -- nslookup legacy-db.internal
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)(?=.*legacy-db\.internal)'
+    allowFailure: true
+    check:
+      id: legacy-resolves
+      description: legacy-db.internal resolves to 192.168.50.20
+      type: kubectl
+      run: kubectl exec dnstest -- nslookup legacy-db.internal 2>/dev/null | grep -A1 '^Name:' | tail -1
+      expect: { matches: '192\.168\.50\.20$' }
+      retrySeconds: 90
+  - id: hosts-broken
+    title: Look up a Service name again
+    explain: |
+      `kubernetes.default.svc.cluster.local` now fails with `SERVFAIL`, and so does `example.com`. Adding one record broke every other name. (If it still resolves, you added `fallthrough` already. Answer the next question anyway.)
+    command: kubectl exec dnstest -- nslookup kubernetes.default.svc.cluster.local
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)(?=.*kubernetes\.default)'
+    allowFailure: true
+  - id: q-fallthrough
+    title: Why did one record break everything?
+    question:
+      prompt: Why does `kubernetes.default.svc.cluster.local` fail once the `hosts` block is in?
+      choices:
+        - The `hosts` block has to go above `kubernetes` in the Corefile, because CoreDNS runs the lines in order
+        - "`hosts` covers every zone of its server block (`.`), and for a name it has no record of, it answers SERVFAIL itself instead of passing the query on"
+        - Two plugins cannot both answer for cluster.local
+        - The restart cleared the cache, and the kubernetes plugin needs a few minutes to sync again
+      answer: 1
+      why: |
+        CoreDNS runs plugins in an order fixed when it was built, not in the order of the Corefile, and `hosts` runs before `kubernetes` and `forward`. Your block sits below `kubernetes` and still answers first. Given no zones, `hosts` answers for the whole server block, so it answers every name. `fallthrough` makes it pass a name it has no record of on to the next plugin.
+
+        The default `kubernetes` plugin uses the same option for reverse lookups: `fallthrough in-addr.arpa ip6.arpa`.
+  - id: hosts-fix
+    title: Add fallthrough
+    explain: |
+      Add `fallthrough` as the last line of the `hosts` block, then restart CoreDNS:
+
+      ```
+      hosts {
+         192.168.50.20 legacy-db.internal
+         fallthrough
+      }
+      ```
+
+      A `hosts` block in the main server block always needs `fallthrough`. This step turns green when both `legacy-db.internal` and `kubernetes.default.svc.cluster.local` resolve.
+    command: |
+      kubectl -n kube-system get configmap coredns -o yaml | sed 's/^\( *\)192\.168\.50\.20 legacy-db\.internal$/&\n\1fallthrough/' | kubectl replace -f -
+      kubectl -n kube-system rollout restart deployment coredns && kubectl -n kube-system rollout status deployment coredns
+    check:
+      id: both-resolve
+      description: legacy-db.internal and kubernetes.default.svc.cluster.local both resolve
+      type: kubectl
+      run: |
+        a=$(kubectl exec dnstest -- nslookup legacy-db.internal 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}')
+        b=$(kubectl exec dnstest -- nslookup kubernetes.default.svc.cluster.local 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}')
+        echo "legacy-db.internal=${a:-none} kubernetes=${b:-none}"
+      expect: { equals: 'legacy-db.internal=192.168.50.20 kubernetes=10.96.0.1' }
+      retrySeconds: 90
+  - id: rewrite-add
+    title: "Task 3: give a Service a second name with rewrite"
+    explain: |
+      Next task: *Pods must reach Service `db` in namespace `prod` as `db.company.local`.* A `hosts` record with the Service's ClusterIP would work until the Service is recreated with a new IP. The `rewrite` plugin changes the name in the query before the `kubernetes` plugin sees it, so the answer always follows the Service. Add this line inside `.:53 { }`, then restart CoreDNS:
+
+      ```
+      rewrite name db.company.local db.prod.svc.cluster.local
+      ```
+
+      CoreDNS rewrites the name in the answer back to `db.company.local`, so the client gets an answer for the name it asked about. This step turns green when the ConfigMap has the rule.
+    command: |
+      kubectl -n kube-system get configmap coredns -o yaml | sed 's/^\( *\)ready$/&\n\1rewrite name db.company.local db.prod.svc.cluster.local/' | kubectl replace -f -
+      kubectl -n kube-system rollout restart deployment coredns && kubectl -n kube-system rollout status deployment coredns
+    check:
+      id: rewrite-rule
+      description: the Corefile rewrites db.company.local to db.prod.svc.cluster.local
+      type: kubectl
+      run: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -E '^[[:space:]]*(rewrite|name)[[:space:]].*db\.company\.local' || true
+      expect: { matches: 'db\.company\.local\s+db\.prod\.svc\.cluster\.local' }
+  - id: rewrite-test
+    title: Test the alias
+    explain: |
+      `db.company.local` returns the ClusterIP of `db` (compare it with `kubectl -n prod get service db`), and the answer says `Name: db.company.local`.
+    command: kubectl exec dnstest -- nslookup db.company.local
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)(?=.*db\.company\.local)'
+    allowFailure: true
+    check:
+      id: alias-resolves
+      description: db.company.local resolves to the ClusterIP of Service prod/db
+      type: kubectl
+      run: |
+        ip=$(kubectl -n prod get service db -o jsonpath='{.spec.clusterIP}')
+        got=$(kubectl exec dnstest -- nslookup db.company.local 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}')
+        [ -n "$got" ] && [ "$got" = "$ip" ] && echo same || echo "got ${got:-nothing}, want $ip"
+      expect: { equals: same }
+      retrySeconds: 90
+  - id: stub-direct
+    title: "Task 4: ask the company DNS server directly"
+    explain: |
+      Last task: *send every query for `corp.example` to the company DNS server at `10.96.100.53`*. This is called a stub domain, or conditional forwarding. In this lab the server runs in namespace `corp-dns`. In the exam, the task gives you the IP.
+
+      First, prove the server answers: name it as the second argument of `nslookup`. It returns `10.50.0.10` for `ldap.corp.example`. Without that argument, the query goes to CoreDNS, which forwards it upstream and gets `NXDOMAIN`.
+    command: kubectl exec dnstest -- nslookup ldap.corp.example 10.96.100.53
+    match: '^kubectl\b(?=.*\bexec\b)(?=.*\bdnstest\b)(?=.*\b(nslookup|dig|host)\b)(?=.*ldap\.corp\.example)(?=.*10\.96\.100\.53)'
+  - id: stub-add
+    title: Forward corp.example with its own server block
+    explain: |
+      Add a second server block **after** the closing `}` of `.:53`, still indented under `Corefile: |`:
+
+      ```
+      corp.example:53 {
+          errors
+          cache 30
+          forward . 10.96.100.53
+      }
+      ```
+
+      CoreDNS sends each query to the server block with the most specific matching zone. So `corp.example` names go to this block, and everything else still goes to `.:53`. Inside this block, `forward .` means "every name this block receives".
+
+      Restart CoreDNS. This step turns green when `ldap.corp.example` resolves through the cluster DNS and Service names still resolve. Recent CoreDNS versions also accept a second line `forward corp.example 10.96.100.53` in the main block. The separate server block is the form the Kubernetes documentation uses, and it works on every version.
+    command: |
+      kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' > /tmp/Corefile
+      printf 'corp.example:53 {\n    errors\n    cache 30\n    forward . 10.96.100.53\n}\n' >> /tmp/Corefile
+      kubectl -n kube-system create configmap coredns --from-file=Corefile=/tmp/Corefile --dry-run=client -o yaml | kubectl replace -f -
+      kubectl -n kube-system rollout restart deployment coredns && kubectl -n kube-system rollout status deployment coredns
+    check:
+      id: stub-resolves
+      description: ldap.corp.example resolves through cluster DNS, and Service names still resolve
+      type: kubectl
+      run: |
+        a=$(kubectl exec dnstest -- nslookup ldap.corp.example 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}')
+        b=$(kubectl exec dnstest -- nslookup kubernetes.default.svc.cluster.local 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}')
+        echo "ldap.corp.example=${a:-none} kubernetes=${b:-none}"
+      expect: { equals: 'ldap.corp.example=10.50.0.10 kubernetes=10.96.0.1' }
+      retrySeconds: 90
+  - id: q-typo
+    title: What if the Corefile has a typo?
+    question:
+      prompt: You save a Corefile with a typo (`forwrd` instead of `forward`) and run `rollout restart`. What happens?
+      choices:
+        - Every CoreDNS Pod crashes, and every DNS lookup in the cluster fails
+        - "The new Pods crash with `Unknown directive 'forwrd'`, and an old Pod keeps answering with the last good Corefile"
+        - kubectl refuses to save the ConfigMap
+        - CoreDNS skips the line it does not know and starts without it
+      answer: 1
+      why: |
+        The API server stores any text in a ConfigMap. Only CoreDNS parses it. On this cluster, the restart left both new Pods in `CrashLoopBackOff` and one old Pod running: with `maxUnavailable: 1`, the rollout keeps one ready Pod until new ones are ready. Fix the ConfigMap and restart again.
+
+        Without the restart, the `reload` plugin would have kept the old config and logged `plugin/reload: Corefile changed but reload failed`. Either way, the logs tell you, so check them after every change.
+  - id: q-pod-level
+    title: One Pod only
+    question:
+      prompt: A different task says only Pod `reporting` may resolve `legacy-db.internal`, and other Pods must not. Where does the entry go?
+      choices:
+        - A `hosts` block in the Corefile, with `fallthrough`
+        - "`hostAliases` in the Pod's spec, which adds the entry to that Pod's `/etc/hosts`"
+        - An ExternalName Service named `legacy-db`
+        - "`dnsPolicy: Default` on the Pod"
+      answer: 1
+      why: |
+        Everything in the Corefile applies to every Pod that uses cluster DNS. The kubelet writes `spec.hostAliases` (an `ip` and its `hostnames`) into that one Pod's `/etc/hosts`.
+
+        The other per-Pod tool is `dnsPolicy: None` with `dnsConfig`, which sets the Pod's own nameservers and search domains. An ExternalName Service maps a cluster name to another DNS name, not to an IP.
+  - id: logs
+    title: Read the CoreDNS logs
+    explain: |
+      Check the logs after every change to the Corefile. A good start prints one line per server block (`.:53` and `corp.example.:53`) and the configuration's hash. A bad one prints `Error during parsing` with the line number in the Corefile. This step turns green when all four changes answer.
+    command: kubectl -n kube-system logs -l k8s-app=kube-dns --tail=20
+    match: '^kubectl\b(?=.*\blogs\b)(?=.*\b(kube-dns|coredns)\b)'
+    check:
+      id: all-four
+      description: custom-domain, legacy-db.internal, db.company.local and ldap.corp.example all resolve
+      type: kubectl
+      run: |
+        r() { kubectl exec dnstest -- nslookup "$1" 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}'; }
+        ip=$(kubectl -n prod get service db -o jsonpath='{.spec.clusterIP}')
+        alias=$(r db.company.local)
+        [ -n "$alias" ] && [ "$alias" = "$ip" ] && alias=ok
+        echo "custom=$(r kubernetes.default.svc.custom-domain) legacy=$(r legacy-db.internal) alias=${alias:-none} corp=$(r ldap.corp.example)"
+      expect: { equals: 'custom=10.96.0.1 legacy=192.168.50.20 alias=ok corp=10.50.0.10' }
+      retrySeconds: 30
+  - id: restore-conflict
+    title: Restore the backup
+    explain: |
+      Put the original configuration back from `~/coredns-backup.yaml`. A plain `kubectl replace -f` fails with `Conflict ... the object has been modified`. The backup holds the ConfigMap's old `resourceVersion`, and the API server refuses to overwrite a newer version with it. `kubectl apply -f` fails the same way.
+    command: kubectl replace -f ~/coredns-backup.yaml
+    match: '^kubectl\b(?=.*\b(replace|apply)\b)(?=.*coredns-backup\.yaml)'
+    allowFailure: true
+  - id: restore
+    title: Restore it with --force
+    explain: |
+      `kubectl replace --force` deletes the ConfigMap and creates it again from the file, so the old `resourceVersion` does not matter. Deleting the `resourceVersion:` line from a copy of the backup works too.
+
+      Then restart CoreDNS. This step turns green when the Corefile is the original again and CoreDNS uses it: `kubernetes.default.svc.custom-domain` no longer resolves.
+    command: |
+      kubectl replace --force -f ~/coredns-backup.yaml
+      kubectl -n kube-system rollout restart deployment coredns && kubectl -n kube-system rollout status deployment coredns
+    check:
+      id: restored
+      description: the Corefile is the original again, and custom-domain no longer resolves
+      type: kubectl
+      run: |
+        if kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -qE 'custom-domain|legacy-db|db\.company|corp\.example'; then echo "the ConfigMap still has a change"; exit 0; fi
+        a=$(kubectl exec dnstest -- nslookup kubernetes.default.svc.custom-domain 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}')
+        b=$(kubectl exec dnstest -- nslookup kubernetes.default.svc.cluster.local 2>/dev/null | grep -A1 '^Name:' | tail -1 | awk '{print $2}')
+        echo "custom-domain=${a:-none} kubernetes=${b:-none}"
+      expect: { equals: 'custom-domain=none kubernetes=10.96.0.1' }
+      retrySeconds: 90

@@ -165,6 +165,7 @@ The Learn section has step-by-step command drills, split into **CKA Labs** and *
 | --- | --- | --- |
 | CKA | Certificates | Inspect cluster certificates with openssl; renew the API server certificate; create a user with a CertificateSigningRequest |
 | CKA | etcd | Back up etcd with etcdctl; restore etcd from a snapshot |
+| CKA | Cluster | Customise CoreDNS: a second cluster domain, a static record, an alias for a Service, a stub domain, then restore the backup |
 | CKA | Jobs and CronJobs | Run work to completion and on a schedule; debug a CronJob that never succeeds |
 | CKA | Admission control | Quotas, LimitRanges, Pod Security, ValidatingAdmissionPolicies and webhooks; debug Pods refused at admission |
 | CKA | Debugging, layer by layer | CoreDNS, Gateway API HTTPRoute, Ingress, kubelet, NetworkPolicy, NotReady node |
