@@ -1,0 +1,84 @@
+id: pv-claimref-recovery
+title: Keep data when its claim goes away
+domain: storage
+difficulty: 3
+estimatedMinutes: 14
+points: 12
+tags: [ pv, pvc, claimref, retain, reclaim-policy ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ finance, accounts, treasury ] }
+  Q1_PV: { oneOf: [ ledger-pv, journal-pv, vault-pv ] }
+  Q1_PVC: { oneOf: [ ledger-data, journal-data, vault-data ] }
+  Q1_MARK: { random: 12 }
+  Q2_NS: { oneOf: [ retiring, sunset, decommission ] }
+  Q2_PVC: { oneOf: [ app-data, site-data, user-data ] }
+  Q2_MARK: { random: 12 }
+tasks:
+  - id: q1
+    title: Bring ${Q1_PV} back into use
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-bound
+        description: PVC ${Q1_PVC} is Bound to ${Q1_PV}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pvc ${Q1_PVC} -o jsonpath='{.status.phase}/{.spec.volumeName}'
+        expect: { equals: "Bound/${Q1_PV}" }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-data
+        description: Pod reader sees the data that was on the volume
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec reader -- cat /data/ledger.txt
+        expect: { equals: "${Q1_MARK}" }
+        weight: 3
+        retrySeconds: 60
+      - id: q1-pv
+        description: the PV was not recreated and still has the Retain policy
+        type: kubectl
+        run: >-
+          [ "$(kubectl get pv ${Q1_PV} -o jsonpath='{.metadata.uid}/{.spec.persistentVolumeReclaimPolicy}')" = "$(cat /var/tmp/cka-q1.pv)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - kubectl get pv ${Q1_PV}, then kubectl describe pvc ${Q1_PVC} once you have created it. What does the PV still remember?
+      - kubectl get pv ${Q1_PV} -o yaml. A Released volume stays tied to its old claim until that reference is removed.
+  - id: q2
+    title: Retire ${Q2_PVC} and keep its data
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q2-gone
+        description: PVC ${Q2_PVC} is gone
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pvc ${Q2_PVC} 2>&1 || true
+        expect: { contains: NotFound }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-pv
+        description: the PV survived as Released, with the Retain policy
+        type: kubectl
+        run: kubectl get pv "$(cat /var/tmp/cka-q2.pv)" -o jsonpath='{.status.phase}/{.spec.persistentVolumeReclaimPolicy}' 2>&1
+        expect: { equals: Released/Retain }
+        weight: 3
+        retrySeconds: 30
+      - id: q2-data
+        description: the data is still on worker-1
+        type: ssh
+        node: worker-1
+        run: grep -rqs "${Q2_MARK}" /opt/local-path-provisioner && echo kept || echo gone
+        expect: { equals: kept }
+        weight: 1
+    hints:
+      - kubectl get pv shows the RECLAIM POLICY of the volume behind the claim. What happens to it when the claim is deleted?
+      - The reclaim policy of a StorageClass is copied to each PV when it is created, and the PV's own field can be changed afterwards.

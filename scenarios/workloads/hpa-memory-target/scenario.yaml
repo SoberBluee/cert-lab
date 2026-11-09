@@ -1,0 +1,88 @@
+id: hpa-memory-target
+title: Autoscale on memory
+domain: workloads
+difficulty: 2
+estimatedMinutes: 12
+points: 12
+tags: [ hpa, autoscaling, metrics-server, memory-target ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ reports, analytics-ui, dashboards ] }
+  Q1_APP: { oneOf: [ report-api, chart-api, export-api ] }
+  Q2_NS: { oneOf: [ warehouse, lookup, reference ] }
+  Q2_APP: { oneOf: [ price-index, geo-index, search-index ] }
+tasks:
+  - id: q1
+    title: Autoscaler of ${Q1_APP} shows no memory use
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-active
+        description: the autoscaler reads current metrics (ScalingActive)
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.status.conditions[?(@.type=="ScalingActive")].status}'
+        expect: { equals: "True" }
+        weight: 3
+        retrySeconds: 180
+      - id: q1-reading
+        description: the autoscaler reports the current memory utilization
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.status.currentMetrics[?(@.resource.name=="memory")].resource.current.averageUtilization}'
+        expect: { matches: "^[0-9]+$" }
+        weight: 2
+        retrySeconds: 180
+      - id: q1-target
+        description: the autoscaler keeps its 70% memory target and its range of 1 to 4
+        type: kubectl
+        run: >-
+          kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.spec.metrics[?(@.resource.name=="memory")].resource.target.type}/{.spec.metrics[?(@.resource.name=="memory")].resource.target.averageUtilization}/{.spec.minReplicas}/{.spec.maxReplicas}'
+        expect: { equals: Utilization/70/1/4 }
+        weight: 1
+      - id: q1-same
+        description: the Deployment and the autoscaler were not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}') $(kubectl -n ${Q1_NS} get hpa ${Q1_APP} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} describe hpa ${Q1_APP}: read the conditions and the events, not just the TARGETS column."
+      - "Utilization is a percentage: of what? Compare with what kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml sets on the container."
+  - id: q2
+    title: Scale ${Q2_APP} on average memory
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q2-metric
+        description: the autoscaler targets an average of 50Mi of memory per Pod
+        type: kubectl
+        run: >-
+          kubectl -n ${Q2_NS} get hpa ${Q2_APP} -o jsonpath='{.spec.metrics[?(@.resource.name=="memory")].resource.target.type}/{.spec.metrics[?(@.resource.name=="memory")].resource.target.averageValue}'
+        expect: { equals: AverageValue/50Mi }
+        weight: 2
+      - id: q2-range
+        description: the autoscaler targets Deployment ${Q2_APP} between 1 and 3 replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get hpa ${Q2_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}'
+        expect: { equals: "Deployment/${Q2_APP}/1/3" }
+        weight: 1
+      - id: q2-scaled
+        description: the autoscaler brought ${Q2_APP} to 3 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}'
+        expect: { equals: 3 }
+        weight: 2
+        retrySeconds: 240
+    hints:
+      - kubectl -n ${Q2_NS} top pods confirms what the Pods hold. kubectl explain hpa.spec.metrics.resource.target shows the target types.
+      - "Write autoscaling/v2 YAML: a metrics entry of type Resource, resource name memory, target type AverageValue."
+      - kubectl -n ${Q2_NS} describe hpa ${Q2_APP} shows the current value and each scaling decision. It takes a minute or two to start.

@@ -1,0 +1,97 @@
+id: cluster-upgrade-past-pdb
+title: Upgrade the cluster past a disruption budget
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 30
+points: 12
+tags: [ kubeadm, upgrade, drain, poddisruptionbudget ]
+base: bare
+nodes: { controlPlane: 1, workers: 2 }
+settleSeconds: 60
+variables:
+  Q1_NS: { oneOf: [ payments, billing, settlements ] }
+  Q1_APP: { oneOf: [ ledger, invoicer, reconciler ] }
+  Q1_NODE: { node: workers }
+solution:
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 1500
+tasks:
+  - id: q1
+    title: Upgrade the control plane and ${Q1_NODE}
+    points: 12
+    tags: [ kubeadm, upgrade, drain ]
+    recipe: { builder: upgrade, parts: [] }
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 1200
+    checks:
+      - id: q1-control-plane
+        description: the API server, controller manager and scheduler run v1.37.1
+        type: kubectl
+        run: kubectl -n kube-system get pod kube-apiserver-controlplane kube-controller-manager-controlplane kube-scheduler-controlplane -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sed 's/.*://' | xargs
+        expect: { equals: v1.37.1 v1.37.1 v1.37.1 }
+        weight: 3
+        retrySeconds: 120
+      - id: q1-cp-kubelet
+        description: the kubelet on controlplane runs v1.37.1
+        type: kubectl
+        run: kubectl get node controlplane -o jsonpath='{.status.nodeInfo.kubeletVersion}'
+        expect: { equals: v1.37.1 }
+        weight: 1
+        retrySeconds: 120
+      - id: q1-cp-tools
+        description: kubeadm and kubectl on controlplane are v1.37.1
+        type: ssh
+        node: controlplane
+        run: echo "$(kubeadm version -o short) $(kubectl version --client -o json | jq -r .clientVersion.gitVersion)"
+        expect: { equals: v1.37.1 v1.37.1 }
+        weight: 1
+      - id: q1-worker-kubelet
+        description: the kubelet on ${Q1_NODE} runs v1.37.1
+        type: kubectl
+        run: kubectl get node ${Q1_NODE} -o jsonpath='{.status.nodeInfo.kubeletVersion}'
+        expect: { equals: v1.37.1 }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-worker-tools
+        description: kubeadm and kubectl on ${Q1_NODE} are v1.37.1
+        type: ssh
+        node: ${Q1_NODE}
+        run: echo "$(kubeadm version -o short) $(kubectl version --client -o json | jq -r .clientVersion.gitVersion)"
+        expect: { equals: v1.37.1 v1.37.1 }
+        weight: 1
+      - id: q1-drained
+        description: the ${Q1_APP} Pod that ran on ${Q1_NODE} before the upgrade was moved off it
+        type: kubectl
+        run: >-
+          [ -s /var/tmp/cka-q1.pod ] && uids="$(kubectl -n ${Q1_NS} get pods -o jsonpath='{.items[*].metadata.uid}')" && ! echo "$uids" | grep -qw -- "$(cat /var/tmp/cka-q1.pod)" && echo moved || echo still-there
+        expect: { equals: moved }
+        weight: 1
+      - id: q1-app
+        description: ${Q1_APP} runs 1 ready replica, and its PodDisruptionBudget was not changed or deleted
+        type: kubectl
+        run: >-
+          echo "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas}/{.status.readyReplicas}/{.status.replicas}')
+          $([ "$(kubectl -n ${Q1_NS} get pdb ${Q1_APP} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q1.pdb)" ] && echo same || echo replaced)/$(kubectl -n ${Q1_NS} get pdb ${Q1_APP} -o jsonpath='{.metadata.generation}')"
+        expect: { equals: 1/1/1 same/1 }
+        weight: 1
+        retrySeconds: 90
+      - id: q1-other-kept
+        description: the other worker still runs 1.36
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={.status.nodeInfo.kubeletVersion}{"\n"}{end}' | grep -v -e '^controlplane=' -e '^${Q1_NODE}='
+        expect: { matches: '^worker-[12]=v1\.36\.\d+$' }
+        weight: 1
+      - id: q1-nodes
+        description: every node is Ready and schedulable
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}/{.spec.unschedulable}{"\n"}{end}' | sort -u | xargs
+        expect: { matches: '^True/(false)?$' }
+        weight: 1
+        retrySeconds: 180
+    hints:
+      - "kubectl drain says why it keeps retrying. kubectl -n ${Q1_NS} get pdb shows ALLOWED DISRUPTIONS: with one replica and minAvailable 1, no Pod may be evicted."
+      - Make room inside the budget instead of changing it. With a second ${Q1_APP} Pod on another node, the drain may evict one. Scale back to 1 at the end.
+      - "apt-cache madison kubeadm lists the versions apt can install, and the packages are held: apt-mark unhold them first. On the controlplane the step is kubeadm upgrade apply; on a worker it is kubeadm upgrade node."

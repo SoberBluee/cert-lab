@@ -1,0 +1,76 @@
+id: manual-scheduling-binding
+title: Place Pods while the scheduler is stopped
+domain: workloads
+difficulty: 3
+estimatedMinutes: 12
+points: 11
+tags: [ scheduling, manual-scheduling, nodename, kube-scheduler, cordon ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ night-batch, hotfix, urgent ] }
+  Q1_POD: { oneOf: [ patch-runner, hotfix-job, urgent-task ] }
+  Q2_NS: { oneOf: [ disk-check, node-audit, hw-check ] }
+  Q2_POD: { oneOf: [ disk-probe, smart-reader, hw-probe ] }
+setup:
+  - node: controlplane
+    script: setup/stop-scheduler.sh
+    timeoutSeconds: 180
+tasks:
+  - id: q1
+    title: Start Pod ${Q1_POD} without a scheduler
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 120
+    checks:
+      - id: q1-running
+        description: Pod ${Q1_POD} runs on worker-2
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pod ${Q1_POD} -o jsonpath='{.status.phase}/{.spec.nodeName}'
+        expect: { equals: Running/worker-2 }
+        weight: 4
+        retrySeconds: 60
+      - id: q1-same
+        description: Pod ${Q1_POD} was not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get pod ${Q1_POD} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+      - id: q1-stopped
+        description: the scheduler is still stopped
+        type: kubectl
+        run: "[ -e /etc/kubernetes/manifests/kube-scheduler.yaml ] && echo started || echo stopped"
+        expect: { equals: stopped }
+        weight: 1
+    hints:
+      - "Try kubectl -n ${Q1_NS} patch pod ${Q1_POD} -p '{\"spec\":{\"nodeName\":\"worker-2\"}}' and read the refusal: spec.nodeName can only be set when a Pod is created."
+      - "Scheduling a Pod means writing a Binding object for it. kubectl api-resources | grep -i binding, then kubectl explain binding."
+  - id: q2
+    title: Run ${Q2_POD} on a cordoned node
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 60
+    checks:
+      - id: q2-running
+        description: Pod ${Q2_POD} runs on worker-1
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pod ${Q2_POD} -o jsonpath='{.status.phase}/{.spec.nodeName}/{.spec.containers[0].image}'
+        expect: { equals: Running/worker-1/nginx:1.27-alpine }
+        weight: 4
+        retrySeconds: 60
+      - id: q2-cordoned
+        description: worker-1 is still cordoned
+        type: kubectl
+        run: kubectl get node worker-1 -o jsonpath='{.spec.unschedulable}'
+        expect: { equals: "true" }
+        weight: 1
+    hints:
+      - "Cordoning marks a node for the scheduler. What happens to a Pod that never goes through the scheduler?"
+      - kubectl explain pod.spec.nodeName

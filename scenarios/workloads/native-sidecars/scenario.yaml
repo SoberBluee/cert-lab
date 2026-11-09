@@ -1,0 +1,91 @@
+id: native-sidecars
+title: Native sidecars for Jobs and startup order
+domain: workloads
+difficulty: 3
+estimatedMinutes: 14
+points: 14
+tags: [ sidecar, native-sidecar, init-container, startup-probe ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ etl, exports, nightly ] }
+  Q1_JOB: { oneOf: [ export-run, sync-run, load-run ] }
+  Q2_NS: { oneOf: [ mesh-apps, gateway-apps, proxied ] }
+  Q2_APP: { oneOf: [ quotes, ratings, reviews ] }
+tasks:
+  - id: q1
+    title: Job ${Q1_JOB} never finishes
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q1-complete
+        description: Job ${Q1_JOB} completed
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get job ${Q1_JOB} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}'
+        expect: { equals: "True" }
+        weight: 4
+        retrySeconds: 150
+      - id: q1-sidecar
+        description: shipper runs as a native sidecar
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get job ${Q1_JOB} -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="shipper")].restartPolicy}'
+        expect: { equals: Always }
+        weight: 2
+      - id: q1-commands
+        description: both containers keep their commands
+        type: kubectl
+        run: >-
+          kubectl -n ${Q1_NS} get job ${Q1_JOB} -o jsonpath='{.spec.template.spec.containers[?(@.name=="main")].command[2]}|{.spec.template.spec.initContainers[?(@.name=="shipper")].command[*]}'
+        expect: { equals: "echo processing; sleep 5; echo finished|sleep infinity" }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get pods shows 1/2: one container finished. A Job is complete when its Pod is, and a Pod does not finish while any of its containers runs."
+      - kubectl explain pod.spec.initContainers.restartPolicy
+      - A Job's Pod template cannot be changed in place. kubectl -n ${Q1_NS} get job ${Q1_JOB} -o yaml gives you a start for the new one; remove the generated labels and selector.
+  - id: q2
+    title: ${Q2_APP} restarts on every rollout
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q2-ready
+        description: ${Q2_APP} has 1 ready, updated replica
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 1/1/1 }
+        weight: 1
+        retrySeconds: 90
+      - id: q2-restarts
+        description: container app of the current Pod has not restarted
+        type: kubectl
+        run: >-
+          kubectl -n ${Q2_NS} get pods -l app=${Q2_APP} -o json | jq -r
+          '[.items[] | select(.metadata.deletionTimestamp == null) | .status.containerStatuses[]? | select(.name == "app") | .restartCount] | if length == 0 then "none" else add end'
+        expect: { equals: "0" }
+        weight: 3
+        retrySeconds: 60
+      - id: q2-gate
+        description: proxy is a native sidecar with a startup probe
+        type: kubectl
+        run: >-
+          kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o json | jq -r
+          '.spec.template.spec.initContainers[]? | select(.name == "proxy") | "\(.restartPolicy) \(.startupProbe != null)"'
+        expect: { equals: Always true }
+        weight: 2
+      - id: q2-kept
+        description: ${Q2_APP} is the same Deployment, with the same app command
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid} {.spec.template.spec.containers[?(@.name=="app")].command[2]}')" = "$(cat /var/tmp/cka-q2.uid)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} logs deployment/${Q2_APP} -c app --previous shows why it exits. Regular containers all start at once."
+      - "A native sidecar starts before the main containers, and they wait for its startup probe to pass, if it has one."

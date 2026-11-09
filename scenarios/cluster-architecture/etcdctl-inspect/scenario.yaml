@@ -1,0 +1,71 @@
+id: etcdctl-inspect
+title: Look inside etcd with etcdctl
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 10
+points: 10
+tags: [ etcd, etcdctl ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 10
+variables:
+  Q2_NS: { oneOf: [ partner-keys, tenant-keys, gateway-keys ] }
+  Q2_SECRET: { oneOf: [ gateway-key, billing-key, partner-key ] }
+  Q2_VALUE: { random: 16 }
+tasks:
+  - id: q1
+    title: Read etcd's own facts
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 60
+    checks:
+      - id: q1-member
+        description: member-id.txt holds the ID of this etcd member
+        type: kubectl
+        run: >-
+          [ "$(cat /opt/course/etcd/member-id.txt)" = "$(etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key member list | cut -d, -f1)" ] && echo same || echo different
+        expect: { equals: same }
+        weight: 2
+      - id: q1-version
+        description: version.txt holds the version the etcd server runs
+        type: kubectl
+        run: >-
+          [ "$(cat /opt/course/etcd/version.txt)" = "$(etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key endpoint status | cut -d, -f3 | tr -d ' ')" ] && echo same || echo different
+        expect: { equals: same }
+        weight: 1
+      - id: q1-namespaces
+        description: namespace-keys.txt holds the number of Namespace keys
+        type: kubectl
+        run: >-
+          [ "$(cat /opt/course/etcd/namespace-keys.txt)" = "$(etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key get /registry/namespaces --prefix --keys-only | grep -c registry)" ] && echo same || echo different
+        expect: { equals: same }
+        weight: 2
+    hints:
+      - "sudo grep -E 'cert|key|listen-client' /etc/kubernetes/manifests/etcd.yaml shows the endpoint and the files etcdctl needs. Without them it just times out."
+      - etcdctl --help lists member list and endpoint status. Kubernetes keeps its objects under /registry.
+  - id: q2
+    title: Find Secret ${Q2_SECRET} in etcd
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 60
+    checks:
+      - id: q2-key
+        description: secret-key.txt holds the etcd key of the Secret
+        type: kubectl
+        run: cat /opt/course/etcd/secret-key.txt
+        expect: { equals: "/registry/secrets/${Q2_NS}/${Q2_SECRET}" }
+        weight: 3
+      - id: q2-storage
+        description: secret-storage.txt says how the value is stored
+        type: kubectl
+        run: cat /opt/course/etcd/secret-storage.txt
+        expect: { equals: plain }
+        weight: 2
+    hints:
+      - etcdctl get <prefix> --prefix --keys-only lists keys without their values.
+      - "Values are binary, so use grep -a to search them. Compare with kubectl -n ${Q2_NS} get secret ${Q2_SECRET} -o jsonpath='{.data.apikey}' | base64 -d."

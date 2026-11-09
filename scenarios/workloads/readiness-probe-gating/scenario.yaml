@@ -1,0 +1,106 @@
+id: readiness-probe-gating
+title: Readiness probes decide who gets traffic
+domain: workloads
+difficulty: 2
+estimatedMinutes: 12
+points: 15
+tags: [ readinessprobe, probes, endpoints ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ orders, invoices, payments ] }
+  Q1_APP: { oneOf: [ order-api, invoice-api, payment-api ] }
+  Q2_NS: { oneOf: [ frontend, web-tier, public ] }
+  Q2_APP: { oneOf: [ landing, storefront, homepage ] }
+tasks:
+  - id: q1
+    title: Pods of ${Q1_APP} never become ready
+    points: 9
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-ready
+        description: ${Q1_APP} has 2 ready, updated replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 3
+        retrySeconds: 90
+      - id: q1-answers
+        description: Service ${Q1_APP} answers HTTP 200 on port 80
+        type: kubectl
+        run: >-
+          curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q1_NS} get service ${Q1_APP} -o jsonpath='{.spec.clusterIP}'):80/ready"
+        expect: { equals: "200" }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-probe
+        description: the readiness probe is still an HTTP GET of /ready
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}'
+        expect: { equals: /ready }
+        weight: 1
+      - id: q1-config
+        description: the nginx configuration is unchanged
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get configmap ${Q1_APP}-nginx -o jsonpath='{.data.default\.conf}' | sha256sum)" = "$(cat /var/tmp/cka-q1.conf)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+      - id: q1-same
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} describe pod <pod>: the Events say exactly what the probe tried and what came back."
+      - "Compare three numbers: the port the probe uses, the port the container declares, and the port in the nginx configuration (kubectl -n ${Q1_NS} get configmap ${Q1_APP}-nginx -o yaml)."
+  - id: q2
+    title: Take one Pod of ${Q2_APP} out of rotation
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q2-probe
+        description: the readiness probe runs test ! -e /tmp/drain
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.exec.command[*]}'
+        expect: { contains: test ! -e /tmp/drain }
+        weight: 1
+      - id: q2-timing
+        description: the probe runs every 2 seconds and one failure is enough
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.periodSeconds}/{.spec.template.spec.containers[0].readinessProbe.failureThreshold}'
+        expect: { equals: 2/1 }
+        weight: 1
+      - id: q2-one-out
+        description: exactly one of the 2 replicas is ready
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.replicas}'
+        expect: { equals: 1/2 }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-slice
+        description: the Service keeps one ready endpoint and one not ready
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get endpointslices -l kubernetes.io/service-name=${Q2_APP} -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\n"}{end}' | sort | xargs
+        expect: { equals: false true }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-restarts
+        description: no container of ${Q2_APP} restarted
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get pods -l app=${Q2_APP} -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}' | sort -u | xargs
+        expect: { equals: "0" }
+        weight: 1
+    hints:
+      - kubectl explain deployment.spec.template.spec.containers.readinessProbe lists exec, periodSeconds and failureThreshold.
+      - "A failing readiness probe never restarts a container: only a liveness probe does. kubectl -n ${Q2_NS} exec <pod> -- touch /tmp/drain changes that one Pod and nothing else."

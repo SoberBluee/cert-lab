@@ -1,0 +1,117 @@
+id: security-capabilities
+title: Give containers only the capabilities they need
+domain: workloads
+difficulty: 3
+estimatedMinutes: 16
+points: 18
+tags: [ security-context, capabilities, pod, init-container ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ vpn-edge, tunnels, overlay ] }
+  Q1_APP: { oneOf: [ wg-agent, tunnel-agent, route-agent ] }
+  Q2_NS: { oneOf: [ hardened, restricted-web, locked-down ] }
+  Q2_APP: { oneOf: [ static-site, brochure, help-pages ] }
+tasks:
+  - id: q1
+    title: Init container of ${Q1_APP} fails
+    points: 10
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-ready
+        description: ${Q1_APP} has 2 ready, updated replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 3
+        retrySeconds: 90
+      - id: q1-init-caps
+        description: net-setup drops ALL and adds back only NET_ADMIN
+        type: kubectl
+        run: >-
+          kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="net-setup")].securityContext.capabilities.drop[*]}/{.spec.template.spec.initContainers[?(@.name=="net-setup")].securityContext.capabilities.add[*]}'
+        expect: { matches: "^ALL/(CAP_)?NET_ADMIN$" }
+        weight: 3
+      - id: q1-app-caps
+        description: app still drops ALL and adds nothing back
+        type: kubectl
+        run: >-
+          kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].securityContext.capabilities.drop[*]}/{.spec.template.spec.containers[?(@.name=="app")].securityContext.capabilities.add[*]}'
+        expect: { equals: ALL/ }
+        weight: 1
+      - id: q1-privileged
+        description: no container runs privileged
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o json | jq -r '[.spec.template.spec.initContainers[], .spec.template.spec.containers[] | .securityContext.privileged == true] | any'
+        expect: { equals: "false" }
+        weight: 1
+      - id: q1-address
+        description: the Pods have 10.99.0.1 on their loopback interface
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec deployment/${Q1_APP} -c app -- ip -4 addr show lo
+        expect: { contains: 10.99.0.1 }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-same
+        description: ${Q1_APP} is the same Deployment, with its command and replica count
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid} {.spec.replicas} {.spec.template.spec.initContainers[0].command[2]}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - kubectl -n ${Q1_NS} logs <pod> -c net-setup shows what the init container tried and what it was refused. man 7 capabilities groups network configuration under one capability.
+      - securityContext.capabilities belongs to a container, not to the Pod, and each container has its own.
+  - id: q2
+    title: ${Q2_APP} stopped working after hardening
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q2-ready
+        description: ${Q2_APP} has 1 ready replica
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 1/1/1 }
+        weight: 3
+        retrySeconds: 90
+      - id: q2-answers
+        description: Service ${Q2_APP} returns the nginx page
+        type: kubectl
+        run: >-
+          curl -s -m 5 "http://$(kubectl -n ${Q2_NS} get service ${Q2_APP} -o jsonpath='{.spec.clusterIP}'):80/"
+        expect: { contains: Welcome to nginx }
+        weight: 1
+        retrySeconds: 30
+      - id: q2-drop
+        description: the container still drops ALL and is not privileged
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].securityContext.capabilities.drop[*]}/{.spec.template.spec.containers[0].securityContext.privileged}'
+        expect: { matches: "^ALL/(false)?$" }
+        weight: 1
+      - id: q2-minimal
+        description: it adds back exactly what nginx asked for in its logs
+        type: kubectl
+        run: >-
+          kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o json | jq -r
+          '.spec.template.spec.containers[0].securityContext.capabilities.add // [] | map(sub("^CAP_"; "")) | sort | join(",")'
+        expect: { equals: "CHOWN,SETGID,SETUID" }
+        weight: 2
+      - id: q2-same
+        description: ${Q2_APP} is the same Deployment, with its image
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid} {.spec.template.spec.containers[0].image}')" = "$(cat /var/tmp/cka-q2.uid)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - kubectl -n ${Q2_NS} logs deployment/${Q2_APP}. Each "Operation not permitted" names the system call that was refused.
+      - "Work one failure at a time: add the capability for the first error, let the rollout finish, then read the logs of the new Pod. Capabilities are named after what they allow, so chown() needs CHOWN."
+      - A Pod can be Running with no working nginx workers. Read past the first lines of the log.

@@ -1,0 +1,87 @@
+id: api-resources-discovery
+title: Find your way around with api-resources
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 10
+points: 10
+tags: [ api-resources, kubectl-explain, crd ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 10
+variables:
+  Q1_KIND: { oneOf: [ Gadget, Sprocket, Widget ] }
+  Q1_GROUP: { oneOf: [ fleet.acme.example, vendor.acme.example, tools.acme.example ] }
+  Q1_SHORT: { oneOf: [ acg, acs, acw ] }
+  Q1_NAMESPACED: { oneOf: [ "true", "false" ] }
+  Q2_NS: { oneOf: [ audit-red, audit-blue, audit-green ] }
+  Q2_FLAG: { oneOf: [ flagged, review, legacy ] }
+tasks:
+  - id: q1
+    title: Read the API of a vendor CRD
+    points: 5
+    tags: [ api-resources, crd ]
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 120
+    checks:
+      - id: q1-short
+        description: line 1 of vendor.txt is the short name
+        type: kubectl
+        run: sed -n 1p /opt/course/api-resources/vendor.txt
+        expect: { equals: "${Q1_SHORT}" }
+        weight: 1
+      - id: q1-group
+        description: line 2 of vendor.txt is the API group
+        type: kubectl
+        run: sed -n 2p /opt/course/api-resources/vendor.txt
+        expect: { equals: "${Q1_GROUP}" }
+        weight: 1
+      - id: q1-scope
+        description: line 3 of vendor.txt says whether it is namespaced
+        type: kubectl
+        run: sed -n 3p /opt/course/api-resources/vendor.txt
+        expect: { equals: "${Q1_NAMESPACED}" }
+        weight: 1
+      - id: q1-networking
+        description: networking.txt lists the resource types of networking.k8s.io
+        type: kubectl
+        run: >-
+          [ "$(sort /opt/course/api-resources/networking.txt | xargs)" = "$(kubectl api-resources --api-group=networking.k8s.io -o name | sed 's/\..*//' | sort | xargs)" ] && echo same || echo different
+        expect: { equals: same }
+        weight: 2
+    hints:
+      - kubectl api-resources prints SHORTNAMES, APIVERSION, NAMESPACED and KIND for every resource type. Filter by kind with grep -i.
+      - kubectl api-resources --help shows --api-group and --namespaced, and -o name prints only the names.
+  - id: q2
+    title: Find everything flagged in ${Q2_NS}
+    points: 5
+    tags: [ api-resources ]
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 120
+    checks:
+      - id: q2-list
+        description: flagged.txt lists exactly the flagged objects
+        type: kubectl
+        run: >-
+          [ "$(sort /opt/course/api-resources/flagged.txt | xargs)" = "$(sort /var/tmp/cka-q2.flagged | xargs)" ] && echo same || echo different
+        expect: { equals: same }
+        weight: 3
+      - id: q2-rbac
+        description: flagged.txt includes the RBAC objects
+        type: kubectl
+        run: grep -c 'rbac.authorization.k8s.io/' /opt/course/api-resources/flagged.txt
+        expect: { equals: 2 }
+        weight: 1
+      - id: q2-custom
+        description: flagged.txt includes the custom resource
+        type: kubectl
+        run: cat /opt/course/api-resources/flagged.txt
+        expect: { contains: auditnote.records.acme.example/ }
+        weight: 1
+    hints:
+      - "kubectl get all is a short list of common types: it leaves out ConfigMaps, RBAC, NetworkPolicies and custom resources."
+      - "kubectl api-resources --namespaced --verbs=list -o name gives every type you can ask for. Loop over it with kubectl get -l and -o name."

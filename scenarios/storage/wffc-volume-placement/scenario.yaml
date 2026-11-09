@@ -1,0 +1,91 @@
+id: wffc-volume-placement
+title: Volumes that wait for their first consumer
+domain: storage
+difficulty: 2
+estimatedMinutes: 12
+points: 11
+tags: [ storageclass, pvc, waitforfirstconsumer, local-path ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ media, uploads, imaging ] }
+  Q1_SC: { oneOf: [ node-local, wait-local, local-late ] }
+  Q1_PVC: { oneOf: [ media-data, upload-data, image-data ] }
+  Q1_POD: { oneOf: [ transcoder, thumbnailer, resizer ] }
+  Q2_NS: { oneOf: [ notes, journal, diary ] }
+  Q2_APP: { oneOf: [ notes-api, journal-api, diary-api ] }
+  Q2_MARK: { random: 12 }
+tasks:
+  - id: q1
+    title: Provision a volume where ${Q1_POD} runs
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q1-class
+        description: StorageClass ${Q1_SC} has the right provisioner, binding mode and reclaim policy
+        type: kubectl
+        run: kubectl get storageclass ${Q1_SC} -o jsonpath='{.provisioner} {.volumeBindingMode} {.reclaimPolicy}'
+        expect: { equals: rancher.io/local-path WaitForFirstConsumer Delete }
+        weight: 1
+      - id: q1-pod
+        description: Pod ${Q1_POD} runs on worker-2
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pod ${Q1_POD} -o jsonpath='{.status.phase}/{.spec.nodeName}'
+        expect: { equals: Running/worker-2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-bound
+        description: PVC ${Q1_PVC} is Bound and uses ${Q1_SC}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pvc ${Q1_PVC} -o jsonpath='{.status.phase}/{.spec.storageClassName}'
+        expect: { equals: "Bound/${Q1_SC}" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-node
+        description: the volume was provisioned on worker-2, where the Pod runs
+        type: kubectl
+        run: >-
+          kubectl get pv "$(kubectl -n ${Q1_NS} get pvc ${Q1_PVC} -o jsonpath='{.spec.volumeName}')" -o jsonpath='{.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]}' 2>&1
+        expect: { equals: worker-2 }
+        weight: 2
+        retrySeconds: 60
+    hints:
+      - kubectl explain storageclass.volumeBindingMode
+      - "A claim of a WaitForFirstConsumer class stays Pending until a Pod uses it: kubectl -n ${Q1_NS} describe pvc ${Q1_PVC} says so. That is not a fault."
+  - id: q2
+    title: Pod of ${Q2_APP} stays Pending
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q2-ready
+        description: ${Q2_APP} has 1 ready replica
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 1/1/1 }
+        weight: 3
+        retrySeconds: 90
+      - id: q2-data
+        description: ${Q2_APP} reads the existing data
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec deployment/${Q2_APP} -- cat /data/note.txt 2>&1
+        expect: { equals: "${Q2_MARK}" }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-same
+        description: PVC ${Q2_APP}-data was not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q2_NS} get pvc ${Q2_APP}-data -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q2.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} describe pod <pending-pod>: which part of the scheduler's message is about storage?"
+      - kubectl get pv -o yaml shows spec.nodeAffinity. A local volume lives on one node, whatever the Pod asks for.

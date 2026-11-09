@@ -1,0 +1,87 @@
+id: rollout-surge-limits
+title: Rollouts that hit their limits
+domain: workloads
+difficulty: 2
+estimatedMinutes: 12
+points: 14
+tags: [ deployment, rollout, strategy, surge, resourcequota, rollback ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ catalog-tier, pricing-tier, stock-tier ] }
+  Q1_APP: { oneOf: [ catalog-web, pricing-web, stock-web ] }
+  Q2_NS: { oneOf: [ canary-lab, release-lab, rollout-lab ] }
+  Q2_APP: { oneOf: [ banner, teaser, promo ] }
+tasks:
+  - id: q1
+    title: Rollout of ${Q1_APP} is stuck
+    points: 7
+    tags: [ deployment, rollout, resourcequota ]
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q1-rolled
+        description: all 3 replicas of ${Q1_APP} run nginx:1.28-alpine and are ready
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.updatedReplicas}/{.status.readyReplicas}/{.status.replicas}/{.spec.template.spec.containers[0].image}'
+        expect: { equals: 3/3/3/nginx:1.28-alpine }
+        weight: 5
+        retrySeconds: 120
+      - id: q1-quota
+        description: the ResourceQuota was not changed
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get resourcequota pods -o jsonpath='{.metadata.uid}/{.spec.hard.pods}')" = "$(cat /var/tmp/cka-q1.quota)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+      - id: q1-same
+        description: ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} describe replicaset <newest>: why did it not create a Pod?"
+      - kubectl explain deployment.spec.strategy.rollingUpdate. How many Pods does this strategy need at once, and how many does the namespace allow?
+  - id: q2
+    title: Catch a failed rollout of ${Q2_APP}
+    points: 7
+    tags: [ deployment, rollout, rollback ]
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 180
+    checks:
+      - id: q2-spec
+        description: the progress deadline is 20 seconds and minReadySeconds is 3
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.progressDeadlineSeconds}/{.spec.minReadySeconds}'
+        expect: { equals: 20/3 }
+        weight: 1
+      - id: q2-reason
+        description: reason.txt holds the reason of the Progressing condition
+        type: kubectl
+        run: cat /opt/course/rollout/reason.txt
+        expect: { equals: ProgressDeadlineExceeded }
+        weight: 3
+      - id: q2-back
+        description: ${Q2_APP} is back on nginx:1.27-alpine with 2 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].image}/{.status.readyReplicas}/{.status.replicas}'
+        expect: { equals: nginx:1.27-alpine/2/2 }
+        weight: 1
+        retrySeconds: 60
+      - id: q2-revision
+        description: the rollback went through the rollout history
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}'
+        expect: { gte: 3 }
+        weight: 2
+    hints:
+      - kubectl explain deployment.spec.progressDeadlineSeconds. kubectl rollout status returns an error when it passes.
+      - kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.conditions}' lists the conditions with their reasons.

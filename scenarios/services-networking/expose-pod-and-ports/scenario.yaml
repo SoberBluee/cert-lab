@@ -1,0 +1,85 @@
+id: expose-pod-and-ports
+title: Expose a bare Pod and a two-port Deployment
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 10
+points: 9
+tags: [ service, expose, nodeport, named-port ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ legacy, one-off, handmade ] }
+  Q1_POD: { oneOf: [ status-page, report-viewer, docs-preview ] }
+  Q1_PORT: { oneOf: [ 8080, 8888, 9000 ] }
+  Q2_NS: { oneOf: [ storefront, billing-ui, portal ] }
+  Q2_APP: { oneOf: [ catalog, checkout, accounts ] }
+  Q2_NODEPORT: { oneOf: [ 30180, 30280, 30380 ] }
+tasks:
+  - id: q1
+    title: Expose Pod ${Q1_POD}
+    points: 4
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q1-service
+        description: Service ${Q1_POD} is a ClusterIP mapping port ${Q1_PORT} to 80
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get service ${Q1_POD} -o jsonpath='{.spec.type}/{.spec.ports[0].port}/{.spec.ports[0].targetPort}'
+        expect: { equals: "ClusterIP/${Q1_PORT}/80" }
+        weight: 1
+      - id: q1-reachable
+        description: Service ${Q1_POD} answers HTTP 200 on port ${Q1_PORT}
+        type: kubectl
+        run: >-
+          curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$(kubectl -n ${Q1_NS} get service ${Q1_POD} -o jsonpath='{.spec.clusterIP}'):${Q1_PORT}/"
+        expect: { equals: 200 }
+        weight: 2
+        retrySeconds: 30
+      - id: q1-same
+        description: Pod ${Q1_POD} was not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get pod ${Q1_POD} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "Try kubectl -n ${Q1_NS} expose pod ${Q1_POD} --port=${Q1_PORT} --target-port=80 and read the error: what does a Service need that this Pod cannot give it?"
+      - kubectl -n ${Q1_NS} get pod ${Q1_POD} --show-labels. Labels can be added to a running Pod.
+  - id: q2
+    title: Expose both ports of ${Q2_APP}
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q2-spec
+        description: Service ${Q2_APP} is a NodePort with ports web and metrics, targeting the container ports by name
+        type: kubectl
+        run: >-
+          kubectl -n ${Q2_NS} get service ${Q2_APP} -o jsonpath='{.spec.type} {.spec.ports[?(@.name=="web")].port}/{.spec.ports[?(@.name=="web")].targetPort}/{.spec.ports[?(@.name=="web")].nodePort} {.spec.ports[?(@.name=="metrics")].port}/{.spec.ports[?(@.name=="metrics")].targetPort}'
+        expect: { equals: "NodePort 80/http/${Q2_NODEPORT} 9100/metrics" }
+        weight: 2
+      - id: q2-app
+        description: NodePort ${Q2_NODEPORT} returns the app's answer
+        type: kubectl
+        run: curl -s -m 5 http://controlplane:${Q2_NODEPORT}/
+        expect: { equals: app ok }
+        weight: 2
+        retrySeconds: 30
+      - id: q2-metrics
+        description: port 9100 of the Service returns the metrics answer
+        type: kubectl
+        run: >-
+          curl -s -m 5 "http://$(kubectl -n ${Q2_NS} get service ${Q2_APP} -o jsonpath='{.spec.clusterIP}'):9100/"
+        expect: { equals: metrics ok }
+        weight: 1
+        retrySeconds: 30
+    hints:
+      - kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.containers[0].ports}' shows the names and numbers of the container ports.
+      - "A Service with several ports must name each one. kubectl explain service.spec.ports shows that targetPort accepts a name, and that nodePort can be set."
+      - kubectl expose writes a Service you can edit first, with --dry-run=client -o yaml.

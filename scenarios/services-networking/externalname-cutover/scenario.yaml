@@ -1,0 +1,78 @@
+id: externalname-cutover
+title: Point Services at other namespaces with ExternalName
+domain: services-networking
+difficulty: 2
+estimatedMinutes: 10
+points: 12
+tags: [ service, externalname, dns ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ orders-app, billing-app, crm-app ] }
+  Q1_DB: { oneOf: [ orders-db, billing-db, crm-db ] }
+  Q2_NS: { oneOf: [ reporting, analytics, insights ] }
+  Q2_SVC: { oneOf: [ legacy-api, old-api, api-v1 ] }
+tasks:
+  - id: q1
+    title: Give ${Q1_DB} a local name
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q1-type
+        description: Service database is an ExternalName for the database Service
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get service database -o jsonpath='{.spec.type} {.spec.externalName}'
+        expect: { matches: "^ExternalName ${Q1_DB}\\.data-tier\\.svc\\.cluster\\.local\\.?$" }
+        weight: 2
+      - id: q1-reachable
+        description: Pod client reaches the database through the name database
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- wget -qO- -T 5 http://database/ 2>&1
+        expect: { contains: Welcome to nginx }
+        weight: 3
+        retrySeconds: 30
+    hints:
+      - kubectl create service externalname --help
+      - "An ExternalName Service is a DNS CNAME, so it needs a name that resolves from anywhere: the full form is <service>.<namespace>.svc.cluster.local."
+  - id: q2
+    title: Cut ${Q2_SVC} over to api-v2
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q2-type
+        description: Service ${Q2_SVC} is an ExternalName for api-v2
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get service ${Q2_SVC} -o jsonpath='{.spec.type} {.spec.externalName}'
+        expect: { matches: "^ExternalName api-v2\\.platform\\.svc\\.cluster\\.local\\.?$" }
+        weight: 2
+      - id: q2-reachable
+        description: Pod client gets the answer of api-v2 through ${Q2_SVC}
+        type: kubectl
+        run: kubectl -n ${Q2_NS} exec client -- wget -qO- -T 5 http://${Q2_SVC}/ 2>&1
+        expect: { equals: api v2 }
+        weight: 3
+        retrySeconds: 30
+      - id: q2-same
+        description: Service ${Q2_SVC} was not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q2_NS} get service ${Q2_SVC} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q2.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+      - id: q2-old-gone
+        description: the old Deployment ${Q2_SVC} is gone
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_SVC} 2>&1 || true
+        expect: { contains: NotFound }
+        weight: 1
+    hints:
+      - kubectl explain service.spec.type and service.spec.externalName. A Service can change type in place.
+      - kubectl -n ${Q2_NS} get service ${Q2_SVC} -o yaml afterwards shows what the API server did with the cluster IP.

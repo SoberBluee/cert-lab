@@ -1,0 +1,78 @@
+id: cronjob-forbid-suspend
+title: CronJobs that stall, pause and run on demand
+domain: workloads
+difficulty: 2
+estimatedMinutes: 12
+points: 12
+tags: [ cronjob, job, suspend, run-now, concurrencypolicy ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ invoicing, mailing, reminders ] }
+  Q1_CJ: { oneOf: [ invoice-run, mail-run, reminder-run ] }
+  Q2_NS: { oneOf: [ backups, snapshots, dumps ] }
+  Q2_CJ: { oneOf: [ nightly-dump, nightly-sync, nightly-copy ] }
+tasks:
+  - id: q1
+    title: CronJob ${Q1_CJ} stopped running
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 240
+    checks:
+      - id: q1-success
+        description: a run of ${Q1_CJ} has succeeded
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get cronjob ${Q1_CJ} -o jsonpath='{.status.lastSuccessfulTime}'
+        expect: { notEmpty: true }
+        weight: 4
+        retrySeconds: 180
+      - id: q1-deadline
+        description: every run is stopped after 45 seconds
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get cronjob ${Q1_CJ} -o jsonpath='{.spec.jobTemplate.spec.activeDeadlineSeconds}'
+        expect: { equals: 45 }
+        weight: 2
+      - id: q1-kept
+        description: it is the same CronJob, with its schedule and concurrency policy
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get cronjob ${Q1_CJ} -o jsonpath='{.metadata.uid}|{.spec.schedule}|{.spec.concurrencyPolicy}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get cronjob ${Q1_CJ} -o yaml: compare spec.concurrencyPolicy with status.active. Then kubectl -n ${Q1_NS} get jobs,pods."
+      - kubectl explain cronjob.spec.jobTemplate.spec.activeDeadlineSeconds. Changing the template only affects new runs.
+  - id: q2
+    title: Pause ${Q2_CJ} and run it once
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 120
+    checks:
+      - id: q2-suspended
+        description: CronJob ${Q2_CJ} is suspended
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get cronjob ${Q2_CJ} -o jsonpath='{.spec.suspend}'
+        expect: { equals: "true" }
+        weight: 2
+      - id: q2-manual
+        description: Job ${Q2_CJ}-manual completed
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get job ${Q2_CJ}-manual -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}'
+        expect: { equals: "True" }
+        weight: 2
+        retrySeconds: 60
+      - id: q2-from
+        description: the Job was created from the CronJob
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get job ${Q2_CJ}-manual -o jsonpath='{.metadata.annotations.cronjob\.kubernetes\.io/instantiate}'
+        expect: { equals: manual }
+        weight: 1
+    hints:
+      - kubectl explain cronjob.spec.suspend
+      - kubectl create job --help shows how to start a Job from a CronJob.

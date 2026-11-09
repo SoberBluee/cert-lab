@@ -1,0 +1,74 @@
+id: headless-peer-discovery
+title: Headless Services and peer discovery
+domain: services-networking
+difficulty: 3
+estimatedMinutes: 12
+points: 11
+tags: [ service, headless, statefulset, dns ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ search-tier, cache-ring, index-tier ] }
+  Q1_APP: { oneOf: [ shard, ringnode, indexer ] }
+  Q2_NS: { oneOf: [ quorum, gossip, consensus ] }
+  Q2_APP: { oneOf: [ member, replica, voter ] }
+tasks:
+  - id: q1
+    title: Return every Pod of ${Q1_APP} from DNS
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-headless
+        description: Service ${Q1_APP} is headless and keeps port 80
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get service ${Q1_APP} -o jsonpath='{.spec.clusterIP}/{.spec.ports[0].port}'
+        expect: { equals: None/80 }
+        weight: 2
+      - id: q1-dns
+        description: a DNS lookup of the Service returns both Pods
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec client -- nslookup ${Q1_APP}.${Q1_NS}.svc.cluster.local 2>/dev/null | grep '^Address' | grep -v ':53' | sort -u | wc -l
+        expect: { equals: 2 }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-same
+        description: StatefulSet ${Q1_APP} was not deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get statefulset ${Q1_APP} -o jsonpath='{.metadata.uid}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo recreated
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - kubectl -n ${Q1_NS} exec client -- nslookup ${Q1_APP}.${Q1_NS}.svc.cluster.local shows what clients get today.
+      - "Try the obvious patch and read the error: which field of a Service can never change once it is set?"
+  - id: q2
+    title: Members of ${Q2_APP} never become ready
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q2-ready
+        description: StatefulSet ${Q2_APP} has 2 ready Pods
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get statefulset ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.spec.replicas}'
+        expect: { equals: 2/2 }
+        weight: 4
+        retrySeconds: 90
+      - id: q2-same
+        description: the StatefulSet was not changed, deleted or recreated
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q2_NS} get statefulset ${Q2_APP} -o jsonpath='{.metadata.uid}/{.metadata.generation}')" = "$(cat /var/tmp/cka-q2.uid)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} describe pod ${Q2_APP}-0: read what the readiness probe runs, then run it yourself with kubectl exec."
+      - "When does a Pod's name appear in DNS? kubectl -n ${Q2_NS} get endpointslices -o yaml shows what is published, and each endpoint's ready condition."
+      - kubectl explain service.spec lists a field for Services whose Pods must find each other before they are ready.

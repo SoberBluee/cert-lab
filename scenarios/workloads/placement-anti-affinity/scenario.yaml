@@ -1,0 +1,104 @@
+id: placement-anti-affinity
+title: Keep replicas apart with pod anti-affinity
+domain: workloads
+difficulty: 2
+estimatedMinutes: 14
+points: 12
+tags: [ scheduling, affinity, anti-affinity ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ cache-tier, session-store, state-tier ] }
+  Q1_APP: { oneOf: [ token-cache, session-cache, quote-cache ] }
+  Q2_NS: { oneOf: [ edge-tier, front-tier, proxy-tier ] }
+  Q2_APP: { oneOf: [ edge-proxy, web-front, api-proxy ] }
+tasks:
+  - id: q1
+    title: Separate the replicas of ${Q1_APP}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-ready
+        description: ${Q1_APP} has 2 ready, updated replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 2/2/2 }
+        weight: 1
+        retrySeconds: 90
+      - id: q1-apart
+        description: the Pods of ${Q1_APP} run on two different nodes
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pods -l app=${Q1_APP} --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l
+        expect: { equals: 2 }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-required
+        description: the scheduler must keep two Pods of ${Q1_APP} off the same node
+        type: kubectl
+        run: >-
+          kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o json | jq -r
+          '[.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[]?
+          | select(.topologyKey == "kubernetes.io/hostname")
+          | [.labelSelector.matchLabels.app?, (.labelSelector.matchExpressions[]? | select(.key == "app") | .values[]?)]
+          | map(select(. == "${Q1_APP}"))] | map(length) | add // 0'
+        expect: { gte: 1 }
+        weight: 2
+      - id: q1-same
+        description: ${Q1_APP} is the same Deployment, with its image and replica count
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid} {.spec.replicas} {.spec.template.spec.containers[0].image}')" = "$(cat /var/tmp/cka-q1.uid)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q1_NS} get pods -o wide shows where the Pods run; kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml shows why they are all there."
+      - kubectl explain deployment.spec.template.spec.affinity.podAntiAffinity. The topologyKey decides what counts as "the same place".
+      - "If the rollout stops halfway, read the Pending Pod's events and think about what the old Pods still occupy: how many Pods does the rolling update want running at once, and how many nodes can take one?"
+  - id: q2
+    title: Run all replicas of ${Q2_APP}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q2-ready
+        description: ${Q2_APP} has 3 ready, updated replicas
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.status.readyReplicas}/{.status.updatedReplicas}/{.status.replicas}'
+        expect: { equals: 3/3/3 }
+        weight: 2
+        retrySeconds: 120
+      - id: q2-not-required
+        description: pod anti-affinity is no longer a requirement
+        type: kubectl
+        run: kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution}'
+        expect: { notEmpty: false }
+        weight: 1
+      - id: q2-preferred
+        description: ${Q2_APP} prefers nodes that run none of its Pods
+        type: kubectl
+        run: >-
+          kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o json | jq -r
+          '[.spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[]?.podAffinityTerm
+          | select(.topologyKey == "kubernetes.io/hostname")
+          | [.labelSelector.matchLabels.app?, (.labelSelector.matchExpressions[]? | select(.key == "app") | .values[]?)]
+          | map(select(. == "${Q2_APP}"))] | map(length) | add // 0'
+        expect: { gte: 1 }
+        weight: 2
+      - id: q2-same
+        description: ${Q2_APP} is the same Deployment, with its image and replica count
+        type: kubectl
+        run: >-
+          [ "$(kubectl -n ${Q2_NS} get deployment ${Q2_APP} -o jsonpath='{.metadata.uid} {.spec.replicas} {.spec.template.spec.containers[0].image}')" = "$(cat /var/tmp/cka-q2.uid)" ] && echo same || echo changed
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "kubectl -n ${Q2_NS} describe pod <pending-pod>: what does the scheduler say, and how many nodes can take a Pod at all?"
+      - "kubectl explain deployment.spec.template.spec.affinity.podAntiAffinity shows the two forms. The preferred form wraps the term in podAffinityTerm and adds a weight."
+      - "If new Pods stay Pending with an anti-affinity message although they only have a preference, look at what the old Pods still say about their neighbours."

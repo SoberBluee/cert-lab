@@ -1,0 +1,55 @@
+id: certificate-renew-expired
+title: Renew expired client certificates
+domain: cluster-architecture
+difficulty: 3
+estimatedMinutes: 14
+points: 8
+tags: [ certificates, pki, kubeadm, renew, certificate-renew, metrics-server ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+setup:
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 360
+checks:
+  - id: logs
+    description: kubectl logs works
+    type: kubectl
+    run: >-
+      kubectl -n kube-system logs "$(kubectl -n kube-system get pods -l k8s-app=kube-proxy -o jsonpath='{.items[0].metadata.name}')" --tail=1 >/dev/null 2>&1 && echo ok || echo fail
+    expect: { equals: ok }
+    weight: 3
+    retrySeconds: 120
+  - id: top
+    description: kubectl top works
+    type: kubectl
+    run: kubectl top nodes --no-headers 2>/dev/null | wc -l
+    expect: { equals: 3 }
+    weight: 2
+    retrySeconds: 180
+  - id: renewed
+    description: both expired certificates are valid for at least 30 more days
+    type: kubectl
+    run: >-
+      openssl x509 -checkend 2592000 -noout -in /etc/kubernetes/pki/apiserver-kubelet-client.crt >/dev/null &&
+      openssl x509 -checkend 2592000 -noout -in /etc/kubernetes/pki/front-proxy-client.crt >/dev/null && echo valid || echo expired
+    expect: { equals: valid }
+    weight: 1
+  - id: others
+    description: the CA and the certificates that had not expired were left alone
+    type: kubectl
+    run: sha256sum -c /var/tmp/cka-certs.sha --status && echo same || echo changed
+    expect: { equals: same }
+    weight: 1
+  - id: answer
+    description: expired.txt names the expired certificates
+    type: kubectl
+    run: sort /opt/course/certs/expired.txt | xargs
+    expect: { equals: apiserver-kubelet-client front-proxy-client }
+    weight: 1
+hints:
+  - "Before you change anything: sudo kubeadm certs check-expiration on controlplane."
+  - "kubectl logs goes from the API server to the kubelet, and kubectl top goes from the API server to metrics-server. Each hop uses a client certificate of the API server."
+  - "A renewed file does nothing until the process that uses it reloads it. Control plane Pods are static Pods: kubectl delete only touches the mirror Pod. Move the manifest out of /etc/kubernetes/manifests and back."

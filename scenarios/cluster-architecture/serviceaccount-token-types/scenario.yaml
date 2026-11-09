@@ -1,0 +1,87 @@
+id: serviceaccount-token-types
+title: The three kinds of ServiceAccount token
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 12
+points: 10
+tags: [ serviceaccount, serviceaccount-token, rbac, projected-volume ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  Q1_NS: { oneOf: [ vault-clients, kms-clients, secret-clients ] }
+  Q1_SA: { oneOf: [ vault-agent, kms-agent, secrets-agent ] }
+  Q1_POD: { oneOf: [ token-reader, vault-reader, kms-reader ] }
+  Q1_AUD: { oneOf: [ vault, kms, secrets-hub ] }
+  Q2_NS: { oneOf: [ ci-tools, deploy-tools, release-tools ] }
+  Q2_SA: { oneOf: [ deployer, pipeline, releaser ] }
+tasks:
+  - id: q1
+    title: Give ${Q1_POD} a token for one audience
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 120
+    checks:
+      - id: q1-running
+        description: Pod ${Q1_POD} runs as ServiceAccount ${Q1_SA}
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pod ${Q1_POD} -o jsonpath='{.status.phase}/{.spec.serviceAccountName}'
+        expect: { equals: "Running/${Q1_SA}" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-token
+        description: the token at /var/run/vault/token has the right audience, lifetime and subject
+        type: kubectl
+        run: >-
+          kubectl -n ${Q1_NS} exec ${Q1_POD} -- cat /var/run/vault/token | jq -R -r
+          'split(".")[1] | gsub("-";"+") | gsub("_";"/") | @base64d | fromjson | "\(.aud[0]) \(.exp - .iat) \(.sub)"'
+        expect: { equals: "${Q1_AUD} 3600 system:serviceaccount:${Q1_NS}:${Q1_SA}" }
+        weight: 3
+        retrySeconds: 30
+      - id: q1-no-default
+        description: the Pod has no default token mount
+        type: kubectl
+        run: kubectl -n ${Q1_NS} exec ${Q1_POD} -- ls /var/run/secrets/kubernetes.io/serviceaccount 2>&1 || true
+        expect: { contains: No such file }
+        weight: 1
+    hints:
+      - kubectl explain pod.spec.volumes.projected.sources.serviceAccountToken
+      - kubectl explain pod.spec.automountServiceAccountToken
+  - id: q2
+    title: Tokens for ${Q2_SA}
+    points: 5
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        timeoutSeconds: 120
+    checks:
+      - id: q2-rbac
+        description: ${Q2_SA} can list Pods in ${Q2_NS}, and nothing more
+        type: kubectl
+        run: >-
+          echo "$(kubectl auth can-i list pods -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}) $(kubectl auth can-i delete pods -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA}) $(kubectl auth can-i list secrets -n ${Q2_NS} --as=system:serviceaccount:${Q2_NS}:${Q2_SA})"
+        expect: { equals: yes no no }
+        weight: 1
+      - id: q2-secret
+        description: Secret ${Q2_SA}-token holds a working token for ${Q2_SA}
+        type: kubectl
+        run: >-
+          T="$(kubectl -n ${Q2_NS} get secret ${Q2_SA}-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)";
+          [ -n "$T" ] && kubectl --kubeconfig=/dev/null --server="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')" --insecure-skip-tls-verify --token="$T" auth whoami -o jsonpath='{.status.userInfo.username}'
+        expect: { equals: "system:serviceaccount:${Q2_NS}:${Q2_SA}" }
+        weight: 2
+        retrySeconds: 20
+      - id: q2-short
+        description: the token file holds a one-hour token for ${Q2_SA}
+        type: kubectl
+        run: >-
+          jq -R -r 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | @base64d | fromjson | "\(.exp - .iat) \(.sub)"' /opt/course/tokens/${Q2_SA}.txt 2>&1
+        expect: { equals: "3600 system:serviceaccount:${Q2_NS}:${Q2_SA}" }
+        weight: 2
+    hints:
+      - "kubectl -n ${Q2_NS} create role --help and create rolebinding --help. A ServiceAccount subject is written <namespace>:<name>."
+      - "Kubernetes no longer creates long-lived token Secrets by itself, but it fills one in if you ask: look for the Secret type kubernetes.io/service-account-token and its annotation."
+      - kubectl create token --help
