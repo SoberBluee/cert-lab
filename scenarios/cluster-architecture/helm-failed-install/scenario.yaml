@@ -1,0 +1,88 @@
+id: helm-failed-install
+title: "Killer-style: a Helm release that never installed"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 10
+points: 8
+tags: [killer-style, helm, helm-list, helm-upgrade, helm-history, failed-release]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  REL: { oneOf: [catalog, status-page, metrics-ui] }
+  NS: { oneOf: [team-web, internal-tools, ops-portal], hidden: true }
+  OWNER: { oneOf: [alice, bob, chen] }
+  BREAK: { oneOf: [image-tag, node-selector, cpu-request], hidden: true }
+setup:
+  - node: controlplane
+    script: setup/chartrepo.sh
+    timeoutSeconds: 180
+  - node: controlplane
+    script: setup/break.sh
+    timeoutSeconds: 420
+checks:
+  - id: namespace
+    description: /opt/course/helm/namespace.txt names the namespace of release ${REL}
+    type: ssh
+    node: controlplane
+    # Hidden values come from the file setup wrote: scenario.yaml may not name them, and a failed grade prints only "wrong".
+    run: |
+      . /root/.cka/helm-failed-install.env
+      [ "$(tr -d '[:space:]' < /opt/course/helm/namespace.txt 2>/dev/null)" = "$NS" ] && echo ok || echo wrong
+    expect: { equals: "ok" }
+    weight: 1
+  - id: bad-value
+    description: /opt/course/helm/bad-value.txt names the value that kept the Pods from becoming ready
+    type: ssh
+    node: controlplane
+    run: |
+      . /root/.cka/helm-failed-install.env
+      case "$BREAK" in
+        image-tag) re='^image(\.tag)?$' ;;
+        node-selector) re='^nodeSelector(\.disktype)?$' ;;
+        cpu-request) re='^resources(\.requests(\.cpu)?)?$' ;;
+      esac
+      v=$(tr -d '[:space:]' < /opt/course/helm/bad-value.txt 2>/dev/null)
+      [[ "$v" =~ $re ]] && echo ok || echo "got '$v'"
+    expect: { equals: "ok" }
+    weight: 1
+  - id: release
+    description: release ${REL} is deployed from chart webapp-1.1.0
+    type: kubectl
+    run: |
+      . /root/.cka/helm-failed-install.env
+      helm -n "$NS" list -a -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
+    expect: { equals: "deployed/webapp-1.1.0" }
+    weight: 2
+  - id: in-place
+    description: the release was fixed in place, not uninstalled and installed again
+    type: kubectl
+    run: |
+      . /root/.cka/helm-failed-install.env
+      helm -n "$NS" history ${REL} -o json | jq -r '.[0] | (.revision | tostring) + " " + .status'
+    expect: { equals: "1 failed" }
+    weight: 1
+  - id: values
+    description: the release keeps 2 replicas and owner ${OWNER}, and no longer sets the bad value
+    type: kubectl
+    run: |
+      . /root/.cka/helm-failed-install.env
+      helm -n "$NS" get values ${REL} -o json | jq -r '[(.replicaCount | tostring), (.podAnnotations.owner // ""),
+        (if (.image.tag // "") == "1.27-alpinee" or (.nodeSelector.disktype // "") == "nvme"
+            or ((.resources.requests.cpu // "") | tostring) == "64" then "bad" else "clean" end)] | join(" ")'
+    expect: { equals: "2 ${OWNER} clean" }
+    weight: 1
+  - id: running
+    description: 2 Pods of ${REL} are ready
+    type: kubectl
+    run: |
+      . /root/.cka/helm-failed-install.env
+      kubectl -n "$NS" get deployment -l app.kubernetes.io/instance=${REL} -o jsonpath='{.items[0].status.readyReplicas}'
+    expect: { equals: "2" }
+    weight: 2
+    retrySeconds: 90
+hints:
+  - "helm list -A lists the releases of every namespace, failed ones included. helm -n <namespace> history <release> shows each revision's status."
+  - "helm -n <namespace> get values <release> shows what the install set; kubectl -n <namespace> describe pod <pod> says why a Pod is not ready or not scheduled."
+  - "There is no working revision to roll back to, but helm upgrade also works on a release whose only revision failed. With --reuse-values a bad value stays unless you override it; --set <key>=null removes a value."

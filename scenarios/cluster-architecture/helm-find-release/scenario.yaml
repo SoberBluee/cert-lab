@@ -1,0 +1,90 @@
+id: helm-find-release
+title: "Helm: find a release by what it runs, save its values, and scale it"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 9
+points: 7
+tags: [helm, helm-list, helm-get, helm-upgrade, reuse-values]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  T_NS: { oneOf: [payments, inventory, analytics], hidden: true }
+  T_REL: { oneOf: [dashboard, api-docs, reports], hidden: true }
+  OWNER: { oneOf: [team-amber, team-cobalt, team-jade], hidden: true }
+  REPLICAS: { oneOf: [2, 3] }
+setup:
+  - node: controlplane
+    script: setup/chartrepo.sh
+    timeoutSeconds: 180
+  - node: controlplane
+    script: setup/releases.sh
+    timeoutSeconds: 300
+checks:
+  - id: found
+    description: /opt/course/helm/release.txt names the release as <namespace>/<release>
+    type: ssh
+    node: controlplane
+    # Hidden values come from the file setup wrote: scenario.yaml may not name them, and a failed grade prints only "wrong".
+    run: |
+      . /root/.cka/helm-find-release.env
+      [ "$(tr -d '[:space:]' < /opt/course/helm/release.txt 2>/dev/null)" = "$T_NS/$T_REL" ] && echo ok || echo wrong
+    expect: { equals: "ok" }
+    weight: 2
+  - id: values-file
+    description: /opt/course/helm/values.yaml holds the values the team set for the release
+    type: ssh
+    node: controlplane
+    run: |
+      python3 - <<'EOF'
+      import json, yaml
+      try:
+          have = yaml.safe_load(open('/opt/course/helm/values.yaml')) or {}
+      except Exception:
+          have = {}
+      want = json.load(open('/root/.cka/helm-find-values.json'))
+      # helm get values without -o yaml starts with this header line; scaling first may have added replicaCount.
+      for d in (have, want):
+          if isinstance(d, dict):
+              d.pop('USER-SUPPLIED VALUES', None)
+              d.pop('replicaCount', None)
+      print('same' if have == want else 'different')
+      EOF
+    expect: { equals: "same" }
+    weight: 1
+  - id: scaled
+    description: the release sets ${REPLICAS} replicas and keeps every value its team set
+    type: ssh
+    node: controlplane
+    run: |
+      . /root/.cka/helm-find-release.env
+      HOME=/root helm -n "$T_NS" get values "$T_REL" -o json | python3 -c '
+      import json, sys
+      have = json.load(sys.stdin) or {}
+      want = json.load(open("/root/.cka/helm-find-values.json"))
+      replicas = have.pop("replicaCount", None)
+      print(replicas, "kept" if have == want else "changed")'
+    expect: { equals: "${REPLICAS} kept" }
+    weight: 2
+  - id: chart
+    description: the release still runs chart webapp-1.0.0
+    type: kubectl
+    run: |
+      . /root/.cka/helm-find-release.env
+      helm -n "$T_NS" list -o json | jq -r --arg r "$T_REL" '.[] | select(.name == $r) | .status + "/" + .chart'
+    expect: { equals: "deployed/webapp-1.0.0" }
+    weight: 1
+  - id: running
+    description: ${REPLICAS} ready Pods run nginx:1.28-alpine
+    type: kubectl
+    run: |
+      . /root/.cka/helm-find-release.env
+      kubectl -n "$T_NS" get deployment -l "app.kubernetes.io/instance=$T_REL" -o jsonpath='{.items[0].status.readyReplicas}/{.items[0].spec.template.spec.containers[0].image}'
+    expect: { equals: "${REPLICAS}/nginx:1.28-alpine" }
+    weight: 1
+    retrySeconds: 90
+hints:
+  - "helm list -A shows every release with its namespace and CHART. helm -n <namespace> get manifest <release> shows what a release deployed, images included."
+  - "helm -n <namespace> get values <release> shows only the values set for the release; add -o yaml to get plain YAML without the header line."
+  - "helm upgrade picks the newest chart version unless you pass --version. --reuse-values keeps the values the release already has."

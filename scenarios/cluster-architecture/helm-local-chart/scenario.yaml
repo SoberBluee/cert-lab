@@ -1,0 +1,71 @@
+id: helm-local-chart
+title: "Helm: change a chart's defaults, package it and install the package"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 10
+points: 8
+tags: [helm, helm-pull, helm-package, helm-install, chart, nodeport]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+variables:
+  NS: { oneOf: [web-lab, staging-web, preview] }
+  REL: { oneOf: [landing, brochure, promo] }
+  REPLICAS: { oneOf: [2, 3] }
+setup:
+  - node: controlplane
+    script: setup/chartrepo.sh
+    timeoutSeconds: 180
+  - node: controlplane
+    run: |
+      export HOME=/root
+      kubectl delete namespace "$NS" --ignore-not-found --wait=true >/dev/null
+      rm -rf /opt/course/helm && mkdir -p /opt/course/helm/charts && chown -R ubuntu:ubuntu /opt/course
+      runuser -u ubuntu -- env HOME=/home/ubuntu helm repo add lab http://controlplane:8879 >/dev/null
+      runuser -u ubuntu -- env HOME=/home/ubuntu helm repo update lab >/dev/null
+checks:
+  - id: unpacked
+    description: the chart is unpacked at /opt/course/helm/charts/webapp, with chart version 2.0.1
+    type: ssh
+    node: controlplane
+    run: grep -E '^version:' /opt/course/helm/charts/webapp/Chart.yaml 2>/dev/null || echo missing
+    expect: { matches: "^version: \"?2\\.0\\.1\"?$" }
+    weight: 1
+  - id: package
+    description: /opt/course/helm/webapp-2.0.1.tgz is a chart package of version 2.0.1
+    type: ssh
+    node: controlplane
+    run: HOME=/root helm show chart /opt/course/helm/webapp-2.0.1.tgz 2>/dev/null | grep -E '^version:' || echo missing
+    expect: { matches: "^version: \"?2\\.0\\.1\"?$" }
+    weight: 1
+  - id: defaults
+    description: the package's defaults run ${REPLICAS} replicas behind a NodePort Service
+    type: ssh
+    node: controlplane
+    run: HOME=/root helm template check /opt/course/helm/webapp-2.0.1.tgz 2>/dev/null | grep -E '^\s+(replicas|type):' | sed -E 's/^\s+//' | sort -u | xargs
+    expect: { equals: "replicas: ${REPLICAS} type: NodePort" }
+    weight: 1
+  - id: release
+    description: release ${REL} in ${NS} is deployed from chart webapp-2.0.1
+    type: kubectl
+    run: helm -n ${NS} list -o json | jq -r '.[] | select(.name == "${REL}") | .status + "/" + .chart'
+    expect: { equals: "deployed/webapp-2.0.1" }
+    weight: 2
+  - id: no-values
+    description: the release was installed without any values of its own
+    type: kubectl
+    run: helm -n ${NS} get values ${REL} -o json
+    expect: { matches: "^(null|\\{\\})$" }
+    weight: 1
+  - id: running
+    description: ${REPLICAS} ready Pods of ${REL}, behind a NodePort Service
+    type: kubectl
+    run: echo "$(kubectl -n ${NS} get deployment -l app.kubernetes.io/instance=${REL} -o jsonpath='{.items[0].status.readyReplicas}') $(kubectl -n ${NS} get service -l app.kubernetes.io/instance=${REL} -o jsonpath='{.items[0].spec.type}')"
+    expect: { equals: "${REPLICAS} NodePort" }
+    weight: 2
+    retrySeconds: 90
+hints:
+  - "helm pull <repo>/<chart> --version <v> --untar -d <dir> downloads a chart and unpacks it into <dir>/<chart>."
+  - "A chart's defaults live in its values.yaml; its own version is the version field of Chart.yaml. helm template <name> <chart-dir> shows what your changes render to."
+  - "helm package <chart-dir> -d <dir> writes <name>-<version>.tgz. helm install takes a package file or a chart directory as well as <repo>/<chart>."

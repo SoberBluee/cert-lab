@@ -67,10 +67,23 @@ export const servicesCategory: FaultCategory = {
   layers: [
     {
       name: 'the Service',
-      faults: ['selector-mismatch', 'target-port', 'selector-extra-label', 'service-port', 'service-protocol', 'selector-cleared', 'service-externalname'],
+      faults: [
+        'selector-mismatch',
+        'target-port',
+        'selector-extra-label',
+        'service-port',
+        'service-protocol',
+        'selector-cleared',
+        'service-externalname',
+        'manual-endpoints',
+        'internal-traffic-local',
+      ],
     },
-    { name: 'the backend Pods', faults: ['not-ready', 'readiness-https', 'readiness-port-number', 'named-port'] },
-    { name: 'the network path', faults: ['network-policy', 'egress-network-policy', 'kube-proxy-kubeconfig', 'kube-proxy-config-mode'] },
+    { name: 'the backend Pods', faults: ['not-ready', 'readiness-https', 'readiness-port-number', 'named-port', 'readiness-delay', 'listen-localhost'] },
+    {
+      name: 'the network path',
+      faults: ['network-policy', 'egress-network-policy', 'kube-proxy-kubeconfig', 'kube-proxy-config-mode', 'netpol-namespace-label'],
+    },
   ],
   shell: ({ NS, APP, CLIENT }, state) => ({
     title: `Service ${APP} unreachable`,
@@ -344,6 +357,63 @@ kubectl -n kube-system rollout restart daemonset/kube-proxy
 kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=240s`,
       wait: waitServing(NS, CLIENT, APP),
       explain: `ConfigMap \`kube-system/kube-proxy\` sets \`mode: not-a-mode\`, so kube-proxy Pods crash-loop and Service ClusterIPs stop working. Set \`mode\` back to \`iptables\` (or empty) in the ConfigMap and restart the \`kube-proxy\` DaemonSet.`,
+    },
+    {
+      id: 'readiness-delay',
+      label: 'Readiness probe waits 15 minutes before its first check',
+      break: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"add","path":"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds","value":900}]'`,
+      fix: `kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"remove","path":"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds"}]'
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
+      wait: waitServing(NS, CLIENT, APP),
+      explain: `The Pods run but stay \`0/1\`, and unlike a failing probe, \`kubectl -n ${NS} describe pod\` shows **no** \`Unhealthy\` events at all: the probe has not run yet. \`initialDelaySeconds: 900\` makes the kubelet wait 15 minutes before the first readiness check, and until then the Pods are not ready and the Service has no ready endpoints. Remove the delay (or make it a few seconds).`,
+    },
+    {
+      id: 'listen-localhost',
+      label: 'nginx listens on 127.0.0.1 only, and the probe asks localhost',
+      break: `kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"'"${APP}"'-nginx"},"data":{"default.conf":"server {\\n    listen 127.0.0.1:80;\\n    location / {\\n        root /usr/share/nginx/html;\\n        index index.html;\\n    }\\n}\\n"}}'
+kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"add","path":"/spec/template/spec/volumes","value":[{"name":"nginx-conf","configMap":{"name":"'"${APP}"'-nginx"}}]},{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts","value":[{"name":"nginx-conf","mountPath":"/etc/nginx/conf.d"}]},{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe","value":{"exec":{"command":["wget","-qO-","-T","2","http://127.0.0.1/"]},"periodSeconds":5}}]'`,
+      fix: `kubectl -n "${NS}" get configmap "${APP}-nginx" -o yaml | sed 's/listen 127.0.0.1:80;/listen 80;/' | kubectl replace -f -
+# The probe asks the Pod's own port again, so it notices if this ever comes back.
+kubectl -n "${NS}" patch deployment "${APP}" --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe","value":{"httpGet":{"path":"/","port":"http"},"periodSeconds":5}}]'
+# nginx reads its configuration when it starts.
+kubectl -n "${NS}" rollout restart "deployment/${APP}"
+kubectl -n "${NS}" rollout status "deployment/${APP}" --timeout=240s`,
+      wait: waitServing(NS, CLIENT, APP),
+      explain: `The Service has 2 ready endpoints, yet connections are refused, and \`wget http://<pod-ip>\` from \`${CLIENT}\` is refused too. nginx listens on \`127.0.0.1\` only: ConfigMap \`${APP}-nginx\`, mounted over \`/etc/nginx/conf.d\`, says \`listen 127.0.0.1:80\`, and \`kubectl -n ${NS} exec deploy/${APP} -- netstat -tln\` shows it. The readiness probe hides this, because it runs \`wget http://127.0.0.1/\` inside the container. Change \`listen\` to \`80\` and restart the Pods, since nginx reads its configuration at start. Pointing the probe back at the \`http\` port makes it catch this next time.`,
+    },
+    {
+      id: 'manual-endpoints',
+      label: 'A hand-made EndpointSlice points at Pods that are gone',
+      // Addresses in a block of the Pod network that no node uses, as if the Pods behind them had been deleted.
+      break: `cidr=$(grep -oE -- '--cluster-cidr=[0-9.]+' /etc/kubernetes/manifests/kube-controller-manager.yaml | cut -d= -f2)
+[[ -n "$cidr" ]] || { echo "could not read the Pod CIDR" >&2; exit 1; }
+prefix=$(echo "$cidr" | cut -d. -f1-2)
+kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"remove","path":"/spec/selector"}]'
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"discovery.k8s.io/v1","kind":"EndpointSlice","metadata":{"name":"'"${APP}"'-manual","labels":{"kubernetes.io/service-name":"'"${APP}"'","endpointslice.kubernetes.io/managed-by":"ops-team"}},"addressType":"IPv4","ports":[{"name":"","port":80,"protocol":"TCP"}],"endpoints":[{"addresses":["'"$prefix"'.250.17"],"conditions":{"ready":true}},{"addresses":["'"$prefix"'.250.18"],"conditions":{"ready":true}}]}'`,
+      fix: `kubectl -n "${NS}" patch service "${APP}" --type=json -p '[{"op":"add","path":"/spec/selector","value":{"app":"'"${APP}"'"}}]'
+kubectl -n "${NS}" delete endpointslice "${APP}-manual"`,
+      wait: waitServing(NS, CLIENT, APP),
+      explain: `The Service lists 2 ready endpoints, but their addresses belong to no Pod: compare \`kubectl -n ${NS} get endpointslices -l kubernetes.io/service-name=${APP} -o wide\` with \`kubectl -n ${NS} get pods -o wide\`. Connections time out. The Service has no selector, so the endpoint controller keeps no slice for it, and \`${APP}-manual\` was written by hand (its \`endpointslice.kubernetes.io/managed-by\` label says \`ops-team\`) with the addresses of Pods long gone. Restore \`selector: { app: ${APP} }\` and delete \`${APP}-manual\`. Leaving it next to the controller's slice would keep sending some requests to nowhere.`,
+    },
+    {
+      id: 'netpol-namespace-label',
+      label: 'An allow-same-namespace NetworkPolicy selects a label namespaces lack',
+      break: `kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"'"${APP}"'-same-namespace"},"spec":{"podSelector":{"matchLabels":{"app":"'"${APP}"'"}},"policyTypes":["Ingress"],"ingress":[{"from":[{"namespaceSelector":{"matchLabels":{"name":"'"${NS}"'"}}}],"ports":[{"protocol":"TCP","port":80}]}]}}'`,
+      fix: `kubectl -n "${NS}" patch networkpolicy "${APP}-same-namespace" --type=json -p '[{"op":"replace","path":"/spec/ingress/0/from/0/namespaceSelector/matchLabels","value":{"kubernetes.io/metadata.name":"'"${NS}"'"}}]'`,
+      wait: waitServing(NS, CLIENT, APP),
+      explain: `NetworkPolicy \`${APP}-same-namespace\` means to let in every Pod of \`${NS}\`, but it selects namespaces labelled \`name=${NS}\`. Namespaces do not get that label: Kubernetes labels each one \`kubernetes.io/metadata.name=<name>\` (\`kubectl get namespace ${NS} --show-labels\`). So the policy matches no namespace, lets nothing in, and still isolates the ${APP} Pods. Select \`kubernetes.io/metadata.name: ${NS}\` instead. Labelling the namespace \`name=${NS}\` would work too.`,
+    },
+    {
+      id: 'internal-traffic-local',
+      label: 'internalTrafficPolicy Local, and no backend on the client\'s node',
+      // The client moves to controlplane, where no ${APP} Pod runs, so that Local always leaves it without an endpoint.
+      break: `kubectl -n "${NS}" delete pod "${CLIENT}" --wait=true
+kubectl -n "${NS}" apply -f - <<< '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"'"${CLIENT}"'"},"spec":{"nodeName":"controlplane","tolerations":[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists","effect":"NoSchedule"}],"containers":[{"name":"shell","image":"busybox:1.36","command":["sleep","infinity"]}]}}'
+kubectl -n "${NS}" wait --for=condition=Ready "pod/${CLIENT}" --timeout=180s
+kubectl -n "${NS}" patch service "${APP}" -p '{"spec":{"internalTrafficPolicy":"Local"}}'`,
+      fix: `kubectl -n "${NS}" patch service "${APP}" -p '{"spec":{"internalTrafficPolicy":"Cluster"}}'`,
+      wait: waitServing(NS, CLIENT, APP),
+      explain: `Service, endpoints and Pods all look right, and \`${CLIENT}\` even reaches a Pod IP directly, but not the Service. The Service sets \`internalTrafficPolicy: Local\`: kube-proxy then only sends traffic to endpoints on the client's own node. \`${CLIENT}\` runs on \`controlplane\` (\`kubectl -n ${NS} get pods -o wide\`), where no ${APP} Pod runs, so its requests are dropped. Set it back to \`Cluster\`.`,
     },
   ],
 };

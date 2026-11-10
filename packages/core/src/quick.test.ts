@@ -717,7 +717,7 @@ describe('Quick Create', () => {
 
   it('Helm scenarios ship the same chart repository script as the Helm builder', () => {
     const dir = join(import.meta.dirname, '../../../scenarios/cluster-architecture');
-    for (const s of ['helm-install-values', 'helm-rollback-upgrade', 'helm-release-cleanup', 'helm-component-template']) {
+    for (const s of ['helm-install-values', 'helm-rollback-upgrade', 'helm-release-cleanup', 'helm-component-template', 'helm-failed-install', 'helm-local-chart', 'helm-find-release']) {
       assert.equal(readFileSync(join(dir, s, 'setup/chartrepo.sh'), 'utf8'), CHARTREPO_SCRIPT, `${s}/setup/chartrepo.sh differs`);
     }
     assert.ok(!CHARTREPO_SCRIPT.includes('${'), 'the renderer would substitute ${...} in the builder copy');
