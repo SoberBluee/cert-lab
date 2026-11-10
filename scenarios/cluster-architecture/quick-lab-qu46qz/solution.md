@@ -1,0 +1,13 @@
+## Solution
+
+### Question 1: Helm release ${Q1_REL}
+
+```bash
+printf 'podAnnotations:\n  owner: %s\n' "${Q1_VALUES_OWNER}" > "/opt/course/helm/${Q1_REL}-values.yaml"
+chown ubuntu:ubuntu "/opt/course/helm/${Q1_REL}-values.yaml"
+runuser -u ubuntu -- env HOME=/home/ubuntu KUBECONFIG=/home/ubuntu/.kube/config helm repo add lab http://controlplane:8879
+runuser -u ubuntu -- env HOME=/home/ubuntu KUBECONFIG=/home/ubuntu/.kube/config helm repo update lab
+runuser -u ubuntu -- env HOME=/home/ubuntu KUBECONFIG=/home/ubuntu/.kube/config helm -n "${Q1_NS}" install "${Q1_REL}" lab/webapp --version "${Q1_VERSION}" --set service.type=NodePort -f "/opt/course/helm/${Q1_REL}-values.yaml" --wait --timeout 3m
+runuser -u ubuntu -- env HOME=/home/ubuntu KUBECONFIG=/home/ubuntu/.kube/config helm -n "${Q1_NS}" get manifest "${Q1_REL}" > "/opt/course/helm/${Q1_REL}-manifest.yaml"
+runuser -u ubuntu -- env HOME=/home/ubuntu KUBECONFIG=/home/ubuntu/.kube/config helm -n "${Q1_NS}" upgrade "${Q1_REL}" lab/webapp --version 2.0.0 --reuse-values --wait --timeout 3m
+```

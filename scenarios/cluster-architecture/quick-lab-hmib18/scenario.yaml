@@ -1,0 +1,34 @@
+id: quick-lab-hmib18
+title: "Quick lab: Certificates"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 5
+points: 2
+tags: [ certificates, pki, kubeadm ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_EXPIRY: { oneOf: [ /opt/certs/apiserver-expiry.txt, /root/apiserver-expiry.txt ] }
+tasks:
+  - id: q1
+    title: Cluster certificates
+    points: 2
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-expiry
+        description: ${Q1_EXPIRY} holds the expiry date of the certificate
+        run: '[ "$(xargs < "${Q1_EXPIRY}" 2>/dev/null)" = "$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2 | xargs)" ] && echo match || echo differs'
+        expect: { equals: match }
+        weight: 2
+    hints:
+      - The API server certificate is /etc/kubernetes/pki/apiserver.crt (see --tls-cert-file in its manifest).
+      - kubeadm certs check-expiration shows the same date in another format; openssl x509 -in <crt> -noout -enddate prints the exact text.
+    recipe: { builder: certificates, parts: [] }

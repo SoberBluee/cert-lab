@@ -1,0 +1,49 @@
+id: quick-lab-s4jia8
+title: "Quick lab: Kustomize"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 9
+points: 6
+tags: [ kustomize, overlays, patches ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_APP: { oneOf: [ shop, billing, ledger, portal, search, notify, catalog, reports, gateway, profile ] }
+tasks:
+  - id: q1
+    title: Install an agent with Kustomize
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-everywhere
+        description: ${Q1_APP}-agent runs a ready Pod on all 3 nodes
+        type: kubectl
+        run: kubectl -n ${Q1_APP}-agents get daemonset ${Q1_APP}-agent -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
+        expect: { equals: 3/3 }
+        weight: 3
+        retrySeconds: 90
+      - type: ssh
+        node: controlplane
+        id: q1-patched
+        description: kustomization.yaml patches the DaemonSet with a toleration
+        run: kubectl kustomize /opt/course/kustomize/${Q1_APP}-agent 2>/dev/null | grep -q 'node-role.kubernetes.io/control-plane' && grep -qE '^patches:|^patchesStrategicMerge:|^patchesJson6902:' /opt/course/kustomize/${Q1_APP}-agent/kustomization.yaml && echo patched || echo missing
+        expect: { equals: patched }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-files-kept
+        description: daemonset.yaml and namespace.yaml were not edited
+        run: sha256sum --quiet -c /root/.cka-kustomize-${Q1_APP}-agent.sums >/dev/null 2>&1 && echo unchanged || echo changed
+        expect: { equals: unchanged }
+        weight: 1
+    hints:
+      - kubectl describe node controlplane shows the taint that keeps the agent away.
+      - "patches: in kustomization.yaml takes a strategic merge patch file, or an inline JSON 6902 patch with a target."
+      - kubectl kustomize <dir> prints the patched DaemonSet, so you can check the toleration before applying.
+    recipe: { builder: kustomize, parts: [] }

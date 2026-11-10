@@ -1,0 +1,21 @@
+## Solution
+
+### Question 1: Install an agent with Kustomize
+
+```bash
+cat >> /opt/course/kustomize/${Q1_APP}-agent/kustomization.yaml <<EOF
+patches:
+  - target:
+      kind: DaemonSet
+      name: ${Q1_APP}-agent
+    patch: |-
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: node-role.kubernetes.io/control-plane
+            operator: Exists
+            effect: NoSchedule
+EOF
+kubectl apply -k /opt/course/kustomize/${Q1_APP}-agent
+kubectl -n ${Q1_APP}-agents rollout status daemonset/${Q1_APP}-agent --timeout=180s
+```

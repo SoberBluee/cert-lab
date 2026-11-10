@@ -1,0 +1,53 @@
+id: quick-lab-xk5u7i
+title: "Quick lab: Kustomize"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 9
+points: 6
+tags: [ kustomize, overlays, patches ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_APP: { oneOf: [ shop, billing, ledger, portal, search, notify, catalog, reports, gateway, profile ] }
+tasks:
+  - id: q1
+    title: "Kustomize: HPA in base, patched in prod"
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-hpa-staging
+        description: HPA ${Q1_APP} in ${Q1_APP}-staging keeps Deployment ${Q1_APP} between 1 and 4 replicas at 50% CPU
+        type: kubectl
+        run: kubectl -n ${Q1_APP}-staging get hpa ${Q1_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q1_APP}/1/4/50" }
+        weight: 2
+      - id: q1-hpa-prod
+        description: HPA ${Q1_APP} in ${Q1_APP}-production allows up to 6 replicas
+        type: kubectl
+        run: kubectl -n ${Q1_APP}-production get hpa ${Q1_APP} -o jsonpath='{.spec.scaleTargetRef.kind}/{.spec.scaleTargetRef.name}/{.spec.minReplicas}/{.spec.maxReplicas}/{.spec.metrics[?(@.resource.name=="cpu")].resource.target.averageUtilization}'
+        expect: { equals: "Deployment/${Q1_APP}/1/6/50" }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-builds
+        description: base and staging build with maxReplicas 4, prod with 6, and none of them renders the ConfigMap
+        run: "out() { kubectl kustomize \"$1\" 2>/dev/null; }; max() { out \"$1\" | grep -oE 'maxReplicas: [0-9]+' | grep -oE '[0-9]+' | xargs; }; cms=$(for d in /opt/course/kustomize/${Q1_APP}-envs/base /opt/course/kustomize/${Q1_APP}-envs/overlays/staging /opt/course/kustomize/${Q1_APP}-envs/overlays/prod; do out \"$d\" | grep -c '^kind: ConfigMap'; done | awk '{ s += $1 } END { print s + 0 }'); echo \"base=$(max /opt/course/kustomize/${Q1_APP}-envs/base) staging=$(max /opt/course/kustomize/${Q1_APP}-envs/overlays/staging) prod=$(max /opt/course/kustomize/${Q1_APP}-envs/overlays/prod) configmaps=$cms\""
+        expect: { equals: base=4 staging=4 prod=6 configmaps=0 }
+        weight: 1
+      - id: q1-configmap-gone
+        description: ConfigMap ${Q1_APP}-scaling is gone from both namespaces
+        type: kubectl
+        run: for ns in ${Q1_APP}-staging ${Q1_APP}-production; do kubectl -n "$ns" get configmap ${Q1_APP}-scaling >/dev/null 2>&1 && echo "still in $ns"; done; echo checked
+        expect: { equals: checked }
+        weight: 1
+    hints:
+      - kubectl autoscale deployment <name> --min=1 --max=4 with a CPU target and --dry-run=client -o yaml writes the HPA for you (kubectl autoscale --help).
+      - "A patch in an overlay needs only the fields it changes: apiVersion, kind, metadata.name and spec.maxReplicas. kubectl kustomize <overlay> shows the merged result before you apply."
+      - "kubectl apply -k creates and updates, but never deletes: an object you take out of a kustomization stays in the cluster until you delete it yourself."
+    recipe: { builder: kustomize, parts: [] }

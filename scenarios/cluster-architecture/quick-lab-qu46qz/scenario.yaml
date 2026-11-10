@@ -1,0 +1,79 @@
+id: quick-lab-qu46qz
+title: "Quick lab: Helm"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 14
+points: 8
+tags: [ helm, nodeport, values-file, manifest, upgrade ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ apps, web, tools, charts, releases, helm-lab, deployments, services, platform, demo ] }
+  Q1_REL: { oneOf: [ frontend, shop, portal, api, backend, gateway, dashboard, console, admin, store ] }
+  Q1_VERSION: { oneOf: [ 1.0.0, 1.1.0 ] }
+  Q1_VALUES_OWNER: { oneOf: [ team-a, team-b, platform, sre, devops, product, security, finance, infra, oncall ] }
+tasks:
+  - id: q1
+    title: Helm release ${Q1_REL}
+    points: 8
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: kubectl
+        id: q1-ready
+        description: 2 replica(s) of ${Q1_REL} are ready
+        run: kubectl -n ${Q1_NS} get deployment -l app.kubernetes.io/instance=${Q1_REL} -o jsonpath='{.items[0].status.readyReplicas}'
+        expect: { equals: "2" }
+        weight: 1
+        retrySeconds: 90
+      - type: kubectl
+        id: q1-nodeport
+        description: the release Service is of type NodePort
+        run: kubectl -n ${Q1_NS} get service -l app.kubernetes.io/instance=${Q1_REL} -o jsonpath='{.items[0].spec.type}'
+        expect: { equals: NodePort }
+        weight: 1
+      - id: q1-values-file
+        description: /opt/course/helm/${Q1_REL}-values.yaml sets owner ${Q1_VALUES_OWNER}
+        type: file
+        node: controlplane
+        path: /opt/course/helm/${Q1_REL}-values.yaml
+        contains: "owner: ${Q1_VALUES_OWNER}"
+        weight: 1
+      - type: kubectl
+        id: q1-values-owner
+        description: the release's Pods carry the annotation owner=${Q1_VALUES_OWNER}
+        run: kubectl -n ${Q1_NS} get deployment -l app.kubernetes.io/instance=${Q1_REL} -o jsonpath='{.items[0].spec.template.metadata.annotations.owner}'
+        expect: { equals: "${Q1_VALUES_OWNER}" }
+        weight: 1
+      - id: q1-manifest
+        description: /opt/course/helm/${Q1_REL}-manifest.yaml holds the release's Deployment
+        type: ssh
+        node: controlplane
+        run: "grep -q 'kind: Deployment' \"/opt/course/helm/${Q1_REL}-manifest.yaml\" 2>/dev/null && grep -q 'app.kubernetes.io/instance: ${Q1_REL}' \"/opt/course/helm/${Q1_REL}-manifest.yaml\" && echo ok || echo missing"
+        expect: { equals: ok }
+        weight: 1
+      - type: kubectl
+        id: q1-upgraded
+        description: release ${Q1_REL} is deployed from chart webapp-2.0.0
+        run: helm -n ${Q1_NS} list -o json | jq -r '.[] | select(.name == "${Q1_REL}") | .status + "/" + .chart'
+        expect: { equals: deployed/webapp-2.0.0 }
+        weight: 2
+      - type: kubectl
+        id: q1-upgrade-history
+        description: ${Q1_REL} has at least 2 revisions
+        run: helm -n ${Q1_NS} history ${Q1_REL} -o json | jq length
+        expect: { gte: 2 }
+        weight: 1
+    hints:
+      - helm repo add lab http://controlplane:8879, then helm search repo lab/webapp --versions.
+      - helm install <release> <chart> --version <v> -n <namespace>
+      - The chart has a service.type value.
+      - "helm install <release> <chart> -f <file>: a values file holds the same keys as helm show values."
+      - helm get manifest <release> prints what Helm applied for the current revision.
+      - helm upgrade --reuse-values keeps the values of the current revision; helm history shows the revisions.
+    recipe: { builder: helm, parts: [ nodeport, values-file, manifest, upgrade ] }
