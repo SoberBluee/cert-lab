@@ -1,0 +1,10 @@
+## Solution
+
+### Question 1: Errors across replicas
+
+```bash
+kubectl -n ${Q1_NS} logs -l app=checkout -c api --prefix --tail=-1 | grep ERROR > /opt/course/logs/api-errors.txt
+for p in $(kubectl -n ${Q1_NS} get pods -l app=checkout -o jsonpath='{.items[*].metadata.name}'); do
+  echo "$(kubectl -n ${Q1_NS} logs "$p" -c api | grep -c ERROR) $p"
+done | sort -n | tail -1 | awk '{print $2}' > /opt/course/logs/worst-pod.txt
+```

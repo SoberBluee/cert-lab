@@ -1,0 +1,50 @@
+id: quick-lab-25uxp2
+title: "Quick lab: Cluster audit"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 7
+points: 6
+tags: [ custom-columns, jsonpath, images, rbac, auth-can-i, secret, kubelet-config ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ] }
+tasks:
+  - id: q1
+    title: Hardening review of ${Q1_NS}-apps
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-privileged
+        description: privileged.txt lists the Pods with a privileged container
+        run: want=$(kubectl -n ${Q1_NS}-apps get pods -o json | jq -r '.items[] | select([((.spec.initContainers // []) + .spec.containers)[] | .securityContext.privileged // false] | any) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/privileged.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-host-network
+        description: host-network.txt lists the Pods on the node's network
+        run: want=$(kubectl -n ${Q1_NS}-apps get pods -o json | jq -r '.items[] | select(.spec.hostNetwork == true) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/host-network.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-host-path
+        description: host-path.txt lists the Pods that mount a hostPath
+        run: want=$(kubectl -n ${Q1_NS}-apps get pods -o json | jq -r '.items[] | select([.spec.volumes[]? | has("hostPath")] | any) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/host-path.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+    hints:
+      - "privileged sits in each container's securityContext, and init containers have their own: check .spec.initContainers as well as .spec.containers."
+      - hostNetwork is a field of the Pod spec; hostPath is a kind of volume, in .spec.volumes.
+      - "kubectl -n ${Q1_NS}-apps get pods -o json | jq can filter on all three. A container that says privileged: false does not count."
+    recipe: { builder: audit, parts: [] }

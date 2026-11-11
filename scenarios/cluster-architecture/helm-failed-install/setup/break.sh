@@ -31,7 +31,8 @@ if helm install "$REL" lab/webapp --version 1.1.0 -n "$NS" --create-namespace \
   echo "the install of $REL did not fail" >&2
   exit 1
 fi
-status=$(helm -n "$NS" list -a -o json | jq -r --arg r "$REL" '.[] | select(.name == $r) | .status')
+# Helm 4 lists releases in every status by default; it has no -a.
+status=$(helm -n "$NS" list -o json | jq -r --arg r "$REL" '.[] | select(.name == $r) | .status')
 [[ "$status" == failed ]] || { echo "release $REL is $status, not failed" >&2; exit 1; }
 # The checks read the hidden values from here: scenario.yaml may not name them.
 mkdir -p /root/.cka

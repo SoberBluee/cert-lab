@@ -1,0 +1,173 @@
+id: zz-verify-audit
+title: zz-verify-audit
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 35
+points: 30
+tags: [ custom-columns, jsonpath, images, rbac, auth-can-i, secret, kubelet-config ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+  Q2_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+  Q3_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+  Q4_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+  Q5_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+solution:
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 750
+tasks:
+  - id: q1
+    title: Hardening review of ${Q1_NS}-apps
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-privileged
+        description: privileged.txt lists the Pods with a privileged container
+        run: want=$(kubectl -n ${Q1_NS}-apps get pods -o json | jq -r '.items[] | select([((.spec.initContainers // []) + .spec.containers)[] | .securityContext.privileged // false] | any) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/privileged.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-host-network
+        description: host-network.txt lists the Pods on the node's network
+        run: want=$(kubectl -n ${Q1_NS}-apps get pods -o json | jq -r '.items[] | select(.spec.hostNetwork == true) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/host-network.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q1-host-path
+        description: host-path.txt lists the Pods that mount a hostPath
+        run: want=$(kubectl -n ${Q1_NS}-apps get pods -o json | jq -r '.items[] | select([.spec.volumes[]? | has("hostPath")] | any) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/host-path.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+    hints:
+      - "privileged sits in each container's securityContext, and init containers have their own: check .spec.initContainers as well as .spec.containers."
+      - hostNetwork is a field of the Pod spec; hostPath is a kind of volume, in .spec.volumes.
+      - "kubectl -n ${Q1_NS}-apps get pods -o json | jq can filter on all three. A container that says privileged: false does not count."
+    recipe: { builder: audit, parts: [] }
+  - id: q2
+    title: Resource review of ${Q2_NS}-compute
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q2.sh
+        lane: q2
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q2-no-memory-limit
+        description: no-memory-limit.txt lists the Pods with a container that has no memory limit
+        run: want=$(kubectl -n ${Q2_NS}-compute get pods -o json | jq -r '.items[] | select([.spec.containers[].resources.limits.memory] | any(. == null)) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/no-memory-limit.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 3
+      - type: ssh
+        node: controlplane
+        id: q2-top-cpu
+        description: top-cpu.txt names the 3 Pods that request the most CPU, highest first
+        run: "want=$(kubectl -n ${Q2_NS}-compute get pods -o json | jq -r '[.items[] | {n: .metadata.name, m: ([.spec.containers[].resources.requests.cpu // \"0m\" | rtrimstr(\"m\") | tonumber] | add)}] | sort_by(-.m) | .[:3][] | .n' | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/top-cpu.txt 2>/dev/null | sed 's|.*/||' | xargs); [ -n \"$want\" ] && [ \"$have\" = \"$want\" ] && echo match || echo differs"
+        expect: { equals: match }
+        weight: 3
+    hints:
+      - kubectl -n ${Q2_NS}-compute get pods -o custom-columns=NAME:.metadata.name,CPU:.spec.containers[*].resources.requests.cpu,MEM_LIMIT:.spec.containers[*].resources.limits.memory shows every container; <none> marks a missing value.
+      - A Pod with two containers counts if either one has no memory limit, and its CPU request is the sum of both.
+      - "jq can add up the requests and sort: sort_by(-.cpu) puts the highest first."
+    recipe: { builder: audit, parts: [] }
+  - id: q3
+    title: Unhealthy Pods in ${Q3_NS}-ops
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q3.sh
+        lane: q3
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q3-unhealthy
+        description: unhealthy.txt lists the Pods that are not ready, without completed ones
+        run: want=$(kubectl -n ${Q3_NS}-ops get pods -o json | jq -r '.items[] | select(.status.phase != "Succeeded") | select(([.status.conditions[]? | select(.type == "Ready") | .status] | first) != "True") | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/unhealthy.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 3
+      - type: ssh
+        node: controlplane
+        id: q3-unscheduled
+        description: unscheduled.txt names the Pod that no node runs
+        run: want=$(kubectl -n ${Q3_NS}-ops get pods -o json | jq -r '.items[] | select([.status.conditions[]? | select(.type == "PodScheduled" and .status == "False")] | length > 0) | .metadata.name' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/unscheduled.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+      - type: ssh
+        node: controlplane
+        id: q3-bad-image
+        description: bad-image.txt holds the image that cannot be pulled
+        run: want=$(kubectl -n ${Q3_NS}-ops get pods -o json | jq -r '.items[] | select([.status.containerStatuses[]? | .state.waiting.reason // ""] | any(test("ErrImagePull|ImagePullBackOff"))) | .spec.containers[].image' | sort -u); [ -n "$want" ] && [ "$(tr -d '[:space:]' < /opt/course/audit/bad-image.txt 2>/dev/null)" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 1
+        retrySeconds: 30
+    hints:
+      - "kubectl -n ${Q3_NS}-ops get pods: READY 0/1 marks the ones that are not ready. STATUS Completed is a Pod that ran to completion, which is not a problem."
+      - "Pending with no node in kubectl get pods -o wide means the scheduler found none: kubectl describe pod shows why."
+      - ErrImagePull or ImagePullBackOff names the Pod; its image is in .spec.containers[].image, or in kubectl describe pod.
+    recipe: { builder: audit, parts: [] }
+  - id: q4
+    title: Leftovers in ${Q4_NS}-svc
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q4.sh
+        lane: q4
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q4-empty-services
+        description: empty-services.txt lists the Services whose selector matches no Pod
+        run: want=$(for s in $(kubectl -n ${Q4_NS}-svc get services -o json | jq -r '.items[] | select(.spec.selector) | .metadata.name + "=" + (.spec.selector | to_entries | map("\(.key)=\(.value)") | join(","))'); do if [ -z "$(kubectl -n ${Q4_NS}-svc get pods -l "${s#*=}" -o name)" ]; then echo "${s%%=*}"; fi; done | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/empty-services.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 3
+      - type: ssh
+        node: controlplane
+        id: q4-unused-serviceaccounts
+        description: unused-serviceaccounts.txt lists the ServiceAccounts no Pod runs as, without default
+        run: want=$({ used=$(kubectl -n ${Q4_NS}-svc get pods -o json | jq -r '.items[].spec.serviceAccountName' | sort -u); kubectl -n ${Q4_NS}-svc get serviceaccounts -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -vx default | grep -vxF "$used" || true; } | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/unused-serviceaccounts.txt 2>/dev/null | sed 's|.*/||' | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 3
+    hints:
+      - kubectl -n ${Q4_NS}-svc get endpointslices shows which Services have endpoints. A Service without a selector, such as an ExternalName one, has none by design and does not count.
+      - "A selector matches only Pods that carry every one of its labels: kubectl get pods -l <key>=<value>,<key>=<value> tries it."
+      - kubectl -n ${Q4_NS}-svc get pods -o custom-columns=NAME:.metadata.name,SA:.spec.serviceAccountName shows which ServiceAccount each Pod runs as.
+    recipe: { builder: audit, parts: [] }
+  - id: q5
+    title: Ingress routes of ${Q5_NS}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q5.sh
+        lane: q5
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q5-rules
+        description: ingress-rules.txt has one line per path of every Ingress of the team
+        run: want=$(kubectl get ingress -A -o json | jq -r --arg p "${Q5_NS}-" '.items[] | select(.metadata.namespace | startswith($p)) | .spec.rules[] as $r | $r.http.paths[] | "\($r.host) \(.path) \(.backend.service.name):\(.backend.service.port.number // .backend.service.port.name)"' | sort -u); have=$(awk '{$1=$1};1' /opt/course/audit/ingress-rules.txt 2>/dev/null | sed '/^$/d' | sort -u); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 4
+      - type: ssh
+        node: controlplane
+        id: q5-missing
+        description: missing-backends.txt lists the Services that paths route to but that do not exist
+        run: want=$(kubectl get ingress -A -o json | jq -r --arg p "${Q5_NS}-" '.items[] | select(.metadata.namespace | startswith($p)) | .metadata.namespace as $ns | .spec.rules[].http.paths[].backend.service.name | $ns + " " + .' | sort -u | while read -r ns svc; do kubectl -n "$ns" get service "$svc" >/dev/null 2>&1 || echo "$ns/$svc"; done | sort -u); have=$(awk '{$1=$1};1' /opt/course/audit/missing-backends.txt 2>/dev/null | sed '/^$/d' | sort -u); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 2
+    hints:
+      - kubectl get ingress -A shows the hosts, and kubectl describe ingress each path with its backend.
+      - In the spec, each rule has a host and a list of paths; each path has a backend.service with a name and a port.number or port.name. jq can walk both lists at once.
+      - kubectl -n <namespace> get service <name> fails for a Service that does not exist.
+    recipe: { builder: audit, parts: [] }

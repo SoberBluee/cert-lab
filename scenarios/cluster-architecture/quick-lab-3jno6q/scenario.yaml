@@ -1,0 +1,43 @@
+id: quick-lab-3jno6q
+title: "Quick lab: Cluster audit"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 7
+points: 6
+tags: [ custom-columns, jsonpath, images, rbac, auth-can-i, secret, kubelet-config ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ] }
+tasks:
+  - id: q1
+    title: Images used by ${Q1_NS}
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-images
+        description: images.txt lists every image of the team, init containers included, sorted
+        run: want=$(kubectl get pods -A -o json | jq -r --arg p "${Q1_NS}-" '.items[] | select(.metadata.namespace | startswith($p)) | . as $pod | ((.spec.initContainers // []) + .spec.containers)[] | "\($pod.metadata.namespace)/\($pod.metadata.name) \(.image)"' | awk '{print $2}' | sort -u); have=$(awk 'NF {print $1}' /opt/course/audit/images.txt 2>/dev/null); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 3
+      - type: ssh
+        node: controlplane
+        id: q1-pods-using
+        description: pods-using.txt lists the Pods that use busybox:1.37
+        run: want=$(kubectl get pods -A -o json | jq -r --arg p "${Q1_NS}-" '.items[] | select(.metadata.namespace | startswith($p)) | . as $pod | ((.spec.initContainers // []) + .spec.containers)[] | "\($pod.metadata.namespace)/\($pod.metadata.name) \(.image)"' | awk '$2 == "busybox:1.37" {print $1}' | sort -u | xargs); have=$(awk 'NF {print $1}' /opt/course/audit/pods-using.txt 2>/dev/null | sort -u | xargs); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 3
+    hints:
+      - kubectl get pods -A prints the namespace first, so grep can narrow it down; -o json with jq reaches every container.
+      - A Pod lists its images in .spec.containers and in .spec.initContainers. One JSONPath or jq expression can walk both.
+      - sort -u leaves each image once.
+    recipe: { builder: audit, parts: [] }

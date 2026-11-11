@@ -1,0 +1,42 @@
+id: quick-lab-f7uko7
+title: "Quick lab: Resource usage, logs and events"
+domain: troubleshooting
+difficulty: 1
+estimatedMinutes: 6
+points: 6
+tags: [ kubectl-top, logs, sort-by, metrics-server, qos, crictl, events, api-resources ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ perf, telemetry, insights, observe, usage, capacity, watchtower, signals, probe-ns, stats ] }
+tasks:
+  - id: q1
+    title: Errors across replicas
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-errors
+        description: api-errors.txt holds every ERROR line of container api, prefixed with its Pod and container
+        run: f=/opt/course/logs/api-errors.txt; ok=yes; total=0; for p in $(kubectl -n ${Q1_NS} get pods -l app=checkout -o jsonpath='{.items[*].metadata.name}'); do n=$(kubectl -n ${Q1_NS} logs "$p" -c api | grep -c ERROR); total=$((total + n)); [ "$(grep -c "$p.*api.*ERROR" $f 2>/dev/null)" = "$n" ] || ok=no; done; [ "$ok" = yes ] && [ "$total" -gt 0 ] && [ "$(grep -c ERROR $f 2>/dev/null)" = "$total" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 4
+      - type: ssh
+        node: controlplane
+        id: q1-worst
+        description: worst-pod.txt names a Pod with the most errors
+        run: have=$(grep -v '^ *$' /opt/course/logs/worst-pod.txt 2>/dev/null | head -1 | awk '{print $1}'); max=0; for p in $(kubectl -n ${Q1_NS} get pods -l app=checkout -o jsonpath='{.items[*].metadata.name}'); do n=$(kubectl -n ${Q1_NS} logs "$p" -c api | grep -c ERROR); [ "$n" -gt "$max" ] && max=$n; done; [ -n "$have" ] && [ "$(kubectl -n ${Q1_NS} logs "$have" -c api 2>/dev/null | grep -c ERROR)" = "$max" ] && echo right || echo wrong
+        expect: { equals: right }
+        weight: 2
+    hints:
+      - kubectl logs -l <selector> reads every Pod the selector matches, and -c picks one container of each.
+      - "Compare what kubectl logs prints for one Pod by name and by selector: the defaults differ. kubectl logs --help lists the flag that sets how far back to read, and the one that prefixes each line."
+      - "grep -c ERROR counts the lines of one Pod: loop over the Pods, then sort."
+    recipe: { builder: observe, parts: [] }

@@ -1,0 +1,56 @@
+id: quick-lab-rsb7ke
+title: "Quick lab: Workload patterns"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 8
+points: 6
+tags: [ anti-affinity, readinessprobe, tolerations, multi-container, downward-api, static-pod, nodeport, kubectl-debug, ephemeral-containers ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ cdn, gateway-ns, storefront, partners, sandbox, tooling, internal, mobile, portal, staging ] }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ] }
+tasks:
+  - id: q1
+    title: One Pod per node
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - id: q1-spec
+        description: edge-cache asks for 3 replicas of nginx:1.27-alpine
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment edge-cache -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}'
+        expect: { equals: 3 nginx:1.27-alpine }
+        weight: 1
+      - id: q1-running
+        description: exactly 2 Pods run, one on each worker
+        type: kubectl
+        run: echo "$(kubectl -n ${Q1_NS} get pods -l app=edge-cache --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | wc -l) $(kubectl -n ${Q1_NS} get pods -l app=edge-cache --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | xargs)"
+        expect: { matches: "^2 worker-[12] worker-[12]$" }
+        weight: 3
+        retrySeconds: 60
+      - id: q1-pending
+        description: the third Pod stays Pending
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pods -l app=edge-cache --field-selector=status.phase=Pending --no-headers 2>/dev/null | wc -l
+        expect: { equals: "1" }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-rule
+        description: the scheduler refuses the third Pod
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get pods -l app=edge-cache --field-selector=status.phase=Pending -o jsonpath='{.items[0].status.conditions[?(@.type=="PodScheduled")].reason}'
+        expect: { equals: Unschedulable }
+        weight: 1
+        retrySeconds: 60
+    hints:
+      - kubectl create deployment edge-cache --image=nginx:1.27-alpine --replicas=3 --dry-run=client -o yaml gives you a starting manifest with the right label.
+      - Required pod anti-affinity on topologyKey kubernetes.io/hostname keeps two Pods with the same label off one node; a topology spread constraint allows 2 and 1.
+      - The control plane carries a NoSchedule taint, so a Pod without a toleration never lands there.
+    recipe: { builder: workload-patterns, parts: [] }

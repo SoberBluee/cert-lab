@@ -1,0 +1,9 @@
+## Solution
+
+### Question 1: Images used by ${Q1_NS}
+
+```bash
+kubectl get pods -A -o json | jq -r --arg p "${Q1_NS}-" '.items[] | select(.metadata.namespace | startswith($p)) | . as $pod | ((.spec.initContainers // []) + .spec.containers)[] | "\($pod.metadata.namespace)/\($pod.metadata.name) \(.image)"' > /tmp/team-images
+awk '{print $2}' /tmp/team-images | sort -u > /opt/course/audit/images.txt
+awk '$2 == "busybox:1.37" {print $1}' /tmp/team-images | sort -u > /opt/course/audit/pods-using.txt
+```
