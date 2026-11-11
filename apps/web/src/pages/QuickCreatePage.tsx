@@ -12,7 +12,7 @@ import { blocked, initialFields, newKey, newPart, RANDOM_MAX, randomLab, toReque
 import { getFile, SCENARIO_FILE, setFile, stringify } from '../studio/model';
 import { TRACKS, type TrackId } from '../studio/tracks';
 
-const input = 'w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600';
+const input = 'w-full rounded-lg bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600';
 
 const slugify = (s: string) =>
   s
@@ -61,7 +61,7 @@ function PoolEditor({ field, pool, onChange }: { field: RecipeField; pool: strin
               key={o}
               type="button"
               onClick={() => onChange(on ? pool.filter((p) => p !== o) : [...pool, o])}
-              className={`${chip} border ${on ? 'border-violet-600 bg-violet-500/15 text-violet-200' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
+              className={`${chip} ${on ? 'bg-violet-500/20 text-violet-200' : 'bg-zinc-800/50 text-zinc-500 hover:text-zinc-300'}`}
             >
               {o}
             </button>
@@ -79,7 +79,7 @@ function PoolEditor({ field, pool, onChange }: { field: RecipeField; pool: strin
     setDraft('');
   };
   return (
-    <div className="flex flex-wrap items-center gap-1 rounded-md border border-zinc-800 bg-zinc-950 px-1.5 py-1">
+    <div className="flex flex-wrap items-center gap-1 rounded-lg bg-zinc-950 px-1.5 py-1">
       {pool.map((p) => (
         <span key={p} className={`${chip} bg-violet-500/15 text-violet-200`}>
           {p}
@@ -213,7 +213,7 @@ function PartPicker({
                   onAdd(p);
                   setOpen(false);
                 }}
-                className="flex flex-col rounded-lg border border-zinc-800 bg-zinc-950/40 p-2.5 text-left transition enabled:hover:border-sky-700 disabled:opacity-40"
+                className="flex flex-col rounded-lg bg-zinc-950/50 p-2.5 text-left transition enabled:hover:bg-zinc-800/70 disabled:opacity-40"
               >
                 <span className="text-sm text-zinc-100">
                   {p.name} <span className="text-xs text-zinc-500">+{p.points} pt</span>
@@ -230,8 +230,8 @@ function PartPicker({
 
 function PartCard({ p, prefix, onChange, onRemove }: { p: Part; prefix: string; onChange: (p: Part) => void; onRemove: () => void }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950/40">
-      <div className="flex items-center gap-2 border-b border-zinc-800/70 px-3 py-1.5">
+    <div className="rounded-lg bg-zinc-950/50">
+      <div className="flex items-center gap-2 px-3 py-1.5">
         <span className="text-xs text-zinc-500">{prefix}</span>
         <span className="text-sm text-zinc-100">{p.part.name}</span>
         <span className="text-xs text-zinc-500">+{p.part.points} pt</span>
@@ -317,7 +317,7 @@ function TroubleBody({ q, onChange }: { q: Extract<Question, { type: 'troublesho
         <label className="flex items-center gap-2 text-sm text-zinc-300">
           Faults stacked in this question
           <select
-            className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm text-zinc-200"
+            className="rounded-lg bg-zinc-950 px-2 py-1 text-sm text-zinc-200"
             value={layers}
             onChange={(e) => onChange({ ...q, layers: Number(e.target.value) })}
           >
@@ -329,7 +329,7 @@ function TroubleBody({ q, onChange }: { q: Extract<Question, { type: 'troublesho
           </select>
         </label>
       )}
-      <details className="rounded-lg border border-zinc-800 bg-zinc-950/40 text-sm" onToggle={(e) => setReveal(e.currentTarget.open)}>
+      <details className="rounded-lg bg-zinc-950/50 text-sm" onToggle={(e) => setReveal(e.currentTarget.open)}>
         <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-400 select-none">Reveal fault pool (spoiler)</summary>
         <div className="space-y-1.5 px-3 pb-3">
           {spoilers.isLoading && <div className="text-xs text-zinc-500">Loading…</div>}
@@ -364,8 +364,8 @@ function QuestionForm({
 }) {
   const meta = questionMeta(q);
   return (
-    <div id={`question-${q.key}`} className="scroll-mt-20 rounded-xl border border-zinc-800 bg-zinc-900/60">
-      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
+    <div id={`question-${q.key}`} className="scroll-mt-20 rounded-xl bg-zinc-900/70">
+      <div className="flex flex-wrap items-center gap-2 px-5 pt-4 pb-1">
         <span className="text-sm font-semibold text-zinc-300">Question {index + 1}</span>
         <TrackBadge type={q.type} />
         <span className="text-sm text-zinc-100">{meta.name}</span>
@@ -419,7 +419,7 @@ function PickGrid({
           onClick={() => onPick(r.id)}
           disabled={!!disabled[r.id]}
           title={disabled[r.id]}
-          className="flex flex-col rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 text-left transition enabled:hover:border-sky-700 disabled:opacity-40"
+          className="flex flex-col rounded-lg bg-zinc-950/50 p-3 text-left transition enabled:hover:bg-zinc-800/70 disabled:opacity-40"
         >
           <span className="flex items-center gap-2">
             <span className="text-sm font-medium text-zinc-100">{r.name}</span>
@@ -465,7 +465,7 @@ function AddQuestion({
     else if (x.breaksApi && apiTaken) disabled[x.id] = 'A lab can hold only one control plane question.';
     else if (x.takesWorker && workerTaken) disabled[x.id] = 'A lab can hold only one question that takes a worker away.';
   }
-  const label = 'text-[11px] font-semibold tracking-wide text-zinc-500 uppercase';
+  const label = 'text-sm font-medium text-zinc-400';
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-1">
@@ -681,10 +681,10 @@ export function QuickCreatePage({
           <Link to={studioHome} className="text-sm text-zinc-400 hover:text-zinc-100">
             ← Studio
           </Link>
-          <h1 className="mt-2 text-xl font-semibold text-zinc-100">Quick Create</h1>
-          <p className="mt-1 text-sm text-zinc-400">Build a Linux lab question by question once the recipe catalog is ready.</p>
+          <h1 className="mt-2 text-2xl font-semibold text-zinc-100">Quick Create</h1>
+          <p className="mt-1 text-[15px] text-zinc-400">Build a Linux lab question by question once the recipe catalog is ready.</p>
         </div>
-        <div className="mx-auto max-w-md rounded-xl border border-zinc-800 bg-zinc-900/40 px-6 py-10 text-center">
+        <div className="mx-auto max-w-md rounded-xl bg-zinc-900/70 px-6 py-10 text-center">
           <p className="text-sm font-medium text-zinc-200">Linux recipe catalog coming soon</p>
           <p className="mt-2 text-sm text-zinc-500">
             Create and troubleshoot builders for Linux Labs are not available yet. Kubernetes recipes stay under CKA Labs.
@@ -703,10 +703,12 @@ export function QuickCreatePage({
         <Link to={studioHome} className="text-sm text-zinc-400 hover:text-zinc-100">
           ← Studio
         </Link>
-        <h1 className="mt-2 text-xl font-semibold text-zinc-100">Quick Create</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Build a lab question by question. Create questions combine a resource with add-ons and follow-up steps; troubleshooting questions inject a hidden
-          random fault. Setup, checks, hints and solution are generated for you.
+        <h1 className="mt-2 text-2xl font-semibold text-zinc-100">Quick Create</h1>
+        <p
+          className="mt-1 text-[15px] text-zinc-400"
+          title="Create questions combine a resource with add-ons and follow-up steps; troubleshooting questions inject a hidden random fault."
+        >
+          Build a lab question by question; setup, checks, hints and solution are generated for you.
         </p>
       </div>
 
@@ -729,7 +731,7 @@ export function QuickCreatePage({
           <div className="space-y-4">
             <ErrorBanner error={catalog.error} />
             <form
-              className="flex flex-wrap items-center gap-3 rounded-xl border border-violet-900/60 bg-violet-950/20 px-4 py-3"
+              className="flex flex-wrap items-center gap-3 rounded-xl bg-violet-950/30 px-4 py-3"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (catalog.data && !randomize.isPending) randomize.mutate(randomN);
@@ -844,7 +846,7 @@ export function QuickCreatePage({
                     <span>~{p.minutes} min</span>
                   </div>
                   {errors.length > 0 && (
-                    <ul className="space-y-1 rounded-lg border border-red-800 bg-red-950/40 p-3 text-xs text-red-200">
+                    <ul className="space-y-1 rounded-lg bg-red-950/50 p-3 text-xs text-red-200">
                       {errors.map((e, i) => (
                         <li key={i}>{e.message}</li>
                       ))}
@@ -858,7 +860,7 @@ export function QuickCreatePage({
                     </ul>
                   )}
                   {p.questions.map((q, i) => (
-                    <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+                    <div key={i} className="rounded-lg bg-zinc-950/50 p-3">
                       <div className="mb-2 text-sm font-semibold text-zinc-100">
                         Question {i + 1}: {q.title} <span className="font-normal text-zinc-500">({q.points} pt)</span>
                       </div>

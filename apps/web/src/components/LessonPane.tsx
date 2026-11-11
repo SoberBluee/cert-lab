@@ -85,7 +85,7 @@ function Question({
   return (
     <div className="space-y-2">
       {step.explain && <Markdown>{step.explain}</Markdown>}
-      <div className="rounded-md border border-amber-800/50 bg-amber-950/20 px-3 py-2">
+      <div className="rounded-lg bg-amber-950/30 px-3 py-2">
         <Markdown>{q.prompt}</Markdown>
       </div>
       <ol className="space-y-1.5">
@@ -178,7 +178,7 @@ function Step({
               )}
               {hint && step.hint && <p className="text-xs text-zinc-400">{step.hint}</p>}
               {progress?.failure && (
-                <p className="rounded-md border border-amber-800/60 bg-amber-950/30 px-2.5 py-1.5 text-xs text-amber-200">{progress.failure}</p>
+                <p className="rounded-lg bg-amber-950/40 px-2.5 py-1.5 text-xs text-amber-200">{progress.failure}</p>
               )}
               {!progress?.failure && progress?.lastCommand && (
                 <p className="text-xs text-zinc-500">
@@ -260,7 +260,7 @@ export function LessonPane({
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         <ErrorBanner error={error} />
         {complete && (
-          <div className="rounded-lg border border-emerald-800 bg-emerald-950/40 px-3 py-2.5 text-sm text-emerald-200">
+          <div className="rounded-lg bg-emerald-950/50 px-3 py-2.5 text-sm text-emerald-200">
             Lesson complete{tookS !== undefined ? ` in ${formatDuration(tookS)}` : ''}. Reset to drill it again from a clean cluster.
           </div>
         )}

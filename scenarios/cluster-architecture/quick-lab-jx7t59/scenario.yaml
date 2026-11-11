@@ -1,0 +1,43 @@
+id: quick-lab-jx7t59
+title: "Quick lab: Cluster audit"
+domain: cluster-architecture
+difficulty: 2
+estimatedMinutes: 7
+points: 6
+tags: [ custom-columns, jsonpath, images, rbac, auth-can-i, secret, kubelet-config ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ acme, northwind, initech, umbrella, globex, hooli, stark, wayne, wonka, tyrell ] }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ] }
+tasks:
+  - id: q1
+    title: Table of the nodes
+    points: 6
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        lane: q1
+    checks:
+      - type: ssh
+        node: controlplane
+        id: q1-table
+        description: nodes.txt is the table of the nodes, with its header
+        run: want=$(kubectl get nodes -o custom-columns='NAME:.metadata.name,INTERNAL_IP:.status.addresses[?(@.type=="InternalIP")].address,KUBELET:.status.nodeInfo.kubeletVersion,RUNTIME:.status.nodeInfo.containerRuntimeVersion,POD_CIDR:.spec.podCIDR' | awk '{$1=$1};1' | sort); have=$(awk '{$1=$1};1' /opt/course/audit/nodes.txt 2>/dev/null | sort); [ -n "$want" ] && [ "$have" = "$want" ] && echo match || echo differs
+        expect: { equals: match }
+        weight: 4
+      - type: ssh
+        node: controlplane
+        id: q1-script
+        description: nodes.sh prints that table from the live cluster
+        run: f=/opt/course/audit/nodes.sh; want=$(kubectl get nodes -o custom-columns='NAME:.metadata.name,INTERNAL_IP:.status.addresses[?(@.type=="InternalIP")].address,KUBELET:.status.nodeInfo.kubeletVersion,RUNTIME:.status.nodeInfo.containerRuntimeVersion,POD_CIDR:.spec.podCIDR' | awk '{$1=$1};1' | sort); have=$(sudo -u ubuntu -H bash "$f" 2>/dev/null | awk '{$1=$1};1' | sort); grep -q kubectl "$f" 2>/dev/null && [ "$have" = "$want" ] && echo works || echo broken
+        expect: { equals: works }
+        weight: 2
+    hints:
+      - kubectl get nodes -o custom-columns=HEADER:.path,HEADER:.path prints any columns you name.
+      - "kubectl get node <name> -o yaml shows the paths: .status.nodeInfo has the versions, and .spec.podCIDR the Pod range."
+      - '.status.addresses is a list. A JSONPath filter picks one entry: .status.addresses[?(@.type=="InternalIP")].address, single-quoted for the shell.'
+    recipe: { builder: audit, parts: [] }

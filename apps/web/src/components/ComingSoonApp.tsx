@@ -6,8 +6,8 @@ import { SECTIONS } from '../section';
 function ComingSoon({ title }: { title: string }) {
   return (
     <div className="mx-auto max-w-md pt-16 text-center">
-      <h1 className="text-lg font-semibold text-zinc-100">{title}</h1>
-      <p className="mt-2 text-sm text-zinc-400">Coming soon. Switch back to CKA Labs or Linux Labs from the menu at the top left.</p>
+      <h1 className="text-2xl font-semibold text-zinc-100">{title}</h1>
+      <p className="mt-2 text-[15px] text-zinc-400">Coming soon. Switch back to CKA Labs or Linux Labs from the menu at the top left.</p>
     </div>
   );
 }

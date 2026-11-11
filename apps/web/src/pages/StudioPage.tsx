@@ -4,18 +4,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { BlueprintSummary, CkaDomain, CreateScenarioRequest, Domain } from '@cka/schema';
 import { DOMAINS } from '@cka/schema/constants';
 import { api, studioApi } from '../api';
-import { Button, buttonClass, Card, Difficulty, DomainBadge, ErrorBanner } from '../components/ui';
-import { TRACKS } from '../studio/tracks';
+import { Button, Card, ErrorBanner, fieldClass, PageHeader, plural, Section, tileAction, tileClass } from '../components/ui';
+import { DOMAINS as CKA_DOMAINS } from '../focusTopics';
+import { QuickCreateTracks } from '../studio/QuickCreateTracks';
 
-const input = 'w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600';
+const input = 'w-full rounded-lg bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600';
 
-const TOPIC_BLURBS: Record<CkaDomain, string> = {
-  'cluster-architecture': 'RBAC, kubeadm, etcd, upgrades',
-  workloads: 'Deployments, scheduling, config',
-  'services-networking': 'Services, Ingress, NetworkPolicy, DNS',
-  storage: 'PV, PVC, StorageClass, volumes',
-  troubleshooting: 'Broken nodes, pods, control plane',
-};
+const DIFFICULTY = ['', 'Easy', 'Medium', 'Hard'];
+
+const domainShort = (d: Domain) => CKA_DOMAINS.find((x) => x.id === d)?.short ?? d;
 
 type Source = { kind: 'blank' } | { kind: 'blueprint'; bp: BlueprintSummary } | { kind: 'scenario' };
 
@@ -73,6 +70,7 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
   return (
     <div ref={panel} className="scroll-mt-20">
       <Card
+        className="mb-8"
         title={bp ? `New from blueprint: ${bp.name}` : source.kind === 'scenario' ? 'Duplicate a scenario' : 'Blank scenario'}
         actions={
           <Button variant="ghost" onClick={onCancel}>
@@ -84,7 +82,7 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
           <div className="space-y-3">
             {source.kind === 'scenario' && (
               <label className="block text-sm">
-                <span className="mb-1 block text-xs text-zinc-500">Copy from</span>
+                <span className="mb-1 block text-sm text-zinc-500">Copy from</span>
                 <select
                   className={input}
                   value={copyFrom}
@@ -107,7 +105,7 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
               </label>
             )}
             <label className="block text-sm">
-              <span className="mb-1 block text-xs text-zinc-500">Title</span>
+              <span className="mb-1 block text-sm text-zinc-500">Title</span>
               <input
                 className={input}
                 value={title}
@@ -117,7 +115,7 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
               />
             </label>
             <label className="block text-sm">
-              <span className="mb-1 block text-xs text-zinc-500">
+              <span className="mb-1 block text-sm text-zinc-500">
                 Id (folder name){taken && <span className="ml-2 text-red-400">already exists</span>}
               </span>
               <input
@@ -128,10 +126,12 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
               />
             </label>
             <label className="block text-sm">
-              <span className="mb-1 block text-xs text-zinc-500">Topic</span>
+              <span className="mb-1 block text-sm text-zinc-500">Topic</span>
               <select className={input} value={domain} onChange={(e) => setDomain(e.target.value as Domain)}>
                 {DOMAINS.map((d) => (
-                  <option key={d}>{d}</option>
+                  <option key={d} value={d}>
+                    {domainShort(d)}
+                  </option>
                 ))}
               </select>
             </label>
@@ -141,8 +141,8 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
               <>
                 <p className="text-sm text-zinc-400">{bp.description}</p>
                 {bp.knobs.length > 0 && (
-                  <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-                    <div className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Knobs</div>
+                  <div className="space-y-3">
+                    <div className="text-sm font-medium text-zinc-300">Knobs</div>
                     {bp.knobs.map((k) => (
                       <label key={k.variable} className="block text-sm">
                         <span className="mb-1 flex items-center gap-2 text-xs text-zinc-400">
@@ -168,9 +168,7 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
                   : 'Copies every file of the scenario under a new id, as a draft.'}
               </p>
             )}
-            <p className="text-xs text-zinc-500">
-              New scenarios are saved as drafts: hidden from the Scenarios page until you publish them.
-            </p>
+            <p className="text-sm text-zinc-500">Saved as a draft: hidden from Scenarios until you publish it.</p>
           </div>
         </div>
         <ErrorBanner error={create.error} onDismiss={() => create.reset()} />
@@ -184,142 +182,124 @@ function CreatePanel({ source, topic, onCancel }: { source: Source; topic: Domai
   );
 }
 
+/** One line of a list: a name, a quiet note, details on the right and an action that lights up on hover. */
+const rowClass = 'group flex w-full items-baseline gap-4 rounded-lg px-3 py-2.5 text-left transition hover:bg-zinc-900/70';
+const rowAction = 'w-16 shrink-0 text-right text-sm font-medium text-zinc-500 group-hover:text-sky-400';
+
+/** Scenarios listed under Edit a scenario until the list is opened in full or searched. */
+const EDIT_SHOWN = 12;
+
 export function StudioPage() {
   const [topic, setTopic] = useState<Domain | null>(null);
   const [source, setSource] = useState<Source | null>(null);
+  const [search, setSearch] = useState('');
+  const [allShown, setAllShown] = useState(false);
   const blueprints = useQuery({ queryKey: ['blueprints'], queryFn: studioApi.blueprints });
   const scenarios = useQuery({ queryKey: ['scenarios', { drafts: '1' }], queryFn: () => api.scenarios({ drafts: '1' }) });
 
   const shown = useMemo(() => (blueprints.data ?? []).filter((b) => !topic || b.domain === topic), [blueprints.data, topic]);
-  const mine = useMemo(() => (scenarios.data?.scenarios ?? []).filter((s) => !topic || s.domain === topic), [scenarios.data, topic]);
-  const count = (d: Domain) => blueprints.data?.filter((b) => b.domain === d).length ?? 0;
-
-  const card = 'flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 text-left transition hover:border-sky-700';
+  const q = search.trim().toLowerCase();
+  const mine = useMemo(
+    () => (scenarios.data?.scenarios ?? []).filter((s) => (!topic || s.domain === topic) && (!q || `${s.title} ${s.id}`.toLowerCase().includes(q))),
+    [scenarios.data, topic, q],
+  );
+  const topics: { id: Domain | null; label: string }[] = [{ id: null, label: 'All topics' }, ...DOMAINS.map((d) => ({ id: d, label: domainShort(d) }))];
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-zinc-100">Scenario Studio</h1>
-        <p className="mt-1 text-sm text-zinc-400">Build practice labs. Quick Create is the fastest way; the advanced options give you full control.</p>
-      </div>
+    <div className="mx-auto max-w-6xl space-y-14 pb-10">
+      <PageHeader title="Studio" intro="Build practice labs. Quick Create is the fastest way; Advanced gives you full control." />
 
-      <div>
-        <h2 className="text-sm font-semibold tracking-wide text-zinc-400 uppercase">Quick Create</h2>
-        <p className="mt-1 text-sm text-zinc-400">
-          Build a lab question by question and get setup, checks, hints and solution generated. No YAML or scripts. One lab can mix tracks, like a
-          real exam.
-        </p>
-      </div>
-      <div className="grid gap-3 md:grid-cols-3">
-        {TRACKS.map((t) =>
-          t.soon ? (
-            <div key={t.id} className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-5 opacity-60">
-              <div className="flex items-center gap-2">
-                <span className="text-lg font-semibold text-zinc-300">{t.name}</span>
-                <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">soon</span>
-              </div>
-              <p className="mt-1 flex-1 text-sm text-zinc-400">{t.blurb}</p>
-            </div>
-          ) : (
-            <Link
-              key={t.id}
-              to={`/studio/new?track=${t.id}`}
-              className="flex flex-col rounded-xl border border-sky-800 bg-sky-950/30 p-5 transition hover:border-sky-600"
-            >
-              <span className="text-lg font-semibold text-zinc-100">{t.name}</span>
-              <p className="mt-1 flex-1 text-sm text-zinc-300">{t.blurb}</p>
-              <span className={`${buttonClass('primary')} mt-4 self-start`}>Start →</span>
-            </Link>
-          ),
+      <Section title="Quick Create" note="question by question, no YAML or scripts">
+        <QuickCreateTracks base="" />
+      </Section>
+
+      <Section
+        title="Advanced"
+        note="start from a blueprint, then edit everything"
+        actions={
+          <div className="flex flex-wrap rounded-lg bg-zinc-900 p-1" role="radiogroup" aria-label="Topic">
+            {topics.map((t) => (
+              <button
+                key={t.id ?? 'all'}
+                type="button"
+                role="radio"
+                aria-checked={topic === t.id}
+                onClick={() => setTopic(t.id)}
+                className={`rounded-md px-3 py-1.5 text-sm transition ${topic === t.id ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        }
+      >
+        {source && (
+          <CreatePanel
+            key={source.kind === 'blueprint' ? source.bp.id : source.kind}
+            source={source}
+            topic={topic}
+            onCancel={() => setSource(null)}
+          />
         )}
-      </div>
-
-      <h2 className="pt-2 text-sm font-semibold tracking-wide text-zinc-400 uppercase">Advanced</h2>
-
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-        <button
-          onClick={() => setTopic(null)}
-          className={`rounded-xl border p-3 text-left ${topic === null ? 'border-sky-600 bg-sky-950/30' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-700'}`}
-        >
-          <div className="text-sm font-medium text-zinc-100">All topics</div>
-          <div className="mt-1 text-xs text-zinc-500">{blueprints.data?.length ?? 0} blueprints</div>
-        </button>
-        {DOMAINS.map((d) => (
-          <button
-            key={d}
-            onClick={() => setTopic(d)}
-            className={`rounded-xl border p-3 text-left ${topic === d ? 'border-sky-600 bg-sky-950/30' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-700'}`}
-          >
-            <DomainBadge domain={d} />
-            <div className="mt-1.5 text-xs text-zinc-500">{TOPIC_BLURBS[d]}</div>
-            <div className="mt-1 text-xs text-zinc-600">
-              {count(d)} blueprint{count(d) === 1 ? '' : 's'}
-            </div>
+        <ErrorBanner error={blueprints.error} />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <button className={tileClass} onClick={() => setSource({ kind: 'blank' })}>
+            <span className="text-[15px] font-medium text-zinc-100">Blank scenario</span>
+            <span className="mt-1 text-sm text-zinc-500">One question and one check</span>
+            <span className={`${tileAction} mt-auto self-end pt-4`}>New →</span>
           </button>
-        ))}
-      </div>
-
-      {source && (
-        <CreatePanel
-          key={source.kind === 'blueprint' ? source.bp.id : source.kind}
-          source={source}
-          topic={topic}
-          onCancel={() => setSource(null)}
-        />
-      )}
-
-      <ErrorBanner error={blueprints.error} />
-      <section>
-        <h3 className="mb-2 text-sm font-medium text-zinc-300">Start from a blueprint or template, then edit everything</h3>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <button className={`${card} border-dashed`} onClick={() => setSource({ kind: 'blank' })}>
-            <span className="font-semibold text-zinc-100">Blank scenario</span>
-            <span className="mt-1 text-sm text-zinc-400">The scaffold template with one question and one check.</span>
-          </button>
-          <button className={`${card} border-dashed`} onClick={() => setSource({ kind: 'scenario' })}>
-            <span className="font-semibold text-zinc-100">Duplicate a scenario</span>
-            <span className="mt-1 text-sm text-zinc-400">Copy an existing scenario and change it.</span>
+          <button className={tileClass} onClick={() => setSource({ kind: 'scenario' })}>
+            <span className="text-[15px] font-medium text-zinc-100">Duplicate a scenario</span>
+            <span className="mt-1 text-sm text-zinc-500">Copy one and change it</span>
+            <span className={`${tileAction} mt-auto self-end pt-4`}>New →</span>
           </button>
           {shown.map((b) => (
-            <button key={b.id} className={card} onClick={() => setSource({ kind: 'blueprint', bp: b })}>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <DomainBadge domain={b.domain} />
-                <Difficulty level={b.difficulty} />
-              </div>
-              <span className="font-semibold text-zinc-100">{b.name}</span>
-              <span className="mt-1 text-sm text-zinc-400">{b.description}</span>
-              <span className="mt-3 flex flex-wrap gap-1">
-                {b.knobs.map((k) => (
-                  <span key={k.variable} className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[11px] text-violet-300">
-                    {k.label}
-                  </span>
-                ))}
-                {b.taskCount > 1 && (
-                  <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[11px] text-sky-300">{b.taskCount} questions</span>
-                )}
+            <button key={b.id} className={tileClass} onClick={() => setSource({ kind: 'blueprint', bp: b })} title={b.description}>
+              <span className="line-clamp-2 text-[15px] font-medium text-zinc-100">{b.name}</span>
+              <span className="mt-1 text-sm text-zinc-500">
+                {[!topic && domainShort(b.domain), DIFFICULTY[b.difficulty], b.taskCount > 1 && `${b.taskCount} questions`].filter(Boolean).join(' · ')}
               </span>
+              <span className={`${tileAction} mt-auto self-end pt-4`}>Use →</span>
             </button>
           ))}
         </div>
-      </section>
+      </Section>
 
-      <section>
-        <h2 className="mb-2 text-sm font-semibold tracking-wide text-zinc-400 uppercase">Edit a scenario</h2>
-        <div className="divide-y divide-zinc-800 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
-          {mine.map((s) => (
-            <Link key={s.id} to={`/studio/${s.id}`} className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-zinc-800/50">
-              <DomainBadge domain={s.domain} />
-              <span className="text-zinc-100">{s.title}</span>
-              <span className="font-mono text-xs text-zinc-500">{s.id}</span>
-              {s.draft && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300">draft</span>}
-              <span className="ml-auto text-xs text-zinc-500">
-                {s.taskCount} question{s.taskCount === 1 ? '' : 's'} · {s.variableNames.length} variables
-              </span>
-            </Link>
+      <Section
+        title="Edit a scenario"
+        note={plural(mine.length, 'scenario')}
+        actions={
+          <input
+            placeholder="Search scenarios"
+            aria-label="Search scenarios"
+            className={`${fieldClass} w-52`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        }
+      >
+        <ul>
+          {(allShown || q ? mine : mine.slice(0, EDIT_SHOWN)).map((s) => (
+            <li key={s.id}>
+              <Link to={`/studio/${s.id}`} className={rowClass} title={s.id}>
+                <span className="min-w-0 flex-1 truncate text-[15px] text-zinc-100">
+                  {s.title}
+                  {!topic && <span className="ml-2 text-sm text-zinc-500">{domainShort(s.domain)}</span>}
+                  {s.draft && <span className="ml-2 text-sm text-amber-300/80">draft</span>}
+                </span>
+                <span className="hidden shrink-0 text-sm text-zinc-500 tabular-nums sm:inline">{plural(s.taskCount, 'question')}</span>
+                <span className={rowAction}>Edit →</span>
+              </Link>
+            </li>
           ))}
-          {!mine.length && <div className="px-4 py-3 text-sm text-zinc-500">No scenarios for this topic yet.</div>}
-        </div>
-      </section>
+          {!mine.length && <li className="px-3 py-2.5 text-sm text-zinc-500">{q ? 'No scenarios match.' : 'No scenarios for this topic yet.'}</li>}
+        </ul>
+        {!q && mine.length > EDIT_SHOWN && (
+          <button className="mt-3 px-3 text-sm font-medium text-zinc-400 hover:text-zinc-100" onClick={() => setAllShown(!allShown)}>
+            {allShown ? 'Show fewer' : `Show all ${mine.length}`}
+          </button>
+        )}
+      </Section>
     </div>
   );
 }

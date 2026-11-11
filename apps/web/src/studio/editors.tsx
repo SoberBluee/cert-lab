@@ -10,7 +10,7 @@ const LazyCodeEditor = lazy(() => import('../components/CodeEditor'));
 
 export function Code(props: CodeEditorProps) {
   return (
-    <Suspense fallback={<div className="rounded-md border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-500">Loading editor…</div>}>
+    <Suspense fallback={<div className="rounded-lg bg-zinc-950 p-3 text-xs text-zinc-500">Loading editor…</div>}>
       <LazyCodeEditor {...props} />
     </Suspense>
   );
@@ -18,7 +18,7 @@ export function Code(props: CodeEditorProps) {
 
 export type Edit = (fn: (doc: Document) => void) => void;
 
-export const field = 'w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm text-zinc-200 placeholder:text-zinc-600';
+export const field = 'w-full rounded-lg bg-zinc-950 px-2.5 py-1 text-sm text-zinc-200 placeholder:text-zinc-600';
 export const mono = `${field} font-mono text-[12.5px]`;
 
 export function Label({ text, children, className = '' }: { text: string; children: ReactNode; className?: string }) {
@@ -289,7 +289,7 @@ export function CheckEditor({
 
   const result = tryState?.result?.check;
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950/40">
+    <div className="rounded-lg bg-zinc-950/50">
       <div className="flex items-center gap-2 px-3 py-2">
         <button
           className="text-xs text-zinc-500 hover:text-zinc-200"
@@ -324,7 +324,7 @@ export function CheckEditor({
         )}
       </div>
       {(tryState?.error || result) && (
-        <div className="border-t border-zinc-800 px-3 py-2 text-xs">
+        <div className="px-3 py-2 text-xs">
           {tryState?.error ? (
             <span className="text-red-300">{tryState.error}</span>
           ) : (
@@ -350,7 +350,7 @@ export function CheckEditor({
         </div>
       )}
       {open && (
-        <div className="grid gap-3 border-t border-zinc-800 p-3 md:grid-cols-2">
+        <div className="grid gap-3 p-3 md:grid-cols-2">
           <Label text="Id">
             <input className={mono} value={check.id ?? ''} onChange={(e) => set('id', e.target.value)} />
           </Label>

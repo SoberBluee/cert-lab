@@ -8,7 +8,7 @@ import { GradeResultView } from '../components/GradeResultView';
 import { LessonPane } from '../components/LessonPane';
 import { ReferencePanel } from '../components/ReferencePanel';
 import { SPLIT_MIN_PX, SplitHandle, useSplit } from '../components/SplitHandle';
-import { BarButton, Button, buttonClass, Card, ErrorBanner, Markdown, StateBadge } from '../components/ui';
+import { BarButton, Button, buttonClass, ErrorBanner, Markdown, StateBadge } from '../components/ui';
 import { formatDuration, sessionKey, useBlindGrading, useNow, useSession } from '../hooks';
 import { SECTIONS, useSection } from '../section';
 
@@ -93,11 +93,7 @@ function ExamWarning({ session }: { session: SessionView }) {
   if (!level || dismissed === level) return null;
   const critical = level === CRITICAL_MS;
   return (
-    <div
-      className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 text-sm ${
-        critical ? 'border-red-800 bg-red-950/40 text-red-200' : 'border-amber-800 bg-amber-950/40 text-amber-200'
-      }`}
-    >
+    <div className={`flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm ${critical ? 'bg-red-950/50 text-red-200' : 'bg-amber-950/50 text-amber-200'}`}>
       <span>
         {critical ? '5 minutes left.' : '15 minutes left.'} The exam is submitted automatically when the timer reaches 0:00.
       </span>
@@ -143,8 +139,8 @@ function QuestionTabs({ session, active, onSelect }: { session: SessionView; act
             key={t.id}
             title={t.title}
             onClick={() => onSelect(i)}
-            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${
-              i === active ? 'border-sky-700 bg-sky-950/60 text-sky-100' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${
+              i === active ? 'bg-sky-950/70 text-sky-100' : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
             }`}
           >
             {mark && <span className={`h-1.5 w-1.5 rounded-full ${mark}`} />}Q{i + 1} · {t.points} pt
@@ -193,8 +189,8 @@ function TaskBody({ session, active, onOpen }: { session: SessionView; active: n
       {task.ready ? <Markdown>{task.markdown}</Markdown> : <PreparingTask session={session} active={active} onOpen={onOpen} />}
       {session.mode !== 'mock' && task.hintsRevealed.length > 0 && (
         <div>
-          <h2 className="mb-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">
-            Hints ({task.hintsRevealed.length}/{task.hintsTotal})
+          <h2 className="mb-2 text-sm font-semibold text-zinc-300">
+            Hints <span className="font-normal text-zinc-500">{task.hintsRevealed.length} of {task.hintsTotal}</span>
           </h2>
           <ol className="list-decimal space-y-2 pl-5 text-sm text-zinc-300">
             {task.hintsRevealed.map((h, i) => (
@@ -296,13 +292,13 @@ function TaskPane(props: {
         )}
         {!exam && session.solution && (
           <div>
-            <h2 className="mb-2 text-xs font-semibold tracking-wide text-amber-400 uppercase">Solution</h2>
+            <h2 className="mb-2 text-sm font-semibold text-amber-300">Solution</h2>
             <Markdown>{session.solution}</Markdown>
           </div>
         )}
         {!exam && session.lastGrade && (
           <div>
-            <h2 className="mb-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">Result</h2>
+            <h2 className="mb-2 text-sm font-semibold text-zinc-300">Result</h2>
             <GradeResultView result={session.lastGrade} blind={props.blind} />
           </div>
         )}
@@ -331,7 +327,7 @@ function LabStatus({
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
       <header className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 px-2 py-1.5">
-        <h2 className="mr-2 shrink-0 px-2 text-sm font-semibold tracking-wide text-zinc-300 uppercase">
+        <h2 className="mr-2 shrink-0 px-2 text-sm font-semibold text-zinc-300">
           {failed ? 'Session failed' : paused ? `${what === 'exam' ? 'Exam' : 'Lab'} paused` : session.state === 'provisioning' ? 'Preparing the lab' : 'Terminal'}
         </h2>
         <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">{actions}</div>
@@ -376,83 +372,78 @@ function EndedSummary({ ended, onDismiss }: { ended: SessionView; onDismiss: () 
       onDismiss();
     },
   });
+  const heading = playground ? 'Playground ended' : lesson ? 'Lesson ended' : exam ? 'Exam result' : 'Session ended';
+  const footnote =
+    playground || lesson
+      ? undefined
+      : exam && ended.readyAt && ended.endedAt
+        ? `Finished in ${formatDuration((Date.parse(ended.endedAt) - Date.parse(ended.readyAt)) / 1000 - (ended.pausedS ?? 0))}` +
+          (ended.pausedS ? `, paused for ${formatDuration(ended.pausedS)} (not counted)` : '')
+        : [`${ended.hintsRevealed.length} hint${ended.hintsRevealed.length === 1 ? '' : 's'} used`, ended.solutionViewed && 'solution viewed (assisted)']
+            .filter(Boolean)
+            .join(' · ');
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <Card title={playground ? 'Playground ended' : lesson ? 'Lesson ended' : exam ? 'Exam result' : 'Session ended'}>
-        <h2 className="mb-4 text-xl font-semibold text-zinc-100">{ended.scenarioTitle}</h2>
-        {playground ? (
-          <p className="text-sm text-zinc-400">
-            The lab VMs are stopped. A new playground starts from {install ? 'clean nodes' : 'a clean cluster'}.
-          </p>
-        ) : lesson ? (
-          <p className="text-sm text-zinc-400">
-            {ended.learn?.steps.filter((st) => st.done && !st.skipped).length ?? 0} of {lesson.steps.length} steps done. The lab VMs are stopped.
-          </p>
-        ) : (
-          <>
-            {exam && report.data?.review?.attemptId === ended.attemptId ? (
-              <>
-                <AttemptReviewView review={report.data.review} topics={catalog.data?.topics ?? []} />
-                {ended.lastGrade && (
-                  <details className="mt-4">
-                    <summary className="cursor-pointer text-sm font-medium text-zinc-400 hover:text-zinc-200">Every check</summary>
-                    <div className="mt-3">
-                      <GradeResultView result={ended.lastGrade} />
-                    </div>
-                  </details>
-                )}
-              </>
-            ) : ended.lastGrade ? (
-              <GradeResultView result={ended.lastGrade} />
-            ) : (
-              <p className="text-sm text-zinc-400">{exam ? 'The exam ended without being submitted.' : 'The session ended without being graded.'}</p>
-            )}
-            <div className="mt-3 text-xs text-zinc-500">
-              {exam && ended.readyAt && ended.endedAt ? (
-                `exam mode · finished in ${formatDuration((Date.parse(ended.endedAt) - Date.parse(ended.readyAt)) / 1000 - (ended.pausedS ?? 0))}` +
-                (ended.pausedS ? ` · paused for ${formatDuration(ended.pausedS)}, not counted` : '')
-              ) : (
-                <>
-                  {ended.hintsRevealed.length} hint{ended.hintsRevealed.length === 1 ? '' : 's'} used
-                  {ended.solutionViewed && ' · solution viewed (assisted)'}
-                </>
-              )}
-            </div>
-          </>
-        )}
-        <ErrorBanner error={retry.error} />
-        <div className="mt-5 flex gap-2">
-          <Button variant="primary" onClick={() => retry.mutate(kind)} disabled={retry.isPending}>
-            {retry.isPending && retry.variables !== other
-              ? 'Starting…'
-              : playground
-                ? `Start a new ${kind} playground`
-                : lesson
-                  ? 'Drill it again'
-                  : exam
-                    ? 'Retake exam'
-                    : 'Retry scenario'}
-          </Button>
-          {playground && (
-            <Button onClick={() => retry.mutate(other)} disabled={retry.isPending}>
-              {retry.isPending && retry.variables === other ? 'Starting…' : `Start ${other === 'install' ? 'an install' : 'a cluster'} playground instead`}
-            </Button>
-          )}
-          <Link to={lesson ? `${SECTIONS[lesson.track].base}/learn` : aws ? '/aws/scenarios' : '/'} className={buttonClass()}>
-            {lesson ? 'Back to lessons' : 'Back to scenarios'}
-          </Link>
-          {lesson?.track !== 'linux' && (
-            <Link to={aws ? '/aws/history' : '/history'} className={buttonClass('ghost')}>
-              History
-            </Link>
-          )}
-          {exam && !aws && (
-            <Link to="/focus" className={buttonClass('ghost')}>
-              Focus
-            </Link>
+    <div className="mx-auto max-w-4xl space-y-10 pb-10">
+      <header>
+        <div className="text-sm text-zinc-500">{heading}</div>
+        <h1 className="mt-1 text-2xl font-semibold text-zinc-100">{ended.scenarioTitle}</h1>
+        {footnote && <p className="mt-1 text-sm text-zinc-500">{footnote}</p>}
+      </header>
+      {playground ? (
+        <p className="text-[15px] text-zinc-400">The lab VMs are stopped. A new playground starts from {install ? 'clean nodes' : 'a clean cluster'}.</p>
+      ) : lesson ? (
+        <p className="text-[15px] text-zinc-400">
+          {ended.learn?.steps.filter((st) => st.done && !st.skipped).length ?? 0} of {lesson.steps.length} steps done. The lab VMs are stopped.
+        </p>
+      ) : exam && report.data?.review?.attemptId === ended.attemptId ? (
+        <div>
+          <AttemptReviewView review={report.data.review} topics={catalog.data?.topics ?? []} />
+          {ended.lastGrade && (
+            <details className="mt-6">
+              <summary className="cursor-pointer text-sm font-medium text-zinc-400 hover:text-zinc-200">Every check</summary>
+              <div className="mt-3">
+                <GradeResultView result={ended.lastGrade} />
+              </div>
+            </details>
           )}
         </div>
-      </Card>
+      ) : ended.lastGrade ? (
+        <GradeResultView result={ended.lastGrade} />
+      ) : (
+        <p className="text-[15px] text-zinc-400">{exam ? 'The exam ended without being submitted.' : 'The session ended without being graded.'}</p>
+      )}
+      <ErrorBanner error={retry.error} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" onClick={() => retry.mutate(kind)} disabled={retry.isPending}>
+          {retry.isPending && retry.variables !== other
+            ? 'Starting…'
+            : playground
+              ? `Start a new ${kind} playground`
+              : lesson
+                ? 'Drill it again'
+                : exam
+                  ? 'Retake exam'
+                  : 'Retry scenario'}
+        </Button>
+        {playground && (
+          <Button onClick={() => retry.mutate(other)} disabled={retry.isPending}>
+            {retry.isPending && retry.variables === other ? 'Starting…' : `Start ${other === 'install' ? 'an install' : 'a cluster'} playground instead`}
+          </Button>
+        )}
+        <Link to={lesson ? `${SECTIONS[lesson.track].base}/learn` : aws ? '/aws/scenarios' : '/'} className={buttonClass('ghost')}>
+          {lesson ? 'Back to lessons' : 'Back to scenarios'}
+        </Link>
+        {lesson?.track !== 'linux' && (
+          <Link to={aws ? '/aws/history' : '/history'} className={buttonClass('ghost')}>
+            History
+          </Link>
+        )}
+        {exam && !aws && (
+          <Link to="/focus" className={buttonClass('ghost')}>
+            Focus
+          </Link>
+        )}
+      </div>
     </div>
   );
 }

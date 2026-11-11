@@ -23,8 +23,8 @@ const NAV: NavItem[] = [
 function ComingSoon({ title }: { title: string }) {
   return (
     <div className="mx-auto max-w-md pt-16 text-center">
-      <h1 className="text-lg font-semibold text-zinc-100">{title}</h1>
-      <p className="mt-2 mb-5 text-sm text-zinc-400">Coming soon to Linux Labs. For now, drill the commands in Learn.</p>
+      <h1 className="text-2xl font-semibold text-zinc-100">{title}</h1>
+      <p className="mt-2 mb-5 text-[15px] text-zinc-400">Coming soon to Linux Labs. For now, drill the commands in Learn.</p>
       <Link to="/linux/learn" className={buttonClass('primary')}>
         Go to Learn
       </Link>

@@ -5,14 +5,14 @@ import { Button } from './ui';
 export function JobPanel({ job, progress, onDismiss }: { job: StudioJob; progress: { at: string; message: string }[]; onDismiss: () => void }) {
   const tone =
     job.state === 'running'
-      ? 'border-sky-800 bg-sky-950/30'
+      ? 'bg-sky-950/40'
       : job.state === 'passed'
-        ? 'border-emerald-800 bg-emerald-950/30'
-        : 'border-red-800 bg-red-950/30';
+        ? 'bg-emerald-950/40'
+        : 'bg-red-950/40';
   const expectation =
     job.kind === 'dry-run' ? 'setup breaks the cluster, so the grade is below the maximum' : 'the solution makes every check pass';
   return (
-    <div className={`space-y-3 rounded-xl border px-4 py-3 ${tone}`}>
+    <div className={`space-y-3 rounded-xl px-4 py-3 ${tone}`}>
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <span className="font-medium text-zinc-100">
           {job.kind === 'dry-run' ? 'Dry-run' : 'Verify'}: {job.state === 'running' ? 'running…' : job.state}

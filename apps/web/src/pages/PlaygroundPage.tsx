@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { PlaygroundKind } from '@cka/schema';
 import { api } from '../api';
-import { Button, buttonClass, Card, ErrorBanner } from '../components/ui';
+import { Button, ErrorBanner, linkClass, Notice, PageHeader, Toggle } from '../components/ui';
 import { sessionKey, useSession } from '../hooks';
 
 const CLUSTER: [string, string][] = [
@@ -32,23 +32,44 @@ const INSTALL_STEPS = [
   'On each worker: kubeadm join with the command kubeadm prints',
 ];
 
-const code = 'rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-xs text-zinc-200';
+const code = 'rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[13px] text-zinc-200';
 
 function Included({ rows }: { rows: [string, string][] }) {
   return (
-    <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[8rem_1fr]">
+    <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[7rem_1fr]">
       {rows.map(([k, v]) => (
         <div key={k} className="contents">
           <dt className="text-zinc-500">{k}</dt>
-          <dd className="text-zinc-200">{v}</dd>
+          <dd className="text-zinc-300">{v}</dd>
         </div>
       ))}
     </dl>
   );
 }
 
-function Missing({ children }: { children: ReactNode }) {
-  return <div className="rounded-xl border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{children}</div>;
+/** One playground: its name, one line on it and the way to start it; what it has opens on a click. */
+function Option({ title, intro, action, more }: { title: string; intro: ReactNode; action: ReactNode; more: { label: string; body: ReactNode }[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const shown = more.find((m) => m.label === open);
+  return (
+    <section className="rounded-xl bg-zinc-900/70 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-lg font-semibold text-zinc-100">{title}</h2>
+          <p className="mt-1 text-[15px] text-zinc-400">{intro}</p>
+        </div>
+        {action}
+      </div>
+      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm">
+        {more.map((m) => (
+          <Toggle key={m.label} open={open === m.label} onClick={() => setOpen(open === m.label ? null : m.label)}>
+            {m.label}
+          </Toggle>
+        ))}
+      </div>
+      {shown && <div className="mt-4">{shown.body}</div>}
+    </section>
+  );
 }
 
 export function PlaygroundPage() {
@@ -74,86 +95,95 @@ export function PlaygroundPage() {
     (!session || replaces) && (
       <Button
         variant={replaces ? 'secondary' : 'primary'}
-        className="mt-4"
         disabled={start.isPending || built(image) === false}
         onClick={() => {
           if (replaces && !confirm(`End ${replaces.scenarioTitle} and start a fresh ${label}? Everything done on the open one is lost.`)) return;
           start.mutate({ kind, fresh: Boolean(replaces) });
         }}
       >
-        {start.isPending && start.variables?.kind === kind ? 'Starting…' : replaces ? `Start a fresh ${label}` : `Start ${label}`}
+        {start.isPending && start.variables?.kind === kind ? 'Starting…' : replaces ? 'Start fresh' : 'Start'}
       </Button>
     );
 
+  const network =
+    "the nodes sit on the Mac's VM network (192.168.64.0/24 by default): pick a pod CIDR outside it, e.g. 10.244.0.0/16" +
+    (tart ? '. Tart VMs reach each other through the Mac, which drops IP-in-IP: use a VXLAN overlay (Flannel by default, Calico once set to VXLAN)' : '');
+
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold text-zinc-100">Playground</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Free practice with nothing to solve and nothing graded. Reset brings back a clean start.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-10 pb-10">
+      <PageHeader title="Playground" intro="Free practice with nothing to solve and nothing graded." />
 
-      {images.data && !built('bare') && !built('cluster') && (
-        <Missing>
-          The lab images are not built yet. Run <code className={code}>./cka images build</code> once (15-25 minutes).
-        </Missing>
-      )}
-
-      <ErrorBanner error={start.error} />
-      {session && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-sm">
-          <span className="text-zinc-300">
-            {openedAt
-              ? `${session.scenarioTitle} is open since ${openedAt.toDateString() === new Date().toDateString() ? openedAt.toLocaleTimeString() : openedAt.toLocaleString()}, with everything done on it. Go to it to carry on, or start a fresh one below on clean nodes.`
-              : session.mode === 'playground'
-                ? `${session.scenarioTitle} is open.`
-                : `A session for "${session.scenarioTitle}" is open. End it to start a playground.`}
-          </span>
-          <Link to="/session" className={`${buttonClass('primary')} ml-auto`}>
-            Go to session
-          </Link>
+      {(start.error || session || (images.data && !built('bare') && !built('cluster'))) && (
+        <div className="-mt-4 space-y-3">
+          {images.data && !built('bare') && !built('cluster') && (
+            <Notice tone="warn">
+              The lab images are not built yet. Run <code className={code}>./cka images build</code> once (15-25 minutes).
+            </Notice>
+          )}
+          <ErrorBanner error={start.error} />
+          {session && (
+            <Notice
+              action={
+                <Link to="/session" className={linkClass}>
+                  Go to session →
+                </Link>
+              }
+            >
+              {openedAt ? (
+                <>
+                  <span className="font-medium text-zinc-100">{session.scenarioTitle}</span> is open since{' '}
+                  {openedAt.toDateString() === new Date().toDateString() ? openedAt.toLocaleTimeString() : openedAt.toLocaleString()}, with everything
+                  done on it.
+                </>
+              ) : session.mode === 'playground' ? (
+                <>
+                  <span className="font-medium text-zinc-100">{session.scenarioTitle}</span> is open.
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-zinc-100">{session.scenarioTitle}</span> is open. End it to start a playground.
+                </>
+              )}
+            </Notice>
+          )}
         </div>
       )}
 
-      <Card title="Cluster">
-        <p className="mb-4 text-sm text-zinc-400">A healthy 3-node cluster. Break it, fix it, try things out.</p>
-        <Included rows={CLUSTER} />
-        {startButton('cluster', 'cluster playground', 'cluster')}
-      </Card>
+      <Option
+        title="Cluster"
+        intro="A healthy 3-node cluster. Break it, fix it, try things out."
+        action={startButton('cluster', 'cluster playground', 'cluster')}
+        more={[{ label: "What's on it", body: <Included rows={CLUSTER} /> }]}
+      />
 
-      <Card title="Install a cluster">
-        <p className="mb-4 text-sm text-zinc-400">
-          Three Ubuntu VMs with nothing of Kubernetes on them, set up like exam nodes. Build a kubeadm cluster from scratch, without the docs. Done when{' '}
-          <code className={code}>kubectl get nodes</code> shows all three Ready.
-        </p>
-        <Included
-          rows={[
-            ...INSTALL,
-            [
-              'Network',
-              "the nodes sit on the Mac's VM network (192.168.64.0/24 by default): pick a pod CIDR outside it, e.g. 10.244.0.0/16" +
-                (tart ? '. Tart VMs reach each other through the Mac, which drops IP-in-IP: use a VXLAN overlay (Flannel by default, Calico once set to VXLAN)' : ''),
-            ],
-          ]}
-        />
-        <details className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/40 text-sm">
-          <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-400 select-none">The steps, if you get stuck (no commands)</summary>
-          <ol className="list-decimal space-y-1 px-3 pb-3 pl-8 text-zinc-300">
-            {INSTALL_STEPS.map((s) => (
-              <li key={s}>{s}</li>
-            ))}
-          </ol>
-        </details>
-        {images.data && built('bare') && !built('os') && (
-          <div className="mt-4">
-            <Missing>
-              The plain Ubuntu image is not built yet. Run <code className={code}>./cka images os</code> once (about 5 minutes, no rebuild).
-            </Missing>
-          </div>
-        )}
-        {startButton('install', 'install playground', 'os')}
-      </Card>
+      <Option
+        title="Install a cluster"
+        intro={
+          <>
+            Three bare Ubuntu VMs. Build a kubeadm cluster from scratch until <code className={code}>kubectl get nodes</code> shows all three Ready.
+          </>
+        }
+        action={startButton('install', 'install playground', 'os')}
+        more={[
+          { label: "What's on it", body: <Included rows={[...INSTALL, ['Network', network]]} /> },
+          {
+            label: 'The steps, if you get stuck',
+            body: (
+              <ol className="list-decimal space-y-1.5 pl-5 text-sm text-zinc-300">
+                {INSTALL_STEPS.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ol>
+            ),
+          },
+        ]}
+      />
+      {images.data && built('bare') && !built('os') && (
+        <Notice tone="warn">
+          The plain Ubuntu image for Install a cluster is not built yet. Run <code className={code}>./cka images os</code> once (about 5 minutes, no
+          rebuild).
+        </Notice>
+      )}
     </div>
   );
 }

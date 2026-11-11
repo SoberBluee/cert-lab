@@ -162,7 +162,7 @@ export function TerminalPanel({
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
       <header className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 px-2 py-1.5">
-        <h2 className="mr-2 shrink-0 px-2 text-sm font-semibold tracking-wide text-zinc-300 uppercase">Terminal</h2>
+        <h2 className="mr-2 shrink-0 px-2 text-sm font-semibold text-zinc-300">Terminal</h2>
         {nodes.map((n) => (
           <button
             key={n}

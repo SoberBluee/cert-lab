@@ -1,7 +1,8 @@
 import type { ComponentType } from 'react';
 import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { Shell, type NavItem } from '../components/Shell';
-import { SimShell, card } from './components';
+import { PageHeader, Section } from '../components/ui';
+import { SimShell } from './components';
 import { loadProgress, revisitIds } from './progress';
 import { CachingLab } from './sims/CachingLab';
 import { CdnLab } from './sims/CdnLab';
@@ -25,9 +26,9 @@ const SIMS: Record<SystemTopicId, ComponentType> = {
   proxy: ProxyLab,
 };
 
-const GROUPS: { id: TopicGroup; title: string; blurb: string }[] = [
-  { id: 'networking', title: 'Networking', blurb: 'How a request finds its way: addresses, layers, transports and names.' },
-  { id: 'building-blocks', title: 'Building blocks', blurb: 'The parts large systems are made of. Caching, CDN and Proxy are live stages: watch every request, break things, and pass missions.' },
+const GROUPS: { id: TopicGroup; title: string; note: string }[] = [
+  { id: 'networking', title: 'Networking', note: 'how a request finds its way' },
+  { id: 'building-blocks', title: 'Building blocks', note: 'the parts large systems are made of' },
 ];
 
 const NAV: NavItem[] = [{ to: '/system/learn', label: 'Learn' }];
@@ -40,77 +41,78 @@ const NAV: NavItem[] = [{ to: '/system/learn', label: 'Learn' }];
 const PREVIEWS: { id: string; title: string; blurb: string; Page: ComponentType }[] = [];
 
 
+const sourceLink = 'text-zinc-400 underline decoration-zinc-700 underline-offset-2 hover:text-zinc-200';
+const rowClass = 'group flex items-baseline gap-4 rounded-lg px-3 py-2.5 transition hover:bg-zinc-900/70';
+const rowAction = 'w-16 shrink-0 text-right text-sm font-medium text-zinc-500 group-hover:text-indigo-300';
+
 function TopicIndex() {
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-zinc-100">System Labs</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          System design foundations you can poke: predict what will happen, run the simulation, inspect the trace, then answer from memory. No VMs — everything runs locally and deterministically in your browser.
-        </p>
-        <p className="mt-2 text-xs text-zinc-500">
-          Curriculum follows{' '}
-          <a href="https://github.com/karanpratapsingh/system-design" target="_blank" rel="noreferrer" className="text-sky-400 hover:text-sky-300">
-            Karan Pratap Singh, System Design ↗
-          </a>{' '}
-          and the{' '}
-          <a href="https://github.com/donnemartin/system-design-primer" target="_blank" rel="noreferrer" className="text-sky-400 hover:text-sky-300">
-            System Design Primer ↗
-          </a>
-          ; explanations and simulations here are original.
-        </p>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-14 pb-10">
+      <PageHeader title="System Labs" intro="System design foundations you can poke: predict, simulate, then answer from memory. Runs in your browser." />
       {GROUPS.map((g) => (
-        <section key={g.id} aria-label={g.title} className="space-y-2">
-          <div>
-            <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">{g.title}</h2>
-            <p className="text-xs text-zinc-500">{g.blurb}</p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+        <Section key={g.id} title={g.title} note={g.note}>
+          <ul>
             {TOPICS.filter((t) => t.group === g.id).map((t) => {
-              const n = TOPICS.indexOf(t) + 1;
               const p = loadProgress(t.id);
               const revisit = revisitIds(p);
               const missions = t.missions ?? [];
               const passed = missions.filter((m) => p.missions[m.id]).length;
               const started = !!p.prediction || passed > 0;
               return (
-                <Link key={t.id} to={`/system/learn/${t.id}`} className={`${card} group block transition hover:border-indigo-700`}>
-                  <div className="text-xs tracking-wide text-indigo-400 uppercase">
-                    {n} · {t.level} · ~{t.estimatedMinutes} min{missions.length > 0 && ' · live stage'}
-                  </div>
-                  <div className="mt-1 font-semibold text-zinc-100 group-hover:text-indigo-200">{t.title}</div>
-                  <p className="mt-1 text-sm text-zinc-400">{t.short}</p>
-                  <div className="mt-3 text-xs text-zinc-500">
-                    {p.completed ? <span className="text-emerald-400">Completed</span> : started ? 'In progress' : 'Not started'}
-                    {missions.length > 0 && (
-                      <span className="ml-2">
-                        {passed} of {missions.length} missions
+                <li key={t.id}>
+                  <Link to={`/system/learn/${t.id}`} className={rowClass} title={t.short}>
+                    <span className="w-6 shrink-0 text-sm text-zinc-500 tabular-nums">{TOPICS.indexOf(t) + 1}</span>
+                    <span className="min-w-0 flex-1 truncate text-[15px] text-zinc-100">
+                      {t.title}
+                      <span className="ml-2 text-sm text-zinc-500">
+                        {t.level} · ~{t.estimatedMinutes} min{missions.length > 0 && ' · live stage'}
                       </span>
-                    )}
-                    {revisit.length > 0 && <span className="ml-2 text-amber-300">{revisit.length} to revisit</span>}
-                  </div>
-                </Link>
+                    </span>
+                    <span className="hidden shrink-0 text-sm sm:inline">
+                      {revisit.length > 0 && <span className="mr-3 text-amber-300">{revisit.length} to revisit</span>}
+                      {p.completed ? (
+                        <span className="text-emerald-400">Completed</span>
+                      ) : missions.length > 0 && passed > 0 ? (
+                        <span className="text-zinc-400">
+                          {passed} of {missions.length} missions
+                        </span>
+                      ) : started ? (
+                        <span className="text-zinc-400">In progress</span>
+                      ) : null}
+                    </span>
+                    <span className={rowAction}>Open →</span>
+                  </Link>
+                </li>
               );
             })}
-          </div>
-        </section>
+          </ul>
+        </Section>
       ))}
       {import.meta.env.DEV && PREVIEWS.length > 0 && (
-        <section aria-label="In progress" className="space-y-2">
-          <div>
-            <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">In progress</h2>
-            <p className="text-xs text-zinc-500">Previews of lessons being built. Only shown by the dev server.</p>
-          </div>
-          {PREVIEWS.map((p) => (
-            <Link key={p.id} to={`/system/preview/${p.id}`} className={`${card} group block border-dashed transition hover:border-indigo-700`}>
-              <div className="text-xs tracking-wide text-amber-400 uppercase">Preview · visual check-in</div>
-              <div className="mt-1 font-semibold text-zinc-100 group-hover:text-indigo-200">{p.title}</div>
-              <p className="mt-1 text-sm text-zinc-400">{p.blurb}</p>
-            </Link>
-          ))}
-        </section>
+        <Section title="In progress" note="previews, shown by the dev server only">
+          <ul>
+            {PREVIEWS.map((p) => (
+              <li key={p.id}>
+                <Link to={`/system/preview/${p.id}`} className={rowClass} title={p.blurb}>
+                  <span className="min-w-0 flex-1 truncate text-[15px] text-zinc-100">{p.title}</span>
+                  <span className={rowAction}>Open →</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Section>
       )}
+      <p className="text-sm text-zinc-500">
+        Curriculum follows{' '}
+        <a href="https://github.com/karanpratapsingh/system-design" target="_blank" rel="noreferrer" className={sourceLink}>
+          Karan Pratap Singh, System Design
+        </a>{' '}
+        and the{' '}
+        <a href="https://github.com/donnemartin/system-design-primer" target="_blank" rel="noreferrer" className={sourceLink}>
+          System Design Primer
+        </a>
+        ; explanations and simulations here are original.
+      </p>
     </div>
   );
 }
@@ -122,8 +124,10 @@ function TopicPage() {
   const Sim = SIMS[topic.id];
   return (
     <div>
-      <Link to="/system/learn" className="text-sm text-zinc-400 hover:text-zinc-100">← All topics</Link>
-      <div className="mt-3">
+      <Link to="/system/learn" className="text-sm text-zinc-400 hover:text-zinc-100">
+        ← All topics
+      </Link>
+      <div className="mt-6">
         <SimShell topic={topic}>
           <Sim />
         </SimShell>

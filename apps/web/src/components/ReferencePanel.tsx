@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Card } from './ui';
 
 const DOCS = 'https://kubernetes.io/docs';
 
@@ -92,7 +91,8 @@ export function ReferencePanel({ aws = false }: { aws?: boolean }) {
     ? `https://docs.aws.amazon.com/search/doc-search.html?searchPath=documentation&searchQuery=`
     : 'https://kubernetes.io/search/?q=';
   return (
-    <Card title="Docs">
+    <section>
+      <h2 className="mb-2 text-sm font-semibold text-zinc-300">Docs</h2>
       <form
         className="mb-3"
         onSubmit={(e) => {
@@ -104,7 +104,7 @@ export function ReferencePanel({ aws = false }: { aws?: boolean }) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder={aws ? 'Search docs.aws.amazon.com' : 'Search kubernetes.io'}
-          className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-sm placeholder:text-zinc-600"
+          className="w-full rounded-lg bg-zinc-950 px-3 py-1.5 text-sm placeholder:text-zinc-600"
         />
       </form>
       <div className="space-y-3">
@@ -123,6 +123,6 @@ export function ReferencePanel({ aws = false }: { aws?: boolean }) {
           </div>
         ))}
       </div>
-    </Card>
+    </section>
   );
 }

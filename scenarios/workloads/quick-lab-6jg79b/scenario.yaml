@@ -1,0 +1,59 @@
+id: quick-lab-6jg79b
+title: "Quick lab: Changes that revert"
+domain: workloads
+difficulty: 2
+estimatedMinutes: 8
+points: 7
+tags: [ troubleshooting, deployment, managed-fields, hpa, cronjob ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 30
+draft: true
+variables:
+  Q1_NS: { oneOf: [ reports, marketing, landing, campaigns, promo, newsletter, seasonal, traffic, surge, events-ns ] }
+  Q1_APP: { oneOf: [ landing, promo-web, campaign-api, banner, signup, coupon, teaser, mailer, tracker, funnel ] }
+  Q1_FAULT: { oneOf: [ hpa-pins-replicas, cronjob-reverts ], hidden: true }
+tasks:
+  - id: q1
+    title: Deployment ${Q1_APP} will not stay scaled
+    points: 7
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+        timeoutSeconds: 400
+        lane: q1
+    checks:
+      - id: q1-replicas
+        description: ${Q1_APP} has 4 ready replicas
+        type: kubectl
+        run: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+        expect: { equals: 4/4 }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-stays
+        description: ${Q1_APP} has kept 4 replicas for more than a minute
+        type: kubectl
+        run: d=$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o json); t=$(echo "$d" | jq -r '[.metadata.managedFields[] | select(.fieldsV1."f:spec"."f:replicas") | .time] | max'); age=$(( $(date +%s) - $(date -d "$t" +%s) )); [ "$(echo "$d" | jq .spec.replicas)" = 4 ] && [ "$age" -ge 75 ] && echo stays || echo "last changed ${age}s ago"
+        expect: { equals: stays }
+        weight: 2
+        retrySeconds: 105
+      - type: ssh
+        node: controlplane
+        id: q1-culprit
+        description: ${Q1_APP}.txt names what kept changing the Deployment
+        run: "[ \"$(tr -d '[:space:]' < /opt/course/drift/${Q1_APP}.txt 2>/dev/null | tr 'A-Z' 'a-z' | sed -E 's/^horizontalpodautoscalers?/hpa/; s/^cronjobs?/cronjob/')\" = \"$(tr -d '[:space:]' < /var/tmp/cka-q1.culprit | tr 'A-Z' 'a-z' | sed -E 's/^horizontalpodautoscalers?/hpa/; s/^cronjobs?/cronjob/')\" ] && echo right || echo wrong"
+        expect: { equals: right }
+        weight: 2
+      - id: q1-same-deployment
+        description: ${Q1_APP} was not recreated, and its Pod template is unchanged
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o jsonpath='{.metadata.uid} {.spec.template.spec}')\" = \"$(cat /var/tmp/cka-q1.deploy)\" ] && echo same || echo changed"
+        expect: { equals: same }
+        weight: 1
+    hints:
+      - "Scale it up and watch: kubectl -n ${Q1_NS} get deployment ${Q1_APP} -w. Falling back within seconds points at a controller, and after a minute or so at something on a timer."
+      - kubectl -n ${Q1_NS} get deployment ${Q1_APP} -o yaml --show-managed-fields names who last wrote each field, how, and when.
+      - "kubectl -n ${Q1_NS} describe deployment ${Q1_APP}: the scaling Events show when it changed."
+      - "Look beyond namespace ${Q1_NS}: whatever does this may live elsewhere. Add -A to kubectl get, and see who holds rights over Deployments here: kubectl -n ${Q1_NS} get rolebindings -o wide."
+    recipe: { category: drift }

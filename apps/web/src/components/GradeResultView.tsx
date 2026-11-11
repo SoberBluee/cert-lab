@@ -3,9 +3,9 @@ import { formatDuration } from '../hooks';
 
 function CheckRow({ c }: { c: CheckResult }) {
   return (
-    <li className="rounded-lg border border-zinc-800 bg-zinc-950/60">
-      <details>
-        <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2">
+    <li>
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center gap-3 rounded-lg px-2 py-1.5 transition hover:bg-zinc-800/50 group-open:bg-zinc-800/40">
           <span
             className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
               c.passed ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'
@@ -14,11 +14,11 @@ function CheckRow({ c }: { c: CheckResult }) {
             {c.passed ? '✓' : '✗'}
           </span>
           <span className="flex-1 text-sm text-zinc-200">{c.description}</span>
-          <span className="text-xs text-zinc-500">
+          <span className="text-xs text-zinc-500 tabular-nums">
             {c.passed ? c.weight : 0}/{c.weight} pt
           </span>
         </summary>
-        <div className="border-t border-zinc-800 px-3 py-2">
+        <div className="mt-1 mb-2 ml-10 rounded-lg bg-zinc-950/60 px-3 py-2">
           {!c.passed && <div className="mb-2 text-xs text-red-300">{c.detail}</div>}
           <pre className="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap text-zinc-400">{c.output}</pre>
         </div>
@@ -71,7 +71,7 @@ export function GradeResultView({ result, blind = false }: { result: GradeResult
                   {t.score}/{t.maxScore} pt
                 </span>
               </div>
-              <ul className="space-y-1.5">
+              <ul className="space-y-0.5">
                 {t.checkIds.map((id) => {
                   const c = byId.get(id);
                   return c && <CheckRow key={id} c={c} />;
@@ -81,7 +81,7 @@ export function GradeResultView({ result, blind = false }: { result: GradeResult
           ))}
         </div>
       ) : (
-        <ul className="space-y-1.5">
+        <ul className="space-y-0.5">
           {result.checks.map((c) => (
             <CheckRow key={c.id} c={c} />
           ))}

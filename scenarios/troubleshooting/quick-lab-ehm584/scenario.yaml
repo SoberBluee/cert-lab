@@ -1,0 +1,101 @@
+id: quick-lab-ehm584
+title: "Quick lab: Ready but broken nodes"
+domain: troubleshooting
+difficulty: 3
+estimatedMinutes: 12
+points: 10
+tags: [ troubleshooting, node, kubelet, containerd, cni, iptables, diskpressure ]
+base: cluster
+nodes: { controlPlane: 1, workers: 2 }
+context: kubernetes-admin@kubernetes
+settleSeconds: 60
+draft: true
+variables:
+  Q1_NS: { oneOf: [ ops, fleet-ops, oncall, sre-tools, edge-ops, night-shift, triage, runbook, pager, hosts ] }
+  Q1_FAULT: { oneOf: [ kubelet-port-blocked, cluster-dns-wrong, sandbox-image-wrong, cni-binary-missing, overlay-blocked, disk-full, node-object-deleted ], hidden: true }
+  Q1_NODE: { oneOf: [ worker-1, worker-2 ], hidden: true }
+solution:
+  - node: worker-1
+    script: setup/q1-solution.sh
+  - node: worker-2
+    script: setup/q1-solution-2.sh
+  - node: controlplane
+    script: solution.sh
+    timeoutSeconds: 600
+tasks:
+  - id: q1
+    title: Ready, but one worker misbehaves
+    points: 10
+    setup:
+      - node: controlplane
+        script: setup/q1.sh
+      - node: worker-1
+        script: setup/q1-2.sh
+      - node: worker-2
+        script: setup/q1-3.sh
+      - node: controlplane
+        script: setup/q1-4.sh
+        timeoutSeconds: 300
+    checks:
+      - id: q1-all-ready
+        description: all 3 nodes are listed and Ready
+        type: kubectl
+        run: kubectl get nodes --no-headers | awk '{print $2}' | sort | uniq -c | xargs
+        expect: { equals: 3 Ready }
+        weight: 1
+        retrySeconds: 90
+      - id: q1-no-pressure
+        description: no node reports pressure or carries a pressure taint
+        type: kubectl
+        run: kubectl get nodes -o jsonpath='{range .items[*]}{range .status.conditions[?(@.status=="True")]}{.type}{"\n"}{end}{range .spec.taints[*]}{.key}{"\n"}{end}{end}' | grep -ci pressure || true
+        expect: { equals: "0" }
+        weight: 1
+        retrySeconds: 90
+      - id: q1-fleet
+        description: fleet-check has a ready Pod on both workers
+        type: kubectl
+        run: echo "$(kubectl -n ${Q1_NS} get daemonset fleet-check -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}') $(kubectl -n ${Q1_NS} get pods -l app=fleet-check --field-selector=status.phase=Running -o jsonpath='{.items[*].spec.nodeName}' | tr ' ' '\n' | sort -u | xargs)"
+        expect: { equals: 2/2 worker-1 worker-2 }
+        weight: 2
+        retrySeconds: 120
+      - id: q1-kubelet-api
+        description: the API server reaches the kubelet on every worker
+        type: kubectl
+        run: for n in worker-1 worker-2; do kubectl get --raw "/api/v1/nodes/$n/proxy/healthz" 2>/dev/null || echo "$n unreachable"; echo; done | grep . | sort -u | xargs
+        expect: { equals: ok }
+        weight: 1
+        retrySeconds: 60
+      - id: q1-mesh
+        description: the fleet-check Pods reach each other across the workers
+        type: kubectl
+        run: pods=$(kubectl -n ${Q1_NS} get pods -l app=fleet-check --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'); ips=$(kubectl -n ${Q1_NS} get pods -l app=fleet-check --field-selector=status.phase=Running -o jsonpath='{.items[*].status.podIP}'); if [ "$(echo $ips | wc -w)" != 2 ]; then echo "expected 2 Pods"; else for p in $pods; do for ip in $ips; do kubectl -n ${Q1_NS} exec "$p" -- wget -qO- -T 3 "http://$ip:8080/" 2>/dev/null | grep -q fleet-ok && echo ok || echo "$p cannot reach $ip"; done; done | sort -u | xargs; fi
+        expect: { equals: ok }
+        weight: 2
+        retrySeconds: 60
+      - id: q1-unchanged
+        description: DaemonSet fleet-check was not changed or recreated
+        type: kubectl
+        run: "[ \"$(kubectl -n ${Q1_NS} get daemonset fleet-check -o jsonpath='{.metadata.uid} {.spec.template.spec}')\" = \"$(cat /var/tmp/cka-q1.fleet)\" ] && echo same || echo changed"
+        expect: { equals: same }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-report-worker
+        description: worker.txt names the broken worker
+        run: "[ \"$(tr -d '[:space:]' < /opt/course/degraded/worker.txt 2>/dev/null)\" = \"$(cat /var/tmp/cka-q1.worker)\" ] && echo right || echo wrong"
+        expect: { equals: right }
+        weight: 1
+      - type: ssh
+        node: controlplane
+        id: q1-report-cause
+        description: cause.txt says what was at fault
+        run: "[ \"$(tr -s '[:space:]' '\\n' < /opt/course/degraded/cause.txt 2>/dev/null | grep . | sort -u | xargs)\" = \"$(sort -u /var/tmp/cka-q1.cause | xargs)\" ] && echo right || echo wrong"
+        expect: { equals: right }
+        weight: 1
+    hints:
+      - "Start from what fails: kubectl -n ${Q1_NS} get pods -o wide, then kubectl -n ${Q1_NS} describe pod and kubectl -n ${Q1_NS} logs for a Pod on each worker. Read the whole error, with the address and the reason it gives."
+      - "kubectl describe node <node> for each worker: Conditions, Taints and Events can differ even when both say Ready. Check that kubectl get nodes lists what you expect."
+      - "Test one layer at a time: can a Pod on one worker reach a Pod on the other by IP? Can it resolve a name? Does a new Pod start at all?"
+      - 'On the worker: journalctl -u kubelet -u containerd --since "10 min ago". Compare its files, disks and running services (systemctl list-units --type=service --state=running) with the healthy worker.'
+      - "If something you remove comes back, a process on the node puts it back: find that too."
+    recipe: { category: degraded }

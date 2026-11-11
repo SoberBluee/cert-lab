@@ -1,18 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { FocusMode, LabTopic } from '@cka/schema';
 import { api, studioApi } from '../api';
 import { AttemptReviewView } from '../components/AttemptReviewView';
-import { Button, ErrorBanner } from '../components/ui';
+import { Button, ErrorBanner, linkClass, percentClass, plural, Section } from '../components/ui';
 import { DOMAINS, domainSections, minutesOver, recommendations, SLOW_POINTS, topicRows, type TopicRow } from '../focusTopics';
 import { useHiddenTopics } from '../hooks';
 import { WEAK_SPOTS } from '../quickRandom';
 
-const percentClass = (pct?: number) =>
-  pct === undefined ? 'text-zinc-500' : pct >= 100 ? 'text-emerald-400' : pct >= 66 ? 'text-amber-300' : 'text-red-400';
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const scenariosNote = (row: TopicRow) => (row.scenarioCount ? plural(row.scenarioCount, 'scenario') : 'Quick lab only');
 
 /** Blind spots are sorted by domain weight; the rest are in the domain sections. */
@@ -22,24 +18,6 @@ const MODES: { id: FocusMode; label: string; title: string }[] = [
   { id: 'all', label: 'All attempts', title: 'Practice and exam mode' },
   { id: 'exam', label: 'Exam mode only', title: 'Only attempts in exam mode: no hints, no solution, one submit' },
 ];
-
-const linkClass = 'shrink-0 text-sm font-medium text-sky-400 hover:text-sky-300';
-
-/** A part of the page: a heading, optional controls, and its content, with no box around it. */
-function Section({ title, note, actions, children }: { title: string; note?: ReactNode; actions?: ReactNode; children: ReactNode }) {
-  return (
-    <section>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-zinc-100">
-          {title}
-          {note && <span className="ml-2 text-sm font-normal text-zinc-500">{note}</span>}
-        </h2>
-        {actions}
-      </div>
-      {children}
-    </section>
-  );
-}
 
 /** The latest mock, or another attempt picked from the menu, question by question. */
 function ExamReview({ topics }: { topics: LabTopic[] }) {

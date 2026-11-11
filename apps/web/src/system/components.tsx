@@ -2,9 +2,9 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { isComplete, loadProgress, missionsNeeded, revisitIds, saveProgress, type TopicProgress } from './progress';
 import type { QuizQuestion, SystemTopic } from './types';
 
-export const card = 'rounded-xl border border-zinc-800 bg-zinc-900/60 p-4';
-export const selectCls = 'rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-200';
-export const btnCls = 'rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50';
+export const card = 'rounded-xl bg-zinc-900/70 p-4';
+export const selectCls = 'rounded-lg bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200';
+export const btnCls = 'rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50';
 
 /** Step / play / pause / reset over `total` steps. Reduced-motion: Play advances one step at a time manually. */
 export function useStepper(total: number) {
@@ -219,15 +219,17 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
     <ProgressContext.Provider value={{ progress, update }}>
     <div className={`mx-auto space-y-5 ${missions.length ? 'max-w-6xl' : 'max-w-4xl'}`}>
       <div>
-        <p className="text-xs tracking-wide text-indigo-400 uppercase">
-          System Labs · {topic.level} · ~{topic.estimatedMinutes} min
-        </p>
-        <h1 className="mt-1 text-xl font-semibold text-zinc-100">{topic.title}</h1>
-        <p className="mt-1 text-sm text-zinc-400">{topic.introduction}</p>
+        <h1 className="text-2xl font-semibold text-zinc-100">
+          {topic.title}
+          <span className="ml-3 text-sm font-normal text-zinc-500">
+            {topic.level} · ~{topic.estimatedMinutes} min
+          </span>
+        </h1>
+        <p className="mt-1 text-[15px] text-zinc-400">{topic.introduction}</p>
       </div>
 
       <div className={card}>
-        <h2 className="text-sm font-semibold text-zinc-200">By the end you can</h2>
+        <h2 className="text-base font-semibold text-zinc-200">By the end you can</h2>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-300">
           {topic.learningObjectives.map((o) => (
             <li key={o}>{o}</li>
@@ -246,7 +248,7 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
       </div>
 
       <section aria-label="Predict" className="space-y-2">
-        <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">1 · Predict</h2>
+        <h2 className="text-lg font-semibold text-zinc-100">1 · Predict</h2>
         <QuestionCard
           q={topic.prediction}
           saved={progress.prediction}
@@ -256,14 +258,14 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
       </section>
 
       <section aria-label="Simulate" className="space-y-3">
-        <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">2 · Simulate</h2>
+        <h2 className="text-lg font-semibold text-zinc-100">2 · Simulate</h2>
         <fieldset disabled={!predictionDone} className={!predictionDone ? 'pointer-events-none opacity-50' : undefined}>
           {children}
         </fieldset>
       </section>
 
       <section aria-label="Recall" className="space-y-3">
-        <h2 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">3 · Recall</h2>
+        <h2 className="text-lg font-semibold text-zinc-100">3 · Recall</h2>
         {topic.quiz.map((q) => (
           <QuestionCard
             key={q.id}
@@ -287,7 +289,7 @@ export function SimShell({ topic, children }: { topic: SystemTopic; children: Re
       </section>
 
       <div className={card}>
-        <h2 className="text-sm font-semibold text-zinc-200">Recap</h2>
+        <h2 className="text-base font-semibold text-zinc-200">Recap</h2>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-300">
           {topic.recap.map((r) => (
             <li key={r}>{r}</li>

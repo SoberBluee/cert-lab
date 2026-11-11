@@ -1,14 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { AttemptReview, LabTopic, ReviewQuestion } from '@cka/schema';
-import { Markdown } from './ui';
+import { Markdown, percentClass, plural, Stat, Toggle } from './ui';
 
 /** The CKA pass mark, in percent. */
 const PASS_PERCENT = 66;
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-const percentClass = (pct: number) => (pct >= 100 ? 'text-emerald-400' : pct >= PASS_PERCENT ? 'text-amber-300' : 'text-red-400');
 
 const scoreClass = (q: ReviewQuestion) => (q.score === q.maxScore ? 'text-emerald-400' : q.score === 0 ? 'text-red-400' : 'text-amber-300');
 
@@ -26,26 +22,6 @@ function needsReview(q: ReviewQuestion, pace: number): boolean {
 function skippedNote(q: ReviewQuestion): string | undefined {
   if (!q.attempted) return 'Never opened';
   if (q.score === 0 && q.minutes !== undefined && q.minutes < 2) return 'No points in under 2 minutes: skipped or left early';
-}
-
-function Stat({ value, label, className = 'text-zinc-100' }: { value: ReactNode; label: string; className?: string }) {
-  return (
-    <div>
-      <div className={`text-2xl font-semibold tabular-nums ${className}`}>{value}</div>
-      <div className="mt-0.5 text-sm text-zinc-500">{label}</div>
-    </div>
-  );
-}
-
-function Toggle({ open, onClick, children }: { open: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button type="button" aria-expanded={open} onClick={onClick} className={`font-medium transition ${open ? 'text-zinc-100' : 'text-zinc-400 hover:text-zinc-100'}`}>
-      <span className={`mr-1.5 inline-block text-xs transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden>
-        ▸
-      </span>
-      {children}
-    </button>
-  );
 }
 
 function ReviewItem({ q, n, pace, label }: { q: ReviewQuestion; n: number; pace: number; label: (id: string) => string }) {

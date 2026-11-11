@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import type { LabTopic, LessonTrack, ScenarioSummary } from '@cka/schema';
+import type { Domain, LabTopic, LessonTrack, ScenarioSummary } from '@cka/schema';
 import { AWS_DOMAINS, DOMAINS } from '@cka/schema/constants';
 import { api, studioApi, type ScenarioFilters } from '../api';
-import { Button, Difficulty, DomainBadge, ErrorBanner, StateBadge } from '../components/ui';
-import { recommendations, topicRows } from '../focusTopics';
+import { Button, ErrorBanner, fieldClass, linkClass, Notice, PageHeader, percentClass, plural, Section } from '../components/ui';
+import { DOMAINS as CKA_DOMAINS, recommendations, topicRows } from '../focusTopics';
 import { formatDuration, isActive, sessionKey, useExamMode, useHiddenTopics, useSession } from '../hooks';
 import { fullMock, MOCK_MINUTES, MOCK_QUESTIONS, RANDOM_MAX, randomLab, toRequest, WEAK_SPOTS, weakSpotsLab, type Depth, type LabKind } from '../quickRandom';
 import { SECTIONS } from '../section';
@@ -19,20 +19,116 @@ const topicOptions = (topics: LabTopic[]) =>
     </option>
   ));
 
-const select = 'rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-200';
+const select = fieldClass;
 
-function StatsLine({ s }: { s: ScenarioSummary }) {
+const DIFFICULTY = ['', 'Easy', 'Medium', 'Hard'];
+
+/** The domains in the order the page lists them: the CKA's heaviest first, the AWS exam's in its own order. */
+function domainGroups(domains: readonly Domain[]): { id: Domain; name: string; short: string; note?: string }[] {
+  return domains
+    .map((id) => {
+      const cka = CKA_DOMAINS.find((d) => d.id === id);
+      const name = cka?.name ?? id.charAt(0).toUpperCase() + id.slice(1).replace(/-/g, ' ');
+      return { id, name, short: cka?.short ?? name, note: cka && `${cka.weight}% of the exam`, weight: cka?.weight ?? 0 };
+    })
+    .sort((a, b) => b.weight - a.weight);
+}
+
+/** What a scenario has besides its title, in a few words. */
+const scenarioNote = (s: ScenarioSummary) => (s.taskCount > 1 ? `${s.taskCount} questions` : '');
+
+const lastPercent = ({ stats }: ScenarioSummary) =>
+  stats.attempts && stats.lastMaxScore ? Math.round(((stats.lastScore ?? 0) / stats.lastMaxScore) * 100) : undefined;
+
+/** Tags shown on a card; the rest are counted. */
+const TAGS_SHOWN = 3;
+
+/** The card's score line: the last score, the best when it differs, and how many attempts. */
+function ScoreLine({ s }: { s: ScenarioSummary }) {
   const { stats } = s;
-  if (!stats.attempts) return <span className="text-zinc-500">never attempted</span>;
-  const passed = stats.lastScore === stats.lastMaxScore;
+  const last = lastPercent(s);
+  if (last === undefined) return <span className="text-zinc-600">Not tried yet</span>;
   return (
-    <span className="text-zinc-400">
-      best <span className="text-zinc-200">{stats.bestPercent}%</span> · last{' '}
-      <span className={passed ? 'text-emerald-400' : 'text-red-400'}>
-        {stats.lastScore}/{stats.lastMaxScore}
-      </span>{' '}
-      · {stats.attempts} attempt{stats.attempts === 1 ? '' : 's'}
+    <span className="text-zinc-500 tabular-nums">
+      <span className={`font-medium ${percentClass(last)}`}>{last}%</span> last
+      {stats.bestPercent !== undefined && stats.bestPercent !== last && <> · best {stats.bestPercent}%</>}
+      {' · '}
+      {plural(stats.attempts, 'attempt')}
     </span>
+  );
+}
+
+/**
+ * One scenario, the whole card a button that starts it. On hover it lifts a little, takes a sky outline and glow,
+ * and its Start slides in; with reduced motion it only lights up.
+ */
+function ScenarioTile({
+  s,
+  label,
+  starting,
+  disabled,
+  title,
+  onStart,
+}: {
+  s: ScenarioSummary;
+  label: string;
+  starting: boolean;
+  disabled: boolean;
+  title?: string;
+  onStart: () => void;
+}) {
+  const details = [DIFFICULTY[s.difficulty], `~${s.estimatedMinutes} min`, `${s.points} pts`, scenarioNote(s)].filter(Boolean).join(' · ');
+  const extraTags = s.tags.length - TAGS_SHOWN;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onStart}
+      title={title ?? [s.id, s.variableNames.length ? 'New names and values on every start' : ''].filter(Boolean).join('\n')}
+      className={`group relative flex flex-col overflow-hidden rounded-xl bg-zinc-900/70 p-4 text-left ring-1 ring-transparent transition duration-200 ease-out
+        enabled:cursor-pointer enabled:hover:bg-zinc-800/70 enabled:hover:shadow-lg enabled:hover:shadow-sky-500/10 enabled:hover:ring-sky-500/50
+        motion-safe:enabled:hover:-translate-y-0.5 motion-safe:enabled:active:translate-y-0 enabled:active:bg-zinc-800
+        focus-visible:outline-none focus-visible:ring-sky-500/70 disabled:cursor-not-allowed ${starting ? 'ring-sky-500/70' : ''}`}
+    >
+      {/* A soft sky light from the top left corner, faded in on hover. */}
+      <span
+        aria-hidden
+        className={`pointer-events-none absolute inset-0 bg-linear-to-br from-sky-500/15 via-sky-500/0 to-transparent transition-opacity duration-300 ${
+          starting ? 'opacity-100' : 'opacity-0 group-enabled:group-hover:opacity-100 group-focus-visible:opacity-100'
+        }`}
+      />
+      <span className="relative line-clamp-2 text-[15px] font-medium text-zinc-100">{s.title}</span>
+      <span className="relative mt-1 text-sm text-zinc-500">
+        {details}
+        {s.draft && <span className="ml-2 text-amber-300/80">draft</span>}
+      </span>
+      {s.tags.length > 0 && (
+        <span className="relative mt-3 flex flex-wrap items-center gap-1.5">
+          {s.tags.slice(0, TAGS_SHOWN).map((t) => (
+            <span key={t} className="rounded-md bg-zinc-800/80 px-1.5 py-0.5 text-xs text-zinc-400">
+              {t}
+            </span>
+          ))}
+          {extraTags > 0 && (
+            <span className="text-xs text-zinc-600" title={s.tags.slice(TAGS_SHOWN).join(', ')}>
+              +{extraTags}
+            </span>
+          )}
+        </span>
+      )}
+      <span className="relative mt-auto flex items-baseline justify-between gap-3 pt-4 text-sm">
+        <ScoreLine s={s} />
+        <span
+          className={`shrink-0 font-medium transition duration-200 ${
+            starting
+              ? 'animate-pulse text-sky-300'
+              : 'text-zinc-600 group-enabled:group-hover:text-sky-400 group-focus-visible:text-sky-400 motion-safe:group-enabled:group-hover:translate-x-0.5'
+          }`}
+        >
+          {label}
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -215,279 +311,295 @@ export function BrowserPage({ track = 'cka' }: { track?: LessonTrack }) {
   const set = (k: keyof ScenarioFilters) => (e: { target: { value: string } }) =>
     setFilters((f) => ({ ...f, [k]: e.target.value || undefined }));
 
+  const sessionLabel = !session
+    ? ''
+    : session.pausedAt
+      ? `${session.mode === 'mock' ? 'Exam' : 'Lab'} paused`
+      : session.state === 'failed'
+        ? 'Lab failed'
+        : session.state === 'provisioning'
+          ? 'Preparing'
+          : `${session.mode === 'mock' ? 'Exam' : 'Lab'} in progress`;
+  const groups = domainGroups(domains)
+    .map((d) => ({ ...d, scenarios: visibleScenarios.filter((s) => s.domain === d.id) }))
+    .filter((d) => d.scenarios.length > 0);
+  const startLabel = exam ? 'Start exam →' : 'Start →';
+  const busy = quickStart.isPending || mockStart.isPending || start.isPending;
+  const quickHelp = !recipesReady
+    ? 'Linux Quick lab recipes are not available yet.'
+    : weakChosen
+      ? 'One question on each topic Focus says needs work, most needed first.'
+      : chosenTopic
+        ? `Questions on ${chosenTopic.label}, saved as a hidden draft.`
+        : 'A random lab from the recipe catalog, saved as a hidden draft.';
+
   return (
-    <div className="space-y-5">
-      {session && (
-        <div className="flex items-center justify-between rounded-xl border border-sky-800/60 bg-sky-950/30 px-4 py-3">
-          <div className="flex items-center gap-3 text-sm">
-            <StateBadge state={session.state} />
-            <span>
-              {session.pausedAt ? `${session.mode === 'mock' ? 'Exam' : 'Lab'} paused` : 'Session in progress'}:{' '}
-              <span className="font-medium text-zinc-100">{session.scenarioTitle}</span>
-              {session.timeLeftMs !== undefined && <span className="text-zinc-400"> · {formatDuration(session.timeLeftMs / 1000)} left</span>}
-            </span>
-          </div>
-          <Link to={sessionPath} className="text-sm font-medium text-sky-400 hover:text-sky-300">
-            {session.pausedAt ? `Resume ${session.mode === 'mock' ? 'exam' : 'lab'} →` : 'Open session →'}
-          </Link>
-        </div>
-      )}
+    <div className="mx-auto max-w-6xl space-y-12 pb-10">
+      <PageHeader title="Scenarios" intro={aws ? 'AWS scenarios, solved with the AWS CLI.' : 'Pick a scenario, or let Quick lab build one.'} />
 
-      {missingImages.length > 0 && (
-        <div className="rounded-xl border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-          Base image{missingImages.length > 1 ? 's' : ''} <b>{missingImages.join(', ')}</b> not built yet. Run{' '}
-          <code className="rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-amber-100">./cka images build</code> once (15-25 minutes).
+      {(session || missingImages.length > 0 || images.error) && (
+        <div className="-mt-6 space-y-3">
+          {session && (
+            <Notice
+              tone="info"
+              action={
+                <Link to={sessionPath} className={linkClass}>
+                  {session.pausedAt ? `Resume ${session.mode === 'mock' ? 'exam' : 'lab'} →` : 'Open session →'}
+                </Link>
+              }
+            >
+              {sessionLabel}: <span className="font-medium text-zinc-100">{session.scenarioTitle}</span>
+              {session.timeLeftMs !== undefined && <span className="text-sky-200/70"> · {formatDuration(session.timeLeftMs / 1000)} left</span>}
+            </Notice>
+          )}
+          {missingImages.length > 0 && (
+            <Notice tone="warn">
+              Base image{missingImages.length > 1 ? 's' : ''} <b>{missingImages.join(', ')}</b> not built yet. Run{' '}
+              <code className="rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-amber-100">./cka images build</code> once (15-25 minutes).
+            </Notice>
+          )}
+          {images.error && <ErrorBanner error={new Error(`Could not query the lab backend: ${(images.error as Error).message}`)} />}
         </div>
-      )}
-      {images.error && (
-        <ErrorBanner error={new Error(`Could not query the lab backend: ${(images.error as Error).message}`)} />
-      )}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          ref={searchRef}
-          placeholder="Search  ( / )"
-          className={`${select} w-56 placeholder:text-zinc-600`}
-          value={filters.search ?? ''}
-          onChange={set('search')}
-        />
-        <select className={select} value={filters.domain ?? ''} onChange={set('domain')}>
-          <option value="">All domains</option>
-          {domains.map((d) => (
-            <option key={d}>{d}</option>
-          ))}
-        </select>
-        <select className={select} value={filters.difficulty ?? ''} onChange={set('difficulty')}>
-          <option value="">Any difficulty</option>
-          <option value="1">Easy</option>
-          <option value="2">Medium</option>
-          <option value="3">Hard</option>
-        </select>
-        <select className={select} value={filters.tag ?? ''} onChange={set('tag')}>
-          <option value="">Any tag</option>
-          {tags.map((t) => (
-            <option key={t}>{t}</option>
-          ))}
-        </select>
-        <select className={select} value={filters.status ?? ''} onChange={set('status')}>
-          <option value="">Any status</option>
-          <option value="never">Never attempted</option>
-          <option value="failed">Failed last time</option>
-          <option value="passed">Passed last time</option>
-        </select>
-        <label className="flex items-center gap-1.5 text-sm text-zinc-400">
-          <input
-            type="checkbox"
-            checked={filters.drafts === '1'}
-            onChange={(e) => setFilters((f) => ({ ...f, drafts: e.target.checked ? '1' : undefined }))}
-          />
-          Show drafts
-        </label>
-        {Object.values(filters).some(Boolean) && (
-          <Button variant="ghost" onClick={() => setFilters({})}>
-            Clear
-          </Button>
-        )}
-        <span className="ml-auto text-sm text-zinc-500">{visibleScenarios.length} scenarios</span>
-      </div>
-
-      {recipesReady && focusTopic ? (
-        <div className="flex items-center justify-between rounded-xl border border-sky-800/60 bg-sky-950/30 px-4 py-2.5 text-sm text-sky-200">
-          <span>
-            Practising: <span className="font-medium text-zinc-100">{focusLabel ?? focusTopic}</span>
-          </span>
-          <button
-            className="font-medium text-sky-400 hover:text-sky-300"
-            onClick={() => {
-              const next = new URLSearchParams(searchParams);
-              next.delete('topic');
-              setSearchParams(next);
-            }}
-          >
-            Show all scenarios
-          </button>
-        </div>
-      ) : (
-        recipesReady &&
-        hiddenTopics.length > 0 && (
-          <div className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-2.5 text-sm text-zinc-400">
-            <span>
-              {hiddenTopics.length} topic{hiddenTopics.length === 1 ? '' : 's'} hidden in Focus
-            </span>
-            <Link to="/focus" className="font-medium text-sky-400 hover:text-sky-300">
-              Manage →
-            </Link>
-          </div>
-        )
       )}
 
       {!aws && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-zinc-300">Quick lab</span>
-          <select
-            className={select}
-            value={labKind}
-            onChange={(e) => setLabKind(e.target.value as LabKind)}
-            disabled={quickStart.isPending || !recipesReady}
-          >
-            {(Object.keys(KIND_LABELS) as LabKind[]).map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABELS[k]}
-              </option>
-            ))}
-          </select>
-          <select
-            className={select}
-            value={weakChosen ? WEAK_SPOTS : (chosenTopic?.id ?? 'any')}
-            onChange={(e) => setLabTopic(e.target.value)}
-            disabled={quickStart.isPending || !catalog.data || !recipesReady}
-          >
-            <option value="any">Any</option>
-            {weakChoices.length > 0 && <option value={WEAK_SPOTS}>Weak spots from Focus ({weakChoices.length})</option>}
-            {labKind === 'random' ? (
-              <>
-                <optgroup label="Create">{topicOptions(topicChoices.filter((t) => t.group === 'create'))}</optgroup>
-                <optgroup label="Troubleshoot">{topicOptions(topicChoices.filter((t) => t.group === 'troubleshoot'))}</optgroup>
-              </>
-            ) : (
-              topicOptions(topicChoices)
-            )}
-          </select>
-          <label className="flex items-center gap-1.5 text-sm text-zinc-400">
-            <input
-              type="number"
-              min={1}
-              max={RANDOM_MAX}
-              className={`${select} w-16`}
-              value={labCount}
-              onChange={(e) => setLabCount(e.target.value)}
+        <Section title="Quick lab" note="built from the recipe catalog">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className={select}
+              value={labKind}
+              onChange={(e) => setLabKind(e.target.value as LabKind)}
               disabled={quickStart.isPending || !recipesReady}
-            />
-            question{labN === 1 ? '' : 's'}
-          </label>
-          <select
-            className={select}
-            value={labLayers}
-            onChange={(e) => setLabLayers(e.target.value)}
-            disabled={quickStart.isPending || !recipesReady || labKind === 'create'}
-            title="Troubleshooting questions can stack several separate faults, one per layer (for example the Service, the Pods and a NetworkPolicy). Categories without layers stay single."
-          >
-            <option value="1">1 fault each</option>
-            <option value="mix">Exam mix (1 or 2)</option>
-            <option value="2">2 faults stacked</option>
-            <option value="3">3 faults stacked</option>
-          </select>
-          <label
-            className="flex items-center gap-1.5 text-sm text-zinc-400"
-            title="Each question names its own kubeconfig context to switch to, as the exam names a host per task."
-          >
-            <input type="checkbox" checked={labContexts} onChange={(e) => setLabContexts(e.target.checked)} disabled={quickStart.isPending || !recipesReady} />
-            Per-question contexts
-          </label>
-          <Button
-            variant="primary"
-            disabled={active || !recipesReady || !catalog.data || quickStart.isPending || start.isPending}
-            title={
-              !recipesReady
-                ? 'Linux Quick lab recipes are not available yet'
-                : active
-                  ? 'End the current session first'
-                  : catalog.error
-                    ? 'Could not load the recipe catalog'
-                    : undefined
-            }
-            onClick={() =>
-              quickStart.mutate({
-                kind: labKind,
-                n: labN,
-                topic: weakChosen ? undefined : chosenTopic,
-                weak: weakChosen ? weakChoices : undefined,
-                layers: labKind === 'create' ? 1 : labLayers === 'mix' ? 'mix' : Number(labLayers),
-                contexts: labContexts,
-              })
-            }
-          >
-            {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
-          </Button>
-          <Button
-            disabled={active || !recipesReady || !catalog.data || quickStart.isPending || mockStart.isPending || start.isPending}
-            title={`${MOCK_QUESTIONS} questions weighted like the CKA curriculum, ${MOCK_MINUTES} minutes, exam mode, a kubeconfig context per question`}
-            onClick={() => mockStart.mutate()}
-          >
-            {mockStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : `Full mock (${MOCK_QUESTIONS} Qs, ${MOCK_MINUTES} min)`}
-          </Button>
-          <span className="text-xs text-zinc-500">
-            {!recipesReady
-              ? 'Linux Quick lab recipes are not available yet.'
-              : weakChosen
-                ? `Questions on what Focus says needs work, most needed first: ${weakChoices.map((t) => t.label).join(', ')}.`
-                : chosenTopic
-                  ? `Questions from ${chosenTopic.label}, saved as a hidden draft.`
-                : 'A random lab from the recipe catalog, saved as a hidden draft.'}
-          </span>
+              aria-label="Kind of questions"
+            >
+              {(Object.keys(KIND_LABELS) as LabKind[]).map((k) => (
+                <option key={k} value={k}>
+                  {KIND_LABELS[k]}
+                </option>
+              ))}
+            </select>
+            <select
+              className={`${select} max-w-64`}
+              value={weakChosen ? WEAK_SPOTS : (chosenTopic?.id ?? 'any')}
+              onChange={(e) => setLabTopic(e.target.value)}
+              disabled={quickStart.isPending || !catalog.data || !recipesReady}
+              aria-label="Topic"
+            >
+              <option value="any">Any topic</option>
+              {weakChoices.length > 0 && <option value={WEAK_SPOTS}>Weak spots from Focus ({weakChoices.length})</option>}
+              {labKind === 'random' ? (
+                <>
+                  <optgroup label="Create">{topicOptions(topicChoices.filter((t) => t.group === 'create'))}</optgroup>
+                  <optgroup label="Troubleshoot">{topicOptions(topicChoices.filter((t) => t.group === 'troubleshoot'))}</optgroup>
+                </>
+              ) : (
+                topicOptions(topicChoices)
+              )}
+            </select>
+            <label className="flex items-center gap-2 text-sm text-zinc-400">
+              <input
+                type="number"
+                min={1}
+                max={RANDOM_MAX}
+                className={`${select} w-16`}
+                value={labCount}
+                onChange={(e) => setLabCount(e.target.value)}
+                disabled={quickStart.isPending || !recipesReady}
+              />
+              question{labN === 1 ? '' : 's'}
+            </label>
+            {labKind !== 'create' && (
+              <select
+                className={select}
+                value={labLayers}
+                onChange={(e) => setLabLayers(e.target.value)}
+                disabled={quickStart.isPending || !recipesReady}
+                aria-label="Faults per question"
+                title="Troubleshooting questions can stack several separate faults, one per layer (for example the Service, the Pods and a NetworkPolicy). Categories without layers stay single."
+              >
+                <option value="1">1 fault each</option>
+                <option value="mix">Exam mix (1 or 2)</option>
+                <option value="2">2 faults stacked</option>
+                <option value="3">3 faults stacked</option>
+              </select>
+            )}
+            <label
+              className="flex items-center gap-2 px-1 text-sm text-zinc-400"
+              title="Each question names its own kubeconfig context to switch to, as the exam names a host per task."
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-sky-600"
+                checked={labContexts}
+                onChange={(e) => setLabContexts(e.target.checked)}
+                disabled={quickStart.isPending || !recipesReady}
+              />
+              Per-question contexts
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-zinc-500" title={weakChosen ? weakChoices.map((t) => t.label).join(', ') : undefined}>
+              {quickHelp} Full mock: {MOCK_QUESTIONS} questions in {MOCK_MINUTES} minutes, in exam mode.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                disabled={active || !recipesReady || !catalog.data || busy}
+                title={`${MOCK_QUESTIONS} questions weighted like the CKA curriculum, ${MOCK_MINUTES} minutes, exam mode, a kubeconfig context per question`}
+                onClick={() => mockStart.mutate()}
+              >
+                {mockStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : 'Full mock'}
+              </Button>
+              <Button
+                variant="primary"
+                disabled={active || !recipesReady || !catalog.data || busy}
+                title={
+                  !recipesReady
+                    ? 'Linux Quick lab recipes are not available yet'
+                    : active
+                      ? 'End the current session first'
+                      : catalog.error
+                        ? 'Could not load the recipe catalog'
+                        : undefined
+                }
+                onClick={() =>
+                  quickStart.mutate({
+                    kind: labKind,
+                    n: labN,
+                    topic: weakChosen ? undefined : chosenTopic,
+                    weak: weakChosen ? weakChoices : undefined,
+                    layers: labKind === 'create' ? 1 : labLayers === 'mix' ? 'mix' : Number(labLayers),
+                    contexts: labContexts,
+                  })
+                }
+              >
+                {quickStart.isPending ? (labPhase === 'generating' ? 'Generating…' : 'Starting…') : exam ? 'Start exam' : 'Start'}
+              </Button>
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {(quickStart.error || mockStart.error || catalog.error || start.error || filtered.error || (all.data?.errors.length ?? 0) > 0) && (
+        <div className="space-y-3">
+          <ErrorBanner error={quickStart.error} onDismiss={() => quickStart.reset()} />
+          <ErrorBanner error={mockStart.error} onDismiss={() => mockStart.reset()} />
+          <ErrorBanner error={catalog.error} />
+          <ErrorBanner error={start.error} onDismiss={() => start.reset()} />
+          <ErrorBanner error={filtered.error} />
+          {all.data?.errors.map((e) => (
+            <ErrorBanner key={e.file} error={new Error(`Invalid scenario ${e.file}:\n${e.messages.join('\n')}`)} />
+          ))}
         </div>
       )}
 
-      <ErrorBanner error={quickStart.error} onDismiss={() => quickStart.reset()} />
-      <ErrorBanner error={mockStart.error} onDismiss={() => mockStart.reset()} />
-      <ErrorBanner error={catalog.error} />
-      <ErrorBanner error={start.error} onDismiss={() => start.reset()} />
-      <ErrorBanner error={filtered.error} />
-      {all.data?.errors.map((e) => (
-        <ErrorBanner key={e.file} error={new Error(`Invalid scenario ${e.file}:\n${e.messages.join('\n')}`)} />
-      ))}
+      <Section
+        title={recipesReady && focusTopic ? `Practising ${focusLabel ?? focusTopic}` : 'All scenarios'}
+        note={plural(visibleScenarios.length, 'scenario')}
+        actions={
+          recipesReady &&
+          focusTopic && (
+            <button
+              className={linkClass}
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete('topic');
+                setSearchParams(next);
+              }}
+            >
+              Show all scenarios
+            </button>
+          )
+        }
+      >
+        <div className="mb-8 flex flex-wrap items-center gap-2">
+          <input
+            ref={searchRef}
+            placeholder="Search  ( / )"
+            aria-label="Search scenarios"
+            className={`${select} w-52`}
+            value={filters.search ?? ''}
+            onChange={set('search')}
+          />
+          <select className={select} value={filters.domain ?? ''} onChange={set('domain')} aria-label="Domain">
+            <option value="">All domains</option>
+            {domainGroups(domains).map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.short}
+              </option>
+            ))}
+          </select>
+          <select className={select} value={filters.difficulty ?? ''} onChange={set('difficulty')} aria-label="Difficulty">
+            <option value="">Any difficulty</option>
+            <option value="1">Easy</option>
+            <option value="2">Medium</option>
+            <option value="3">Hard</option>
+          </select>
+          <select className={select} value={filters.status ?? ''} onChange={set('status')} aria-label="Status">
+            <option value="">Any status</option>
+            <option value="never">Never attempted</option>
+            <option value="failed">Failed last time</option>
+            <option value="passed">Passed last time</option>
+          </select>
+          <select className={`${select} max-w-40`} value={filters.tag ?? ''} onChange={set('tag')} aria-label="Tag">
+            <option value="">Any tag</option>
+            {tags.map((t) => (
+              <option key={t}>{t}</option>
+            ))}
+          </select>
+          <label className="flex items-center gap-2 px-1 text-sm text-zinc-400">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-sky-600"
+              checked={filters.drafts === '1'}
+              onChange={(e) => setFilters((f) => ({ ...f, drafts: e.target.checked ? '1' : undefined }))}
+            />
+            Drafts
+          </label>
+          {Object.values(filters).some(Boolean) && (
+            <Button variant="ghost" onClick={() => setFilters({})}>
+              Clear
+            </Button>
+          )}
+        </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {visibleScenarios.map((s) => (
-          <article key={s.id} className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 transition hover:border-zinc-700">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <DomainBadge domain={s.domain} />
-              <Difficulty level={s.difficulty} />
-            </div>
-            <h3 className="font-semibold text-zinc-100">{s.title}</h3>
-            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-xs text-zinc-500">
-              {s.id}
-              {s.taskCount > 1 && <span className="rounded bg-sky-500/10 px-1.5 py-0.5 font-sans text-[11px] text-sky-300">{s.taskCount} questions</span>}
-              {s.variableNames.length > 0 && (
-                <span
-                  className="rounded bg-violet-500/10 px-1.5 py-0.5 font-sans text-[11px] text-violet-300"
-                  title={`Names and values change on every start: ${s.variableNames.join(', ')}`}
-                >
-                  randomized
-                </span>
-              )}
-              {s.draft && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-sans text-[11px] text-amber-300">draft</span>}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-1">
-              {s.tags.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setFilters((f) => ({ ...f, tag: t }))}
-                  className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400 hover:text-zinc-200"
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 text-xs">
-              <StatsLine s={s} />
-            </div>
-            <div className="mt-auto flex items-center justify-between pt-4">
-              <span className="text-xs text-zinc-500">
-                ~{s.estimatedMinutes} min · {s.points} pts · {s.base}
-              </span>
-              <Button
-                variant="primary"
-                disabled={active || start.isPending || quickStart.isPending}
-                title={active ? 'End the current session first' : undefined}
-                onClick={() => start.mutate(s.id)}
-              >
-                {start.isPending && start.variables === s.id ? 'Starting…' : exam ? 'Start exam' : 'Start'}
-              </Button>
-            </div>
-          </article>
-        ))}
-      </div>
+        {filtered.isLoading ? (
+          <div className="text-sm text-zinc-500">Loading…</div>
+        ) : groups.length === 0 ? (
+          <div className="text-sm text-zinc-500">No scenarios match.</div>
+        ) : (
+          <div className="space-y-10">
+            {groups.map((g) => (
+              <div key={g.id}>
+                <h3 className="mb-3 text-base font-semibold text-zinc-200">
+                  {g.name}
+                  <span className="ml-2 text-sm font-normal text-zinc-500">{[g.note, plural(g.scenarios.length, 'scenario')].filter(Boolean).join(' · ')}</span>
+                </h3>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {g.scenarios.map((s) => (
+                    <ScenarioTile
+                      key={s.id}
+                      s={s}
+                      label={start.isPending && start.variables === s.id ? 'Starting…' : startLabel}
+                      starting={start.isPending && start.variables === s.id}
+                      disabled={active || busy}
+                      title={active ? 'End the current session first' : undefined}
+                      onStart={() => start.mutate(s.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {recipesReady && !focusTopic && hiddenTopics.length > 0 && (
+          <p className="mt-8 text-sm text-zinc-500">
+            {plural(hiddenTopics.length, 'topic')} hidden in Focus.{' '}
+            <Link to="/focus" className="text-sky-400 hover:text-sky-300">
+              Manage →
+            </Link>
+          </p>
+        )}
+      </Section>
     </div>
   );
 }

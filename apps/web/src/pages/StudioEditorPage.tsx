@@ -7,7 +7,7 @@ import { BASES, DOMAINS } from '@cka/schema/constants';
 import { render, rollVariable, rollVars, visibleVars } from '@cka/schema/vars';
 import { studioApi, type StudioJob } from '../api';
 import { JobPanel } from '../components/JobPanel';
-import { Button, buttonClass, Card, DomainBadge, ErrorBanner, Markdown } from '../components/ui';
+import { Button, buttonClass, Card, ErrorBanner, Markdown } from '../components/ui';
 import { useSession } from '../hooks';
 import {
   CheckEditor,
@@ -71,7 +71,7 @@ function Section({ title, children, aside }: { title: string; children: ReactNod
   return (
     <section className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">{title}</h3>
+        <h3 className="text-sm font-semibold text-zinc-300">{title}</h3>
         {aside && <span className="text-xs text-zinc-500">{aside}</span>}
       </div>
       {children}
@@ -239,11 +239,11 @@ export function StudioEditorPage() {
         <Link to="/studio" className="text-sm text-zinc-400 hover:text-zinc-100">
           ← Studio
         </Link>
-        <DomainBadge domain={bundle.domain} />
-        <h1 className="text-lg font-semibold text-zinc-100">{d.title || id}</h1>
-        <span className="font-mono text-xs text-zinc-500">{id}</span>
-        {isDraft && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300">draft</span>}
-        {dirty && <span className="text-xs text-amber-400">unsaved changes</span>}
+        <h1 className="text-xl font-semibold text-zinc-100" title={`${id} · ${bundle.domain}`}>
+          {d.title || id}
+        </h1>
+        {isDraft && <span className="text-sm text-amber-300/80">draft</span>}
+        {dirty && <span className="text-sm text-amber-400">unsaved changes</span>}
         <div className="ml-auto flex flex-wrap gap-2">
           <Link to="/studio/new" className={buttonClass()} title="Build a lab with the guided form">
             Quick Create
@@ -568,10 +568,10 @@ function QuestionsTab({
           <button
             key={i}
             onClick={() => setActive(i)}
-            className={`block w-full rounded-lg border px-3 py-2 text-left text-sm ${
+            className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
               current.index === i
-                ? 'border-sky-600 bg-sky-950/30 text-zinc-100'
-                : 'border-zinc-800 bg-zinc-900/60 text-zinc-300 hover:border-zinc-700'
+                ? 'bg-sky-950/60 text-zinc-100'
+                : 'bg-zinc-900/70 text-zinc-300 hover:bg-zinc-800/70'
             }`}
           >
             <div className="flex items-center justify-between gap-2">
@@ -597,7 +597,7 @@ function QuestionsTab({
 
       <div className="space-y-5">
         {current.legacy ? (
-          <p className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-400">
+          <p className="rounded-lg bg-zinc-900/70 px-3 py-2 text-xs text-zinc-400">
             Single-question scenario: title and points come from Overview. Adding a question moves this one into <code>tasks:</code> as Q1.
           </p>
         ) : (
@@ -664,8 +664,8 @@ function QuestionsTab({
               onChange={(v) => putFile(current.markdownPath, v)}
               minHeight="14rem"
             />
-            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 p-3">
-              <div className="mb-2 text-[11px] tracking-wide text-zinc-500 uppercase">Preview with rolled values</div>
+            <div className="rounded-lg bg-zinc-950/50 p-3">
+              <div className="mb-2 text-sm text-zinc-500">Preview with rolled values</div>
               <Markdown>{render(md, preview) || '_Empty_'}</Markdown>
             </div>
           </div>

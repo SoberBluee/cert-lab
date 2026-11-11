@@ -1,0 +1,63 @@
+## Solution
+
+### Question 1: Pod ${Q1_NAME}
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/dockerconfigjson
+metadata:
+  name: "${Q1_NAME}-pull"
+  namespace: "${Q1_NS}"
+stringData:
+  .dockerconfigjson: "{\"auths\":{\"${Q1_SECRETS_REGISTRY}\":{\"username\":\"${Q1_SECRETS_USER}\",\"password\":\"${Q1_SECRETS_PASSWORD}\"}}}"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "${Q1_NAME}"
+  namespace: "${Q1_NS}"
+spec:
+  containers:
+    - name: main
+      image: "${Q1_IMAGE}"
+      command:
+        - sleep
+        - 1d
+      volumeMounts:
+        - name: init
+          mountPath: /init
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+      securityContext:
+        runAsUser: ${Q1_SEC_USER}
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+  volumes:
+    - name: init
+      emptyDir: {}
+    - name: tls
+      secret:
+        secretName: "${Q1_NAME}-tls"
+  initContainers:
+    - name: prepare
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - "echo ${Q1_INIT_TEXT} > /init/ready"
+      volumeMounts:
+        - name: init
+          mountPath: /init
+  imagePullSecrets:
+    - name: "${Q1_NAME}-pull"
+EOF
+kubectl -n "${Q1_NS}" create secret tls "${Q1_NAME}-tls" --cert="/opt/course/certs/${Q1_NAME}/tls.crt" --key="/opt/course/certs/${Q1_NAME}/tls.key"
+kubectl -n "${Q1_NS}" wait --for=condition=Ready "pod/${Q1_NAME}" --timeout=180s
+kubectl -n "${Q1_NS}" set image "pod/${Q1_NAME}" "main=${Q1_UPDATE_IMAGE}"
+timeout 180 bash -c 'until [[ "$(kubectl -n "$0" get pod "$1" -o jsonpath="{.status.containerStatuses[?(@.name==\"main\")].restartCount}")" -ge 1 ]] 2>/dev/null; do sleep 2; done' "${Q1_NS}" "${Q1_NAME}"
+kubectl -n "${Q1_NS}" wait --for=condition=Ready "pod/${Q1_NAME}" --timeout=120s
+kubectl -n "${Q1_NS}" annotate pod "${Q1_NAME}" "${Q1_NOTE_KEY}=${Q1_NOTE_VALUE}" --overwrite
+```

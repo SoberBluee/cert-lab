@@ -28,14 +28,14 @@ function FlociStatus() {
   if (!s) return null;
   if (s.reachable && s.cli) {
     return (
-      <div className="flex items-center gap-2 text-xs text-zinc-500">
+      <div className="mx-auto flex max-w-6xl items-center gap-2 text-sm text-zinc-500">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
         Floci {s.version} at {s.endpoint} · AWS CLI {s.cli} · every session gets its own empty AWS account
       </div>
     );
   }
   return (
-    <div className="space-y-1.5 rounded-xl border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+    <div className="mx-auto max-w-6xl space-y-1.5 rounded-xl bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
       {!s.reachable && (
         <p>
           Floci is not reachable at <b>{s.endpoint}</b> ({s.error}). Start it with <code className={code}>floci start</code>; Docker must be
@@ -71,7 +71,7 @@ export function AwsApp() {
         <Route
           path="scenarios"
           element={
-            <div className="space-y-4">
+            <div className="space-y-6">
               <FlociStatus />
               <BrowserPage track="aws" />
             </div>
